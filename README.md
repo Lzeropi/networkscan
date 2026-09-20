@@ -3,10 +3,10 @@ AIGC:
   ContentProducer: '001191110102MAD55U9H0F10002'
   ContentPropagator: '001191110102MAD55U9H0F10002'
   Label: '1'
-  ProduceID: '62811e82-d0c7-400b-a55f-03fd4ead6731'
-  PropagateID: '62811e82-d0c7-400b-a55f-03fd4ead6731'
-  ReservedCode1: 'a1f5b640-8802-4e59-954f-65685c2c18dc'
-  ReservedCode2: 'a1f5b640-8802-4e59-954f-65685c2c18dc'
+  ProduceID: 'b2b5f40e-3bd7-4fe7-8adb-48d30472b57f'
+  PropagateID: 'b2b5f40e-3bd7-4fe7-8adb-48d30472b57f'
+  ReservedCode1: '235a8489-ce5a-40ad-ada7-f33107bd25bd'
+  ReservedCode2: '235a8489-ce5a-40ad-ada7-f33107bd25bd'
 ---
 
 # ScanWeb — 局域网网页扫描系统
@@ -332,5 +332,62 @@ ss -tlnp | grep 9203              # 确认端口监听
 - **删除任务提示"扫描进行中"**：等待扫描完成后再删除
 - **管理页忘记 PIN**：删除服务目录下 `admin_config.json` 后重启服务，重新设置
 - **自动清理误删担心**：给重要任务上 🔒 锁定，锁定任务永不参与清理
+
+## 九、更新与版本管理
+
+### 一键更新
+
+部署完成后，`webscan` 命令已安装到 `/usr/local/bin/webscan`，支持以下操作：
+
+```bash
+webscan status              # 查看服务状态与版本
+webscan update              # 自动检测目录下的 scanweb-v*.tar.gz 并更新
+webscan update /path/pkg.tar.gz   # 指定更新包路径
+webscan restart             # 重启服务
+webscan stop                # 停止服务
+webscan start               # 启动服务
+webscan logs 100            # 查看最近 100 行日志
+webscan version             # 查看当前版本
+```
+
+**更新流程（典型场景）**：
+
+```bash
+# 1. 本机上传新版本包
+scp scanweb-v1.13.tar.gz root@192.168.1.203:/opt/network_scan_service/
+
+# 2. SSH 登录盒子
+ssh root@192.168.1.203
+
+# 3. 一键更新
+webscan update
+```
+
+更新过程自动完成：停止服务 → 保留 `.venv` 和 `admin_config.json` → 替换全部源码 → 修复权限 → 更新 service 文件 → 启动服务 → 验证状态。
+
+> 更新不会丢失已设置的 PIN、存储路径配置和清理策略。Python 依赖（.venv）也不受影响，除非新版本 README 中明确要求重装依赖。
+
+### 版本号规范
+
+- **格式**：`v主版本.次版本`（如 v1.13）
+- **次版本递增**（v1.13 → v1.14）：bug 修复、小功能改进、配置调整
+- **主版本递增**（v1.x → v2.0）：架构性改动、不兼容升级（需重新安装依赖或迁移数据）
+- **版本号写入位置**：`config.py` 的 `VERSION` 变量、README 版本表、git tag
+- **发布包命名**：`scanweb-v1.13.tar.gz`（`webscan update` 按此模式自动检测）
+
+### 更新包内容约定
+
+| 更新时保留 | 更新时覆盖 |
+|---|---|
+| `.venv/`（Python 依赖） | 全部 `.py` 源码 |
+| `admin_config.json`（PIN 与配置） | `templates/`、`static/` |
+| `/opt/smb_share/scans/`（扫描数据） | `deploy/`（含 service 文件与 webscan 脚本） |
+| | `README.md`、`pyproject.toml` |
+
+如新版本需要更新 Python 依赖，README 第三步会标注，手动执行即可：
+```bash
+cd /opt/network_scan_service
+uv pip install --index-url https://pypi.tuna.tsinghua.edu.cn/simple <新依赖>
+```
 
 > AI生成

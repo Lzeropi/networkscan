@@ -1,0 +1,305 @@
+#!/bin/bash
+# webscan — ScanWeb 管理工具
+# 安装位置：/usr/local/bin/webscan
+# 用法：webscan <命令> [参数]
+#
+# 命令：
+#   update [包路径]   一键更新（自动检测目录下的 scanweb-v*.tar.gz，或指定路径）
+#   status            查看服务状态
+#   restart           重启服务
+#   stop              停止服务
+#   start             启动服务
+#   logs [行数]       查看最近日志（默认 50 行）
+#   version           查看当前版本
+#   uninstall         卸载（停止+禁用服务，保留数据和依赖）
+
+set -euo pipefail
+
+INSTALL_DIR="/opt/network_scan_service"
+SERVICE_NAME="networkscan"
+SERVICE_FILE="/etc/systemd/system/${SERVICE_NAME}.service"
+BIN_PATH="/usr/local/bin/webscan"
+
+# 颜色
+red()    { printf "\033[31m%s\033[0m\n" "$*"; }
+green()  { printf "\033[32m%s\033[0m\n" "$*"; }
+yellow() { printf "\033[33m%s\033[0m\n" "$*"; }
+bold()   { printf "\033[1m%s\033[0m\n" "$*"; }
+
+# 更新时保留的文件/目录（不被覆盖）
+PRESERVE=(".venv" "admin_config.json" "examples")
+
+# ==================== 函数 ====================
+
+cmd_update() {
+    local pkg=""
+    local tmp_dir=""
+
+    # 1. 确定更新包路径
+    if [ $# -ge 1 ]; then
+        pkg="$1"
+    else
+        # 自动检测目录下的 scanweb-v*.tar.gz
+        pkg=$(ls -t "${INSTALL_DIR}"/scanweb-v*.tar.gz 2>/dev/null | head -1)
+        if [ -z "$pkg" ]; then
+            # 检测当前目录
+            pkg=$(ls -t ./scanweb-v*.tar.gz 2>/dev/null | head -1)
+        fi
+    fi
+
+    if [ -z "$pkg" ] || [ ! -f "$pkg" ]; then
+        red "错误：找不到更新包"
+        echo ""
+        echo "用法："
+        echo "  webscan update /path/to/scanweb-v1.13.tar.gz"
+        echo "  或先将包放到 ${INSTALL_DIR}/ 再执行 webscan update"
+        echo ""
+        echo "从本机上传："
+        echo "  scp scanweb-v*.tar.gz root@<盒子IP>:${INSTALL_DIR}/"
+        return 1
+    fi
+
+    bold "ScanWeb 一键更新"
+    echo "  更新包：$(basename "$pkg")"
+    echo "  部署目录：${INSTALL_DIR}"
+    echo ""
+
+    # 2. 检查服务是否在运行
+    local was_running="no"
+    if systemctl is-active --quiet "$SERVICE_NAME" 2>/dev/null; then
+        was_running="yes"
+        yellow "停止服务..."
+        systemctl stop "$SERVICE_NAME"
+    fi
+
+    # 3. 备份当前版本信息
+    local old_ver="unknown"
+    if [ -f "${INSTALL_DIR}/config.py" ]; then
+        old_ver=$(grep -oP 'VERSION\s*=\s*"\K[^"]+' "${INSTALL_DIR}/config.py" 2>/dev/null || echo "unknown")
+    fi
+    local new_ver
+    new_ver=$(tar xzf "$pkg" -O 2>/dev/null | tar tz 2>/dev/null | head -1 || echo "")
+    new_ver=$(grep -oP 'VERSION\s*=\s*"\K[^"]+' <(tar xzf "$pkg" -O "*/config.py" 2>/dev/null) 2>/dev/null || echo "unknown")
+
+    echo "  旧版本：v${old_ver}"
+    echo "  新版本：v${new_ver}"
+    echo ""
+
+    # 4. 解压前先备份保留项
+    yellow "保留 .venv 和 admin_config.json..."
+    local backup_dir=""
+    backup_dir=$(mktemp -d)
+    for item in "${PRESERVE[@]}"; do
+        if [ -e "${INSTALL_DIR}/${item}" ]; then
+            cp -a "${INSTALL_DIR}/${item}" "${backup_dir}/" 2>/dev/null || true
+        fi
+    done
+
+    # 5. 清理旧代码（保留 .venv 和 admin_config.json）
+    yellow "清理旧代码..."
+    # 删除除保留项以外的所有文件
+    local find_expr=""
+    for item in "${PRESERVE[@]}"; do
+        find_expr="${find_expr} ! -name '${item}'"
+    done
+
+    # 逐个删除，跳过保留项
+    for f in "${INSTALL_DIR}"/*; do
+        [ -e "$f" ] || continue
+        local base
+        base=$(basename "$f")
+        local skip=false
+        for item in "${PRESERVE[@]}"; do
+            if [ "$base" = "$item" ]; then
+                skip=true
+                break
+            fi
+        done
+        if [ "$skip" = false ]; then
+            rm -rf "$f"
+        fi
+    done
+    # 清理隐藏文件（.git, .gitignore 等），但保留 .venv
+    for f in "${INSTALL_DIR}"/.*; do
+        [ -e "$f" ] || continue
+        local base
+        base=$(basename "$f")
+        [ "$base" = "." ] && continue
+        [ "$base" = ".." ] && continue
+        [ "$base" = ".venv" ] && continue
+        rm -rf "$f"
+    done
+
+    # 6. 解压新代码
+    yellow "解压新版本..."
+    tar xzf "$pkg" --strip-components=1 -C "${INSTALL_DIR}"
+    rm -f "${INSTALL_DIR}/.python-version" 2>/dev/null || true
+
+    # 7. 恢复保留项（如果新包没有，用备份的）
+    for item in "${PRESERVE[@]}"; do
+        if [ ! -e "${INSTALL_DIR}/${item}" ] && [ -e "${backup_dir}/${item}" ]; then
+            cp -a "${backup_dir}/${item}" "${INSTALL_DIR}/"
+        fi
+    done
+
+    # 8. 清理更新包
+    if [ -f "${INSTALL_DIR}/$(basename "$pkg")" ]; then
+        rm -f "${INSTALL_DIR}/$(basename "$pkg")"
+    fi
+
+    # 9. 修复权限
+    yellow "修复权限..."
+    if id scanops &>/dev/null; then
+        chown -R scanops:scanops "${INSTALL_DIR}"
+    fi
+
+    # 10. 更新 service 文件（如果包里有新的）
+    if [ -f "${INSTALL_DIR}/deploy/networkscan.service" ]; then
+        cp "${INSTALL_DIR}/deploy/networkscan.service" "$SERVICE_FILE"
+        systemctl daemon-reload
+    fi
+
+    # 11. 更新 webscan 脚本自身
+    if [ -f "${INSTALL_DIR}/deploy/webscan" ]; then
+        cp "${INSTALL_DIR}/deploy/webscan" "$BIN_PATH"
+        chmod +x "$BIN_PATH"
+    fi
+
+    # 12. 启动服务
+    if [ "$was_running" = "yes" ] || systemctl is-enabled --quiet "$SERVICE_NAME" 2>/dev/null; then
+        yellow "启动服务..."
+        systemctl start "$SERVICE_NAME"
+        sleep 2
+    fi
+
+    # 13. 清理备份
+    rm -rf "$backup_dir"
+
+    # 14. 验证
+    echo ""
+    if systemctl is-active --quiet "$SERVICE_NAME" 2>/dev/null; then
+        local port
+        port=$(grep -oP 'SCANWEB_PORT=\K\d+' "$SERVICE_FILE" 2>/dev/null || echo "9203")
+        green "更新成功！"
+        echo "  版本：v${old_ver} → v${new_ver}"
+        echo "  服务状态：active (running)"
+        echo "  访问地址：http://$(hostname -I 2>/dev/null | awk '{print $1}' || echo '<盒子IP>'):${port}"
+        echo "  管理页：http://$(hostname -I 2>/dev/null | awk '{print $1}' || echo '<盒子IP>'):${port}/admin"
+    else
+        red "服务启动失败！请检查："
+        echo "  systemctl status ${SERVICE_NAME} --no-pager"
+        echo "  journalctl -u ${SERVICE_NAME} -n 20"
+    fi
+}
+
+cmd_status() {
+    systemctl status "$SERVICE_NAME" --no-pager 2>/dev/null || red "服务未安装"
+    echo ""
+    local port
+    port=$(grep -oP 'SCANWEB_PORT=\K\d+' "$SERVICE_FILE" 2>/dev/null || echo "9203")
+    local ver
+    ver=$(grep -oP 'VERSION\s*=\s*"\K[^"]+' "${INSTALL_DIR}/config.py" 2>/dev/null || echo "unknown")
+    bold "ScanWeb 信息"
+    echo "  版本：v${ver}"
+    echo "  端口：${port}"
+    echo "  目录：${INSTALL_DIR}"
+    local resp
+    resp=$(curl -s -o /dev/null -w "%{http_code}" "http://127.0.0.1:${port}/" 2>/dev/null || echo "000")
+    if [ "$resp" = "200" ]; then
+        green "  HTTP 响应：200 ✓"
+    else
+        red "  HTTP 响应：${resp} ✗"
+    fi
+}
+
+cmd_restart() {
+    systemctl restart "$SERVICE_NAME" 2>/dev/null
+    sleep 2
+    if systemctl is-active --quiet "$SERVICE_NAME" 2>/dev/null; then
+        green "服务已重启"
+    else
+        red "重启失败"
+    fi
+}
+
+cmd_stop() {
+    systemctl stop "$SERVICE_NAME" 2>/dev/null
+    green "服务已停止"
+}
+
+cmd_start() {
+    systemctl start "$SERVICE_NAME" 2>/dev/null
+    sleep 2
+    if systemctl is-active --quiet "$SERVICE_NAME" 2>/dev/null; then
+        green "服务已启动"
+    else
+        red "启动失败"
+    fi
+}
+
+cmd_logs() {
+    local lines="${1:-50}"
+    journalctl -u "$SERVICE_NAME" -n "$lines" --no-pager 2>/dev/null
+}
+
+cmd_version() {
+    local ver
+    ver=$(grep -oP 'VERSION\s*=\s*"\K[^"]+' "${INSTALL_DIR}/config.py" 2>/dev/null || echo "unknown")
+    echo "ScanWeb v${ver}"
+    echo "部署目录：${INSTALL_DIR}"
+}
+
+cmd_uninstall() {
+    red "警告：这将停止并移除 ScanWeb 服务（数据目录 /opt/smb_share/scans 保留）"
+    read -p "确认卸载？输入 yes 继续：[N] " confirm
+    if [ "$confirm" != "yes" ]; then
+        echo "已取消"
+        return
+    fi
+    systemctl stop "$SERVICE_NAME" 2>/dev/null || true
+    systemctl disable "$SERVICE_NAME" 2>/dev/null || true
+    rm -f "$SERVICE_FILE"
+    rm -f "$BIN_PATH"
+    systemctl daemon-reload
+    rm -rf "$INSTALL_DIR"
+    green "已卸载（扫描数据保留在 /opt/smb_share/scans）"
+}
+
+show_help() {
+    bold "ScanWeb 管理工具"
+    echo ""
+    echo "用法：webscan <命令> [参数]"
+    echo ""
+    echo "命令："
+    echo "  update [包路径]   一键更新（自动检测目录下的 scanweb-v*.tar.gz）"
+    echo "  status             查看服务状态与版本信息"
+    echo "  restart            重启服务"
+    echo "  stop               停止服务"
+    echo "  start              启动服务"
+    echo "  logs [行数]        查看最近日志（默认 50 行）"
+    echo "  version            查看当前版本"
+    echo "  uninstall          卸载（保留扫描数据）"
+    echo ""
+    echo "更新示例："
+    echo "  scp scanweb-v1.13.tar.gz root@<盒子IP>:/opt/network_scan_service/"
+    echo "  ssh root@<盒子IP>"
+    echo "  webscan update"
+}
+
+# ==================== 入口 ====================
+
+CMD="${1:-help}"
+shift 2>/dev/null || true
+
+case "$CMD" in
+    update)  cmd_update "$@" ;;
+    status)  cmd_status ;;
+    restart) cmd_restart ;;
+    stop)    cmd_stop ;;
+    start)   cmd_start ;;
+    logs)    cmd_logs "$@" ;;
+    version) cmd_version ;;
+    uninstall) cmd_uninstall ;;
+    help|-h|--help) show_help ;;
+    *) red "未知命令：$CMD"; echo ""; show_help; exit 1 ;;
+esac
