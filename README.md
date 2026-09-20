@@ -3,10 +3,10 @@ AIGC:
   ContentProducer: '001191110102MAD55U9H0F10002'
   ContentPropagator: '001191110102MAD55U9H0F10002'
   Label: '1'
-  ProduceID: 'ed583554-e557-4e41-9f71-cd56454e86c2'
-  PropagateID: 'ed583554-e557-4e41-9f71-cd56454e86c2'
-  ReservedCode1: '866f8a59-1f42-43e5-933f-ee5f71c2a685'
-  ReservedCode2: '866f8a59-1f42-43e5-933f-ee5f71c2a685'
+  ProduceID: 'cb249922-e719-4e6d-a1d4-b7cc6ceccf66'
+  PropagateID: 'cb249922-e719-4e6d-a1d4-b7cc6ceccf66'
+  ReservedCode1: '6fdcdb7d-d445-4314-9f87-7c3175078299'
+  ReservedCode2: '6fdcdb7d-d445-4314-9f87-7c3175078299'
 ---
 
 # ScanWeb — 局域网网页扫描系统
@@ -397,6 +397,74 @@ webscan update
 ```bash
 cd /opt/network_scan_service
 uv pip install --index-url https://pypi.tuna.tsinghua.edu.cn/simple <新依赖>
+```
+
+## 十、完整卸载
+
+> **快捷方式**：`webscan uninstall` 会自动完成第 1-3 步（停止服务、移除代码和脚本），但**不会**卸载系统依赖包和用户（避免影响其他业务）。如需彻底清理，按下方完整步骤操作。
+
+### 第 1 步：停止并移除服务
+
+```bash
+systemctl stop networkscan
+systemctl disable networkscan
+rm -f /etc/systemd/system/networkscan.service
+systemctl daemon-reload
+```
+
+### 第 2 步：移除部署目录与管理脚本
+
+```bash
+rm -rf /opt/network_scan_service          # 应用代码 + .venv + 配置
+rm -f /usr/local/bin/webscan              # webscan 管理命令
+```
+
+> **扫描数据**（`/opt/smb_share/scans/`）默认保留——里面有历史扫描件，确认不需要后再删：
+> ```bash
+> rm -rf /opt/smb_share/scans
+> ```
+> `/opt/smb_share/` 本身被 Samba 共享使用，**不要删**。
+
+### 第 3 步：移除服务用户
+
+> 仅当确认没有其他服务使用 `scanops` 用户时才执行。可先检查：
+> ```bash
+> grep -r scanops /etc/systemd/system/*.service    # 应只有 networkscan（已删）
+> ```
+
+```bash
+userdel -r scanops                        # 删除用户及其家目录
+```
+
+### 第 4 步：移除系统依赖包（按需，注意安全）
+
+> 以下包是部署 ScanWeb 时安装的。**每项标注了安全等级**，请按实际情况决定是否卸载。
+> 其他软件可能依赖这些包，卸载前请用 `apt rdepends --installed <包名>` 检查。
+
+| 包名 | 用途 | 安全等级 | 卸载命令 |
+|---|---|---|---|
+| `libjpeg-turbo8-dev` | Pillow 编译用 JPEG 头文件 | **安全卸载**（纯开发库，运行时不需要） | `apt remove -y libjpeg-turbo8-dev && apt autoremove -y` |
+| `python3.8-venv` | Python 虚拟环境支持 | **谨慎**（其他 Python 项目可能用到） | `apt remove -y python3.8-venv` |
+| `sane-utils` | scanimage 命令 | **谨慎**（CUPS 扫描功能依赖 SANE） | `apt remove -y sane-utils` |
+| `libsane` + `libsane-common` | SANE 扫描库 | **不建议卸载**（CUPS 等系统组件可能依赖） | — |
+| `uv` | Python 包管理器 | **不建议卸载**（可能被其他项目使用） | — |
+
+**建议操作**：只卸载 `libjpeg-turbo8-dev`（安全），其余保留。如果确认盒子上没有其他扫描需求，可以额外卸载 `sane-utils`。
+
+### 第 5 步：清理缓存
+
+```bash
+rm -rf /root/.cache/uv                    # uv 编译缓存（部署时已清，保险起见再查）
+```
+
+### 卸载验证
+
+```bash
+systemctl status networkscan              # 应显示 "could not be found"
+ls /opt/network_scan_service              # 应不存在
+id scanops                                # 应显示 "no such user"
+which webscan                             # 应无输出
+ss -tlnp | grep 9203                     # 应无监听
 ```
 
 > AI生成

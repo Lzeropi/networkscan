@@ -156,7 +156,59 @@
         (x.error ? '<tr><td>探测异常</td><td class="err">' + x.error + "</td></tr>" : "") +
         "</table></div>");
     });
-    $("devCacheNote").textContent = d.cached ? "（5 分钟内使用缓存，点“重新探测”强制刷新）" : "（刚完成实时探测）";
+    $("devCacheNote").textContent = d.cached ? "（5 分钟内使用缓存，点"重新探测"强制刷新）" : "（刚完成实时探测）";
+    // 加载设备别名 UI
+    loadDevAlias(d.devs);
+  }
+
+  /* ---------------- 设备别名 ---------------- */
+  let _devAliases = {};
+  async function loadDevAlias(devs) {
+    const box = $("devAliasBox");
+    const list = $("devAliasList");
+    if (!devs || devs.length === 0) { box.style.display = "none"; return; }
+    box.style.display = "";
+    // 获取当前别名
+    const cfg = await api("/api/admin/config");
+    _devAliases = cfg.device_alias || {};
+    list.innerHTML = "";
+    devs.forEach(dev => {
+      const cur = _devAliases[dev.name] || "";
+      list.insertAdjacentHTML("beforeend",
+        '<div class="cfg-row" style="margin-bottom:8px">' +
+        '<input type="text" id="alias_' + btoa(dev.name).replace(/=/g, "") + '" ' +
+        'placeholder="' + dev.name + '" value="' + cur + '" style="flex:1">' +
+        '<button class="btn" data-alias-reset="' + dev.name + '">重置</button>' +
+        '<button class="primary" data-alias-save="' + dev.name + '">保存</button>' +
+        '</div>');
+    });
+    // 绑定按钮
+    list.querySelectorAll("[data-alias-save]").forEach(btn => {
+      btn.addEventListener("click", async () => {
+        const devName = btn.dataset.aliasSave;
+        const inpId = "alias_" + btoa(devName).replace(/=/g, "");
+        const val = $(inpId).value.trim();
+        _devAliases[devName] = val;
+        const d = await api("/api/admin/config", {
+          method: "POST", body: JSON.stringify({ device_alias: _devAliases })
+        });
+        if (d.ok) { btn.textContent = "已保存 ✓"; setTimeout(() => btn.textContent = "保存", 1500); }
+        else { alert(d.msg || "保存失败"); }
+      });
+    });
+    list.querySelectorAll("[data-alias-reset]").forEach(btn => {
+      btn.addEventListener("click", async () => {
+        const devName = btn.dataset.aliasReset;
+        const inpId = "alias_" + btoa(devName).replace(/=/g, "");
+        $(inpId).value = "";
+        delete _devAliases[devName];
+        const d = await api("/api/admin/config", {
+          method: "POST", body: JSON.stringify({ device_alias: _devAliases })
+        });
+        if (d.ok) { btn.textContent = "已重置 ✓"; setTimeout(() => btn.textContent = "重置", 1500); }
+        else { alert(d.msg || "重置失败"); }
+      });
+    });
   }
 
   $("btnProbe").addEventListener("click", () => loadDevices(true));

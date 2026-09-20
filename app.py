@@ -213,6 +213,14 @@ def api_devices():
         except Exception:
             pass  # 探测失败用默认值
         devs.append(info)
+    # 附加设备别名（管理页设置的自定义名称）
+    try:
+        from config import load_admin_cfg
+        aliases = load_admin_cfg().get("device_alias", {})
+        for d in devs:
+            d["alias"] = aliases.get(d["name"], "")
+    except Exception:
+        pass
     return jsonify(devs=devs)
 
 

@@ -322,6 +322,7 @@ def api_get_config():
     return jsonify(scan_root=get_scan_root(),
                    custom_root=cfg["scan_root"],
                    cleanup=cfg["cleanup"],
+                   device_alias=cfg.get("device_alias", {}),
                    admin_cfg_path=os.path.basename(__import__("config").ADMIN_CFG_PATH))
 
 
@@ -358,10 +359,19 @@ def api_save_config():
                     cfg["cleanup"][k] = max(0, int(str(d["cleanup"][k]).strip() or 0))
                 except ValueError:
                     cfg["cleanup"][k] = 0
+    # 3) 设备别名
+    if "device_alias" in d:
+        alias = d["device_alias"]
+        if alias is None:
+            cfg["device_alias"] = {}
+        elif isinstance(alias, dict):
+            cfg["device_alias"] = {k: str(v)[:50] for k, v in alias.items() if v}
     save_admin_cfg(cfg)
     deleted = jobs.cleanup()
     return jsonify(ok=True, scan_root=get_scan_root(),
-                   cleanup=cfg["cleanup"], deleted=deleted)
+                   cleanup=cfg["cleanup"],
+                   device_alias=cfg.get("device_alias", {}),
+                   deleted=deleted)
 
 
 # ---------------- 任务管理 ----------------

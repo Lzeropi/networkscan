@@ -31,6 +31,7 @@ ADMIN_CFG_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "admin
 ADMIN_CFG_DEFAULT = {
     "pin_hash": "",                 # sha256(PIN)，空 = 尚未设置（首次访问 /admin 引导设置）
     "scan_root": "",                # 自定义扫描存储路径
+    "device_alias": {},             # 设备别名映射 { "hpljm1005:libusb:001:003": "HP M1005" }
     "cleanup": {"max_jobs": 0, "max_age_days": 0, "max_total_mb": 0}
 }
 

@@ -23,7 +23,7 @@ function loadDevices() {
       const item = document.createElement("div");
       item.className = "dd-item";
       item.dataset.value = dev.name;
-      item.textContent = dev.name;
+      item.textContent = dev.alias || dev.name;
       devMenu.appendChild(item);
     });
     if (_devCaps.length > 0) {
