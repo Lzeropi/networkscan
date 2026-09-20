@@ -1,0 +1,56 @@
+{% extends "base.html" %}
+{% block title %}{{ job }} - 扫描仪{% endblock %}
+{% block content %}
+<p><a href="/">← 返回首页</a></p>
+<section class="card">
+  <h2>{{ job }}</h2>
+  <p class="meta">创建：{{ meta.created }} ｜ {{ meta.params.get('dpi', '150') }}dpi ·
+     {% set mode_cn = {'Color':'彩色','Gray':'灰度','Lineart':'黑白'}.get(meta.params.get('mode', 'Gray'), meta.params.get('mode', 'Gray')) %}{{ mode_cn }}{% if meta.params.get('crop') %} · A4裁边{% endif %} ｜
+     {% if meta.params.get('source') == 'adf' %}连续进纸{% else %}平板{% endif %}
+     ｜ 共 <span id="pgcount">{{ pairs|length }}</span> 页</p>
+  <div class="actions">
+    <button class="primary" id="btnScan" onclick="scanPage('{{ job }}')">扫描单页</button>
+    {% if meta.params.get('source') == 'adf' %}
+    <button id="btnAdf" onclick="startAdf('{{ job }}')">开始连续扫描（ADF）</button>
+    {% endif %}
+    <a class="btn" href="/job/{{ job }}/download.zip">⬇ 打包 ZIP</a>
+    <a class="btn" href="/job/{{ job }}/download.pdf">⬇ 合成 PDF</a>
+    <button class="btn" id="btnQr" onclick="showQr('{{ job }}')" title="手机扫码直达本任务页">📱 扫码取件</button>
+    <button class="danger" onclick="delJob('{{ job }}')">删除任务</button>
+  </div>
+  <p id="status" class="status"></p>
+</section>
+<section>
+  <div class="section-title">
+    <h2>扫描图像</h2>
+    {% if pairs|length > 1 %}
+    <div class="reorder-controls">
+      <button class="btn" id="btnReorder" onclick="toggleReorderMode('{{ job }}')">调整顺序</button>
+      <button class="btn primary" id="btnSaveOrder" style="display:none" onclick="saveReorder('{{ job }}')">保存顺序</button>
+      <button class="btn" id="btnCancelOrder" style="display:none" onclick="cancelReorder()">取消</button>
+    </div>
+    {% endif %}
+  </div>
+  <div class="grid" id="wall">
+    {% for png, jpg in pairs %}
+    <figure data-name="{{ png }}" draggable="false">
+      <a href="/job/{{ job }}/raw/{{ png }}" target="_blank">
+        {% if jpg %}<img src="/job/{{ job }}/thumb/{{ jpg }}" alt="{{ png }}">
+        {% else %}<img src="/job/{{ job }}/raw/{{ png }}" alt="{{ png }}">{% endif %}
+      </a>
+      <figcaption><span>{{ png }}</span><a href="/job/{{ job }}/raw/{{ png }}" download title="下载">⬇</a></figcaption>
+    </figure>
+    {% else %}
+    <p id="empty">尚未扫描任何页面。</p>
+    {% endfor %}
+  </div>
+</section>
+<div id="lightbox" onclick="this.style.display='none'"><img src="" alt=""></div>
+<div id="qrLayer" class="qr-layer" style="display:none" onclick="this.style.display='none'">
+  <div class="qr-card">
+    <img id="qrImg" src="" alt="任务二维码">
+    <p>手机扫码直达本任务页，直接下载扫描件；点击空白处关闭</p>
+  </div>
+</div>
+<script>initJobPage(); initReorderDrag();</script>
+{% endblock %}

@@ -1,0 +1,12 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="card" style="max-width:380px;margin:60px auto">
+  <h2>需要登录</h2>
+  {% if err %}<p class="status err">{{ err }}</p>{% endif %}
+  <form method="post">
+    <p><input type="password" name="password" placeholder="访问口令" autofocus
+         style="width:100%;padding:10px;border-radius:8px;border:1px solid #2c3a55;background:#0e131c;color:#e8edf5"></p>
+    <button class="primary" type="submit">登录</button>
+  </form>
+</div>
+{% endblock %}

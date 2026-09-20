@@ -1,0 +1,8 @@
+__pycache__/
+*.pyc
+.venv/
+venv/
+admin_config.json
+.python-version
+*.tar.gz
+.DS_Store
