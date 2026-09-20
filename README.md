@@ -3,10 +3,10 @@ AIGC:
   ContentProducer: '001191110102MAD55U9H0F10002'
   ContentPropagator: '001191110102MAD55U9H0F10002'
   Label: '1'
-  ProduceID: '8f341227-a2d4-4f43-855c-ed7457a097e1'
-  PropagateID: '8f341227-a2d4-4f43-855c-ed7457a097e1'
-  ReservedCode1: '119bec7f-786a-4469-8a64-4061386c501a'
-  ReservedCode2: '119bec7f-786a-4469-8a64-4061386c501a'
+  ProduceID: '62811e82-d0c7-400b-a55f-03fd4ead6731'
+  PropagateID: '62811e82-d0c7-400b-a55f-03fd4ead6731'
+  ReservedCode1: 'a1f5b640-8802-4e59-954f-65685c2c18dc'
+  ReservedCode2: 'a1f5b640-8802-4e59-954f-65685c2c18dc'
 ---
 
 # ScanWeb — 局域网网页扫描系统
@@ -15,14 +15,16 @@ AIGC:
 
 | 项目信息 | 说明 |
 |---|---|
-| 当前版本 | v1.12 |
+| 当前版本 | v1.13 |
 | 适配硬件 | hi3798mv100 机顶盒（ARM32/armhf）或其他 Linux 小主机 |
 | 适配系统 | Ubuntu 20.04 (focal) / Python 3.8+ |
 | 主要设备 | HP LaserJet M1005（其他 SANE 兼容扫描仪亦可） |
 | 技术栈 | Flask + Waitress ｜ SANE scanimage ｜ ImageMagick convert ｜ Pillow |
 | 前端形态 | 单页原生 HTML/CSS/JS，零外部依赖、零数据库、无 CDN 引用 |
-| 默认端口 | 9230 |
+| 默认端口 | 9203 |
 
+> v1.13 更新：① 内置示例任务（输出目录为空时启动自动部署，带 🔒 锁定防清理）；② 默认端口改为 9203；③ CPU 温度优先读海思 /proc/msp/pm_cpu；④ 修复扫描报错——设备短名自动解析为完整名（hpljm1005: → hpljm1005:libusb:xxx:xxx，缓存 60 秒）+ 显式 --format=pnm 消除警告。
+>
 > v1.12 测试版修复记录：① 中文任务名 ZIP 下载报错（Content-Disposition 改为 RFC 5987 编码）；② 缩略图/原图缺失时返回 404 而非 500；③ 非法任务名/任务不存在统一返回 404。共 79 项端到端测试全部通过（排序 19 + 管理页 28 + 开关模式 10 + 功能 22）。
 
 ## 一、项目介绍
@@ -31,7 +33,7 @@ AIGC:
 
 办公室或家庭中，扫描仪通常只能插在一台电脑上使用，其他设备要用就得拷来拷去。ScanWeb 把扫描仪接到一台低功耗 Linux 小主机（如闲置机顶盒）上，以 Web 服务形式共享给整个局域网：
 
-- **多设备共享**：手机/平板/电脑浏览器直接访问 `http://<主机IP>:9230`，即可发起扫描并当场下载
+- **多设备共享**：手机/平板/电脑浏览器直接访问 `http://<主机IP>:9203`，即可发起扫描并当场下载
 - **零客户端**：扫描、预览、排序、打包全部在浏览器完成，移动端无需装任何 App
 - **低成本**：一台闲置盒子 + 一台扫描仪即可搭建，整机功耗个位数瓦
 - **数据不外传**：所有图片保存在本地磁盘，可对接 Samba 共享给局域网
@@ -39,7 +41,7 @@ AIGC:
 ### 工作原理
 
 ```
-浏览器 ──HTTP──▶ Flask(Waitress:9230) ──调用──▶ scanimage(SANE) ──USB──▶ 扫描仪
+浏览器 ──HTTP──▶ Flask(Waitress:9203) ──调用──▶ scanimage(SANE) ──USB──▶ 扫描仪
                      │
                      ├── PNM 原始输出 → ImageMagick convert → PNG（+Pillow 生成缩略图）
                      └── 任务目录：<SCAN_ROOT>/<任务名>/p001.png、p002.png… + meta.json
@@ -119,11 +121,11 @@ df -h /
 
 ```bash
 # 本机执行（传压缩包到盒子）
-scp scanweb-v1.12.tar.gz root@192.168.1.203:/opt/network_scan_service/
+scp scanweb-v1.13.tar.gz root@192.168.1.203:/opt/network_scan_service/
 # 盒子上执行
 cd /opt/network_scan_service
-tar xzf scanweb-v1.12.tar.gz --strip-components=1
-rm -f scanweb-v1.12.tar.gz .python-version
+tar xzf scanweb-v1.13.tar.gz --strip-components=1
+rm -f scanweb-v1.13.tar.gz .python-version
 ```
 
 ### 第三步：安装编译依赖并安装 Python 包
@@ -250,9 +252,9 @@ systemctl daemon-reload && systemctl enable --now networkscan
 
 ```bash
 systemctl status networkscan --no-pager
-curl -s http://127.0.0.1:9230/ | head -5
-# 局域网任意设备浏览器打开 http://192.168.1.203:9230 即可使用
-# 管理页：http://192.168.1.203:9230/admin（首次访问设置 PIN）
+curl -s http://127.0.0.1:9203/ | head -5
+# 局域网任意设备浏览器打开 http://192.168.1.203:9203 即可使用
+# 管理页：http://192.168.1.203:9203/admin（首次访问设置 PIN）
 ```
 
 ## 稳定性设计
@@ -268,7 +270,7 @@ curl -s http://127.0.0.1:9230/ | head -5
 systemctl status networkscan      # 状态
 systemctl restart networkscan     # 重启
 journalctl -u networkscan -f      # 看日志
-ss -tlnp | grep 9230              # 确认端口监听
+ss -tlnp | grep 9203              # 确认端口监听
 ```
 
 ## 五、配置说明
@@ -278,7 +280,7 @@ ss -tlnp | grep 9230              # 确认端口监听
 | 变量 | 默认 | 说明 |
 |---|---|---|
 | `SCAN_ROOT` | /opt/smb_share/scans | 扫描输出根目录（仅作初始默认，v1.10 起可在管理页运行时修改并持久化） |
-| `SCANWEB_PORT` | 9230 | 监听端口 |
+| `SCANWEB_PORT` | 9203 | 监听端口 |
 | `SCANWEB_TOKEN` | 空（不启用） | 全站访问口令，设置后需登录 |
 | `SCAN_DEVICE` | hpljm1005: | 设备后端名，只写前缀，不带 `:libusb:xxx:xxx` |
 | `SCAN_SOURCE` | 空 | ADF 源名称。M1005 无 ADF 留空；换设备后用 `scanimage -A` 查看 |

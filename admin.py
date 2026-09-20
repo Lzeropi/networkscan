@@ -148,7 +148,19 @@ def disk_info(path):
 
 
 def cpu_temp():
-    """取所有 thermal_zone 中的最高温度（°C）；无传感器返回 None。"""
+    """CPU 温度（°C）；无传感器返回 None。
+    优先读海思机顶盒的 /proc/msp/pm_cpu（Tsensor 行），通用 Linux 回退 /sys/class/thermal。"""
+    # 海思方案：/proc/msp/pm_cpu 里有 "Tsensor: temperature = 59 degree"
+    try:
+        with open("/proc/msp/pm_cpu") as f:
+            m = re.search(r"Tsensor:\s*temperature\s*=\s*(\d+)\s*degree", f.read())
+        if m:
+            t = int(m.group(1))
+            if 0 < t < 120:
+                return float(t)
+    except (OSError, ValueError):
+        pass
+    # 通用回退：/sys/class/thermal 各 thermal_zone 取最高
     best = None
     base = "/sys/class/thermal"
     try:

@@ -29,8 +29,35 @@ def _params(job):
             "source_name": prm.get("source_name", "")}
 
 
+def _resolve_device(name):
+    """把短设备名（如 'hpljm1005:'）解析为完整设备名（如 'hpljm1005:libusb:001:003'）。
+    hi3798mv100 上 hpaio 后端不接受纯后缀名（open 报 Invalid argument），
+    必须用 scanimage -L 列出的完整名。解析结果缓存 60 秒，USB 重插后自动刷新。"""
+    if not name or ":" not in name:
+        return name                       # 无后缀名，原样返回
+    backend, _, suffix = name.partition(":")
+    if suffix.strip():                    # 已带完整路径（libusb:xxx），直接用
+        return name
+    cache = globals().get("_dev_cache")
+    now = time.time()
+    if cache and cache[0] > now and cache[1].startswith(backend + ":"):
+        return cache[1]                   # 缓存有效且同后端
+    try:
+        out = subprocess.run([SCANIMAGE, "-L"], capture_output=True, timeout=15)
+        for line in out.stdout.decode(errors="ignore").splitlines():
+            m = re.match(r"device [`']([^`']+)[`']", line.strip())
+            if m and m.group(1).startswith(backend + ":"):
+                globals()["_dev_cache"] = (now + 60, m.group(1))
+                return m.group(1)
+    except (OSError, subprocess.SubprocessError):
+        pass
+    return name                           # 解析失败退回原名（由 scanimage 报错）
+
+
 def _base_cmd(p):
-    cmd = [SCANIMAGE, "-d", p["device"], "--mode", p["mode"],
+    cmd = [SCANIMAGE, "-d", _resolve_device(p["device"]),
+           "--format", "pnm",             # 显式指定格式，消除"Output format is not set"警告
+           "--mode", p["mode"],
            "--resolution", p["dpi"]]
     if p["crop"]:                       # 可选：按 A4 毫米尺寸裁边（默认不裁）
         cmd += ["-x", "210", "-y", "297"]

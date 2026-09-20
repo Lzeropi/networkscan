@@ -8,7 +8,7 @@ SCAN_ROOT = os.environ.get("SCAN_ROOT", "/opt/smb_share/scans")
 DEVICE = os.environ.get("SCAN_DEVICE", "hpljm1005:")
 SCAN_SOURCE = os.environ.get("SCAN_SOURCE", "")   # ADF 源名称（M1005 无 ADF，留空不传 --source）
 BIND = os.environ.get("SCANWEB_BIND", "0.0.0.0")
-PORT = int(os.environ.get("SCANWEB_PORT", "9230"))
+PORT = int(os.environ.get("SCANWEB_PORT", "9203"))
 TOKEN = os.environ.get("SCANWEB_TOKEN", "")           # 空 = 不启用登录
 SECRET = os.environ.get("SCANWEB_SECRET") or secrets.token_hex(32)
 
@@ -24,7 +24,7 @@ SCANIMAGE = os.environ.get("SCANIMAGE", shutil.which("scanimage") or "/usr/bin/s
 CONVERT = os.environ.get("CONVERT_BIN", shutil.which("convert") or "/usr/bin/convert")
 
 # ---------------- v1.10 管理页配置（admin_config.json，优先级高于环境变量） ----------------
-VERSION = "1.12"
+VERSION = "1.13"
 ADMIN_CFG_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "admin_config.json")
 
 # 默认值：scan_root 为空表示沿用环境变量/内置默认；三项清理策略 0 = 不启用

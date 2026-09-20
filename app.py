@@ -17,6 +17,7 @@ import admin
 import jobs
 import scanner
 from config import BIND, CONVERT, MAX_PDF_PAGES, PORT, SCANIMAGE, SECRET, TOKEN
+from config import get_scan_root
 
 app = Flask(__name__)
 app.secret_key = SECRET
@@ -313,8 +314,28 @@ def job_qrcode(job):
     return send_file(buf, mimetype="image/png")
 
 
+def deploy_examples():
+    """首次启动时把内置示例任务复制到输出目录（输出目录为空才复制）。
+    示例任务带 locked=True，不会被自动清理；用户可解锁后删除。"""
+    root = get_scan_root()
+    try:
+        if any(os.listdir(root)):
+            return                       # 已有任务，不部署示例
+    except OSError:
+        os.makedirs(root, exist_ok=True)
+    src_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "examples")
+    if not os.path.isdir(src_dir):
+        return
+    for name in os.listdir(src_dir):
+        s = os.path.join(src_dir, name)
+        d = os.path.join(root, name)
+        if os.path.isdir(s) and not os.path.exists(d):
+            shutil.copytree(s, d)
+
+
 if __name__ == "__main__":
     scanner.cleanup_tmp_pnms()           # 清理上次异常中断残留的 PNM 临时文件
     jobs.cleanup()                       # 启动时执行一次清理（锁定任务永不动）
+    deploy_examples()                    # 输出目录为空时部署内置示例任务
     admin.start_cleanup_scheduler()      # 后台每小时检查一次
     serve(app, host=BIND, port=PORT, threads=8)
