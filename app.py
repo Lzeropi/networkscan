@@ -199,7 +199,7 @@ def api_devices():
     for dev in dev_names:
         info = {"name": dev, "modes": ["Color", "Gray"], "sources": []}
         try:
-            a = subprocess.run([SCANIMAGE, "-A", "-d", dev],
+            a = subprocess.run([SCANIMAGE, "-A", "--format", "pnm", "-d", dev],
                                capture_output=True, text=True, timeout=15)
             out = a.stdout + a.stderr
             # 解析 --mode 行：如 --mode Gray|Color [Color]
