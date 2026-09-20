@@ -3,10 +3,10 @@ AIGC:
   ContentProducer: '001191110102MAD55U9H0F10002'
   ContentPropagator: '001191110102MAD55U9H0F10002'
   Label: '1'
-  ProduceID: '340868d9-8892-48b0-aa00-78bab224bc09'
-  PropagateID: '340868d9-8892-48b0-aa00-78bab224bc09'
-  ReservedCode1: 'd564ec76-d11d-4004-b32e-64c5630410c7'
-  ReservedCode2: 'd564ec76-d11d-4004-b32e-64c5630410c7'
+  ProduceID: '80363227-e8f4-4dac-8a55-ea08f2195299'
+  PropagateID: '80363227-e8f4-4dac-8a55-ea08f2195299'
+  ReservedCode1: '1d2ba6a6-748a-4cfb-b8e4-457e7de1cd2b'
+  ReservedCode2: '1d2ba6a6-748a-4cfb-b8e4-457e7de1cd2b'
 ---
 
 # ScanWeb — 局域网网页扫描系统
@@ -22,6 +22,8 @@ AIGC:
 | 技术栈 | Flask + Waitress ｜ SANE scanimage ｜ ImageMagick convert ｜ Pillow |
 | 前端形态 | 单页原生 HTML/CSS/JS，零外部依赖、零数据库、无 CDN 引用 |
 | 默认端口 | 9230 |
+
+> v1.12 测试版修复记录：① 中文任务名 ZIP 下载报错（Content-Disposition 改为 RFC 5987 编码）；② 缩略图/原图缺失时返回 404 而非 500；③ 非法任务名/任务不存在统一返回 404。共 79 项端到端测试全部通过（排序 19 + 管理页 28 + 开关模式 10 + 功能 22）。
 
 ## 一、项目介绍
 
