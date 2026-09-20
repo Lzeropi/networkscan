@@ -15,7 +15,7 @@ AIGC:
 
 | 项目信息 | 说明 |
 |---|---|
-| 当前版本 | v1.11 |
+| 当前版本 | v1.12 |
 | 适配硬件 | hi3798mv100 机顶盒（ARM32/armhf）或其他 Linux 小主机 |
 | 适配系统 | Ubuntu 20.04 (focal) / Python 3.8+ |
 | 主要设备 | HP LaserJet M1005（其他 SANE 兼容扫描仪亦可） |
@@ -61,7 +61,7 @@ hpljm1005 后端不支持 `--format=png`，扫描输出为 PNM 格式，需 conv
 - **扫码取件**（可选）：任务页生成二维码，手机扫码直达，无需输入地址
 - **ZIP 打包下载**（流式传输，不受内存限制）
 - **PDF 一键合成**（超 20 页自动拒绝，防 ARM32 内存 OOM）
-- **页面顺序调整**：拖动图片，蓝框亮在哪张图上松手后就放到哪张图的位置，其余页面自动顺延；每张图另有「←/→」按钮，手机平板触屏同样可排序；保存后系统物理重排文件，PDF/ZIP 均按新顺序合并，无需重扫
+- **页面顺序调整**：拖动图片，蓝框亮在哪张图上松手后就放到哪张图的位置，其余页面自动顺延；控制栏有「按钮排序」开关，开启后显示箭头按钮供触屏设备使用；保存后系统物理重排文件，PDF/ZIP 均按新顺序合并，无需重扫
 
 ### 内置操作手册
 
@@ -136,7 +136,7 @@ apt install -y libjpeg-turbo8-dev
 uv venv .venv
 uv pip install flask waitress "pillow>=7.0,<9"
 # 可选：安装 qrcode 启用任务页「扫码取件」功能（纯 Python 无编译，约 100KB）
-uv pip install qrcode
+uv pip install qrcode  # v1.12：扫描仪非阻塞锁，多人同时扫描时第二人立即收到"设备忙"提示
 # 如 uv 卡住，改用：.venv/bin/pip install --no-cache-dir flask waitress qrcode "pillow>=7.0,<9"
 # 3. 清理缓存
 rm -rf /root/.cache/uv

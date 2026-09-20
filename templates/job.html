@@ -52,5 +52,6 @@
     <p>手机扫码直达本任务页，直接下载扫描件；点击空白处关闭</p>
   </div>
 </div>
-<script>initJobPage(); initReorderDrag();</script>
+<div id="scanBusyBar" class="card warn" style="display:none;margin-bottom:14px"></div>
+<script>initJobPage(); initReorderDrag(); checkScanStatus();</script>
 {% endblock %}

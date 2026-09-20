@@ -2,6 +2,7 @@ import os
 import re
 import subprocess
 import threading
+import time
 
 from PIL import Image
 
@@ -11,6 +12,8 @@ from config import (CONVERT, DEVICE, SCAN_SOURCE,
 
 scan_lock = threading.Lock()          # 扫描仪全局独占锁
 state = {}                            # job -> {"state": "scanning|done|error", "msg": str}
+_scan_start_time = None               # 当前扫描开始时间戳（float）
+_scan_job = None                      # 当前正在扫描的任务名
 
 VALID_DPI = {"75", "150", "200", "300", "400", "600", "1200", "2400"}
 VALID_MODE = {"Color", "Gray", "Lineart"}  # 完整模式集；实际支持由 scanimage -A 探测后前端动态过滤
@@ -83,9 +86,17 @@ def _mk_thumb(job, fname):
 
 
 def scan_flatbed(job):
-    """平板单页扫描：scanimage 输出 PNM 到 /tmp，convert 转 PNG 进任务目录。"""
+    """平板单页扫描：scanimage 输出 PNM 到 /tmp，convert 转 PNG 进任务目录。
+    扫描仪忙时立即返回提示，不阻塞等待。"""
+    global _scan_start_time, _scan_job
     p = _params(job)
-    with scan_lock:
+    if not scan_lock.acquire(blocking=False):
+        busy_job = _scan_job or ""
+        elapsed = int(time.time() - _scan_start_time) if _scan_start_time else 0
+        raise RuntimeError("设备忙，%s 正在扫描（已用 %d 秒），请稍后再试" % (busy_job, elapsed))
+    try:
+        _scan_start_time = time.time()
+        _scan_job = job
         n = len(jobs.pages(job)) + 1          # 以磁盘实际页数为准，防编号冲突
         fname = f"p{n:03d}.png"
         out = os.path.join(get_scan_root(), job, fname)
@@ -108,13 +119,26 @@ def scan_flatbed(job):
         meta["pages"] = len(jobs.pages(job))
         jobs.save(job, meta)
         return fname
+    finally:
+        _scan_job = None
+        _scan_start_time = None
+        scan_lock.release()
 
 
 def scan_adf(job):
     """ADF 连续扫描：后台线程执行，进度/结果用 get_state 轮询。"""
     def worker():
+        global _scan_start_time, _scan_job
         p = _params(job)
-        with scan_lock:
+        if not scan_lock.acquire(blocking=False):
+            st = state.setdefault(job, {})
+            busy_job = _scan_job or ""
+            elapsed = int(time.time() - _scan_start_time) if _scan_start_time else 0
+            st.update(state="error", msg="设备忙，%s 正在扫描（已用 %d 秒），请稍后再试" % (busy_job, elapsed))
+            return
+        try:
+            _scan_start_time = time.time()
+            _scan_job = job
             st = state.setdefault(job, {})
             st.update(state="scanning", msg="ADF 连续扫描中…")
             start = len(jobs.pages(job)) + 1
@@ -146,6 +170,10 @@ def scan_adf(job):
                 st.update(state="error", msg="扫描超时（超过 1 小时）")
             except Exception as e:
                 st.update(state="error", msg=str(e)[:300])
+        finally:
+            _scan_job = None
+            _scan_start_time = None
+            scan_lock.release()
 
     threading.Thread(target=worker, daemon=True).start()
 
@@ -157,3 +185,11 @@ def get_state(job):
     except jobs.JobError:
         st.setdefault("pages", 0)
     return st
+
+
+def get_scan_status():
+    """全局扫描状态：当前是否有任务在扫描、扫了多久。供首页/任务页展示。"""
+    if _scan_job and scan_lock.locked():
+        elapsed = int(time.time() - _scan_start_time) if _scan_start_time else 0
+        return {"busy": True, "job": _scan_job, "elapsed": elapsed}
+    return {"busy": False, "job": "", "elapsed": 0}
