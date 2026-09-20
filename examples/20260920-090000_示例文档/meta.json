@@ -1,12 +1,12 @@
 {
   "remark": "示例文档",
   "created": "2026-09-20 09:00:00",
-  "pages": 1,
+  "pages": 7,
   "locked": true,
   "params": {
     "source": "flatbed",
     "dpi": "150",
-    "mode": "Gray",
+    "mode": "Color",
     "crop": false,
     "source_name": ""
   }
