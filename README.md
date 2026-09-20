@@ -3,10 +3,10 @@ AIGC:
   ContentProducer: '001191110102MAD55U9H0F10002'
   ContentPropagator: '001191110102MAD55U9H0F10002'
   Label: '1'
-  ProduceID: '80363227-e8f4-4dac-8a55-ea08f2195299'
-  PropagateID: '80363227-e8f4-4dac-8a55-ea08f2195299'
-  ReservedCode1: '1d2ba6a6-748a-4cfb-b8e4-457e7de1cd2b'
-  ReservedCode2: '1d2ba6a6-748a-4cfb-b8e4-457e7de1cd2b'
+  ProduceID: 'd242abf5-44d7-4140-9ce9-a28107a22fb0'
+  PropagateID: 'd242abf5-44d7-4140-9ce9-a28107a22fb0'
+  ReservedCode1: 'dc085643-8d7b-475d-be06-3d87ca5b74b3'
+  ReservedCode2: 'dc085643-8d7b-475d-be06-3d87ca5b74b3'
 ---
 
 # ScanWeb — 局域网网页扫描系统
@@ -119,11 +119,11 @@ df -h /
 
 ```bash
 # 本机执行（传压缩包到盒子）
-scp scanweb-v1.10.tar.gz root@192.168.1.203:/opt/network_scan_service/
+scp scanweb-v1.12.tar.gz root@192.168.1.203:/opt/network_scan_service/
 # 盒子上执行
 cd /opt/network_scan_service
-tar xzf scanweb-v1.10.tar.gz --strip-components=1
-rm -f scanweb-v1.10.tar.gz .python-version
+tar xzf scanweb-v1.12.tar.gz --strip-components=1
+rm -f scanweb-v1.12.tar.gz .python-version
 ```
 
 ### 第三步：安装编译依赖并安装 Python 包
