@@ -191,7 +191,7 @@ def api_devices():
     """列出设备并探测每台设备支持的扫描模式和进纸源（scanimage -A）。"""
     try:
         r = subprocess.run([SCANIMAGE, "-L"], capture_output=True, text=True, timeout=15)
-        dev_names = re.findall(r"device `([^`]+)`", r.stdout)
+        dev_names = re.findall(r"device `([^']+)'", r.stdout)
     except Exception:
         dev_names = []
 
