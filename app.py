@@ -6,6 +6,7 @@ import shutil
 import subprocess
 import threading
 import zipfile
+from urllib.parse import quote
 
 from flask import (Flask, Response, abort, jsonify, redirect,
                    render_template, request, send_file, session,
@@ -57,7 +58,7 @@ def inject():
 
 @app.errorhandler(jobs.JobError)
 def job_error(e):
-    abort(404)
+    return "任务不存在或任务名非法", 404
 
 
 # ---------------- 页面 ----------------
@@ -219,14 +220,20 @@ def api_devices():
 def raw(job, fname):
     if not FNAME_RE.fullmatch(fname) or not fname.endswith(".png"):
         abort(404)
-    return send_file(os.path.join(jobs.path(job), fname))
+    p = os.path.join(jobs.path(job), fname)
+    if not os.path.exists(p):
+        abort(404)
+    return send_file(p)
 
 
 @app.route("/job/<job>/thumb/<fname>")
 def thumb(job, fname):
     if not FNAME_RE.fullmatch(fname) or not fname.endswith(".jpg"):
         abort(404)
-    return send_file(os.path.join(jobs.path(job), ".thumbs", fname))
+    p = os.path.join(jobs.path(job), ".thumbs", fname)
+    if not os.path.exists(p):
+        abort(404)
+    return send_file(p)
 
 
 @app.route("/job/<job>/download.zip")
@@ -269,7 +276,8 @@ def dl_zip(job):
             yield chunk
 
     return Response(stream_with_context(gen()), mimetype="application/zip",
-                    headers={"Content-Disposition": f'attachment; filename="{job}.zip"'})
+                    headers={"Content-Disposition":
+                             f"attachment; filename=\"scan.zip\"; filename*=UTF-8''{quote(job + '.zip')}"})
 
 
 @app.route("/job/<job>/download.pdf")
