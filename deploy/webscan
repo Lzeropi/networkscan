@@ -78,8 +78,7 @@ cmd_update() {
         old_ver=$(grep -oP 'VERSION\s*=\s*"\K[^"]+' "${INSTALL_DIR}/config.py" 2>/dev/null || echo "unknown")
     fi
     local new_ver
-    new_ver=$(tar xzf "$pkg" -O 2>/dev/null | tar tz 2>/dev/null | head -1 || echo "")
-    new_ver=$(grep -oP 'VERSION\s*=\s*"\K[^"]+' <(tar xzf "$pkg" -O "*/config.py" 2>/dev/null) 2>/dev/null || echo "unknown")
+    new_ver=$(grep -oP 'VERSION\s*=\s*"\K[^"]+' <(tar xzf "$pkg" -O "scanweb/config.py" 2>/dev/null) 2>/dev/null || echo "unknown")
 
     echo "  旧版本：v${old_ver}"
     echo "  新版本：v${new_ver}"
@@ -95,7 +94,13 @@ cmd_update() {
         fi
     done
 
-    # 5. 清理旧代码（保留 .venv 和 admin_config.json）
+    # 5. 先把更新包复制到临时位置（清理时不会误删）
+    local pkg_basename
+    pkg_basename=$(basename "$pkg")
+    local pkg_tmp="/tmp/${pkg_basename}"
+    cp "$pkg" "$pkg_tmp"
+
+    # 6. 清理旧代码（保留 .venv 和 admin_config.json）
     yellow "清理旧代码..."
     # 删除除保留项以外的所有文件
     local find_expr=""
@@ -132,7 +137,8 @@ cmd_update() {
 
     # 6. 解压新代码
     yellow "解压新版本..."
-    tar xzf "$pkg" --strip-components=1 -C "${INSTALL_DIR}"
+    tar xzf "$pkg_tmp" --strip-components=1 -C "${INSTALL_DIR}"
+    rm -f "$pkg_tmp"
     rm -f "${INSTALL_DIR}/.python-version" 2>/dev/null || true
 
     # 7. 恢复保留项（如果新包没有，用备份的）
