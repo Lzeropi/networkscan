@@ -3,10 +3,10 @@ AIGC:
   ContentProducer: '001191110102MAD55U9H0F10002'
   ContentPropagator: '001191110102MAD55U9H0F10002'
   Label: '1'
-  ProduceID: 'b2b5f40e-3bd7-4fe7-8adb-48d30472b57f'
-  PropagateID: 'b2b5f40e-3bd7-4fe7-8adb-48d30472b57f'
-  ReservedCode1: '235a8489-ce5a-40ad-ada7-f33107bd25bd'
-  ReservedCode2: '235a8489-ce5a-40ad-ada7-f33107bd25bd'
+  ProduceID: 'ed583554-e557-4e41-9f71-cd56454e86c2'
+  PropagateID: 'ed583554-e557-4e41-9f71-cd56454e86c2'
+  ReservedCode1: '866f8a59-1f42-43e5-933f-ee5f71c2a685'
+  ReservedCode2: '866f8a59-1f42-43e5-933f-ee5f71c2a685'
 ---
 
 # ScanWeb — 局域网网页扫描系统
@@ -311,8 +311,17 @@ ss -tlnp | grep 9203              # 确认端口监听
 | 模式 | Gray、Color（无 Lineart） |
 | 扫描区域 | 220mm × 330mm |
 | ADF | 不支持（`scanimage -A` 无 `--source` 选项） |
-| 输出格式 | 默认 PNM（convert 必需） |
+| 输出格式 | PNM（convert 转 PNG，需 ImageMagick） |
 | USB 权限 | `/dev/bus/usb/001/003` 属 `root:lp`，服务用户需加入 lp 组 |
+| 扫描耗时 | scanimage 约 7 秒（灯管预热+物理扫描），convert 约 9 秒（后台转换不阻塞下一次扫描） |
+
+> **手动查看设备能力**：
+> ```bash
+> # 列出可用设备
+> sudo -u scanops scanimage -L
+> # 查看设备支持的所有参数（分辨率、色彩模式、扫描区域等）
+> sudo -u scanops scanimage -d "hpljm1005:libusb:001:003" -A
+> ```
 
 ## 七、使用指南
 

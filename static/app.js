@@ -48,11 +48,14 @@ function updateDeviceOptions(selectedDev) {
   const hint = document.getElementById("advHint");
 
   if (!dev) {
-    // 探测失败：全部显示（降级模式，由 scanimage 报错兜底）
-    if (adfLabel) adfLabel.style.display = "";
-    if (hint) hint.textContent = "设备能力探测失败，所有选项可用。不支持的参数扫描时会报错。";
+    // 无设备：隐藏所有选项，明确提示
+    if (sourceFieldset) sourceFieldset.style.display = "none";
+    if (modeDropdown) modeDropdown.style.display = "none";
+    if (hint) hint.textContent = "未找到有效设备，请检查扫描仪连接和权限。";
     return;
   }
+  // 有设备：确保选项区可见
+  if (modeDropdown) modeDropdown.style.display = "";
 
   // ADF：设备有非 Flatbed 的 source 才显示"扫描方式"区块
   const adfSources = (dev.sources || []).filter(s =>
@@ -109,7 +112,7 @@ function updateDeviceOptions(selectedDev) {
   }
 }
 
-/* 任务页：平板扫一页（阻塞式，后端持有设备锁） */
+/* 任务页：平板扫一页（后端扫描完即返回，转换在后台进行） */
 async function scanPage(job) {
   const b = document.getElementById("btnScan");
   b.disabled = true;
@@ -118,12 +121,59 @@ async function scanPage(job) {
     const r = await fetch(`/api/jobs/${job}/scan`, { method: "POST" });
     const d = await r.json();
     if (!d.ok) throw new Error(d.msg || "扫描失败");
-    addThumb(job, d.file);
-    setStatus("已完成：" + d.file);
+    // 扫描完成，先添加占位图（显示"正在转换"）
+    addThumbPlaceholder(job, d.file);
+    setStatus("扫描完成，正在后台转换为 PNG…");
+    b.disabled = false;               // 立即恢复按钮，可以继续扫描下一页
+    // 轮询缩略图是否就绪（转换完成）
+    pollThumbReady(job, d.file);
   } catch (e) {
     setStatus("扫描失败：" + e.message, true);
+    b.disabled = false;
   }
-  b.disabled = false;
+}
+
+function addThumbPlaceholder(job, png) {
+  const wall = document.getElementById("wall");
+  const empty = document.getElementById("empty");
+  if (empty) empty.remove();
+  const fig = document.createElement("figure");
+  fig.dataset.name = png;
+  fig.id = "fig_" + png.replace(".", "_");
+  fig.innerHTML =
+    `<a><img src="/job/${job}/thumb/${png.replace(".png", ".jpg")}" style="opacity:0.3" alt="转换中"></a>` +
+    `<figcaption><span>${png} · 正在转换…</span></figcaption>`;
+  wall.appendChild(fig);
+  const c = document.getElementById("pgcount");
+  if (c) c.textContent = wall.querySelectorAll("figure").length;
+}
+
+function pollThumbReady(job, png, retries) {
+  retries = retries || 0;
+  if (retries > 60) {                // 最多等 60 次 × 1 秒 = 60 秒
+    const fig = document.getElementById("fig_" + png.replace(".", "_"));
+    if (fig) fig.querySelector("figcaption span").textContent = png + " · 转换超时";
+    setStatus("转换超时，可能需要刷新页面查看", true);
+    return;
+  }
+  const thumbUrl = `/job/${job}/thumb/${png.replace(".png", ".jpg")}`;
+  fetch(thumbUrl, { cache: "no-store" }).then(r => {
+    if (r.ok) {
+      // 转换完成，刷新缩略图
+      const fig = document.getElementById("fig_" + png.replace(".", "_"));
+      if (fig) {
+        const img = fig.querySelector("img");
+        img.src = thumbUrl + "?t=" + Date.now();
+        img.style.opacity = "1";
+        img.parentElement.href = `/job/${job}/raw/${png}`;
+        fig.querySelector("figcaption").innerHTML =
+          `<span>${png}</span><a href="/job/${job}/raw/${png}" download title="下载">⬇</a>`;
+      }
+      setStatus("已完成：" + png);
+    } else {
+      setTimeout(() => pollThumbReady(job, png, retries + 1), 1000);
+    }
+  }).catch(() => setTimeout(() => pollThumbReady(job, png, retries + 1), 1000));
 }
 
 let adfTimer = null;
