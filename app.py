@@ -315,14 +315,13 @@ def job_qrcode(job):
 
 
 def deploy_examples():
-    """首次启动时把内置示例任务复制到输出目录（输出目录为空才复制）。
+    """启动时检查内置示例任务是否已在输出目录，不存在则复制。
     示例任务带 locked=True，不会被自动清理；用户可解锁后删除。"""
     root = get_scan_root()
     try:
-        if any(os.listdir(root)):
-            return                       # 已有任务，不部署示例
-    except OSError:
         os.makedirs(root, exist_ok=True)
+    except OSError:
+        return
     src_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "examples")
     if not os.path.isdir(src_dir):
         return
