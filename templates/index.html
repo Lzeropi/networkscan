@@ -40,11 +40,11 @@
         <div class="dd-group">
           <span class="dd-label">色彩</span>
           <div class="dropdown" data-name="mode" id="modeDropdown">
-            <button type="button" class="dd-toggle">Gray<span class="dd-caret"></span></button>
+            <button type="button" class="dd-toggle">灰度<span class="dd-caret"></span></button>
             <div class="dd-menu">
-              <div class="dd-item" data-value="Color">Color</div>
-              <div class="dd-item selected" data-value="Gray">Gray</div>
-              <div class="dd-item" data-value="Lineart">Lineart</div>
+              <div class="dd-item" data-value="Color">彩色</div>
+              <div class="dd-item selected" data-value="Gray">灰度</div>
+              <div class="dd-item" data-value="Lineart">黑白</div>
             </div>
             <input type="hidden" name="mode" value="Gray">
           </div>
@@ -75,7 +75,8 @@
       <div class="thumb"><img src="/job/{{ j.name }}/thumb/p001.jpg" alt="" onerror="this.remove()"></div>
       <div class="info">
         <b>{{ j.name }}</b>
-        <span>{{ j.created }} · {{ j.pages }} 页</span>
+        <span>{{ j.created }}</span>
+        <span>{{ j.pages }} 页</span>
       </div>
     </a>
   {% else %}

@@ -11,6 +11,9 @@ function setStatus(t, isErr) {
 /* 首页：动态加载 scanimage -L 的设备列表 + 探测能力 */
 let _devCaps = [];   // 缓存设备能力数据
 
+// 扫描模式中英文映射（scanimage 参数保持英文，界面显示中文）
+const MODE_CN = { "Color": "彩色", "Gray": "灰度", "Lineart": "黑白" };
+
 function loadDevices() {
   const devMenu = document.getElementById("devMenu");
   if (!devMenu) return;
@@ -88,10 +91,11 @@ function updateDeviceOptions(selectedDev) {
     }
   }
 
-  // 提示文字
+  // 提示文字（模式用中文显示）
   if (hint) {
     const parts = [];
-    parts.push("模式：" + (dev.modes || ["未知"]).join("/"));
+    const cnModes = (dev.modes || ["未知"]).map(m => MODE_CN[m] || m);
+    parts.push("模式：" + cnModes.join("/"));
     if (adfSources.length > 0) {
       parts.push("ADF 源：" + adfSources.join("/"));
     } else {

@@ -5,7 +5,7 @@
 <section class="card">
   <h2>{{ job }}</h2>
   <p class="meta">创建：{{ meta.created }} ｜ {{ meta.params.get('dpi', '150') }}dpi ·
-     {{ meta.params.get('mode', 'Gray') }}{% if meta.params.get('crop') %} · A4裁边{% endif %} ｜
+     {% set mode_cn = {'Color':'彩色','Gray':'灰度','Lineart':'黑白'}.get(meta.params.get('mode', 'Gray'), meta.params.get('mode', 'Gray')) %}{{ mode_cn }}{% if meta.params.get('crop') %} · A4裁边{% endif %} ｜
      {% if meta.params.get('source') == 'adf' %}连续进纸{% else %}平板{% endif %}
      ｜ 共 <span id="pgcount">{{ pairs|length }}</span> 页</p>
   <div class="actions">
