@@ -32,6 +32,11 @@ ADMIN_CFG_DEFAULT = {
     "pin_hash": "",                 # sha256(PIN)，空 = 尚未设置（首次访问 /admin 引导设置）
     "scan_root": "",                # 自定义扫描存储路径
     "device_alias": {},             # 设备别名映射 { "hpljm1005:libusb:001:003": "HP M1005" }
+    "scan_defaults": {              # 扫描页面默认值
+        "dpi": "150",
+        "mode": "Gray",
+        "crop": False
+    },
     "cleanup": {"max_jobs": 0, "max_age_days": 0, "max_total_mb": 0}
 }
 
@@ -48,6 +53,13 @@ def load_admin_cfg():
         if isinstance(raw, dict):
             cl.update({k: int(raw.get(k, 0)) for k in cl})
         out["cleanup"] = cl
+        sd = dict(ADMIN_CFG_DEFAULT["scan_defaults"])
+        raw_sd = cfg.get("scan_defaults")
+        if isinstance(raw_sd, dict):
+            for k in sd:
+                if k in raw_sd:
+                    sd[k] = raw_sd[k]
+        out["scan_defaults"] = sd
         return out
     except (OSError, ValueError, TypeError):
         return {k: (dict(v) if isinstance(v, dict) else v) for k, v in ADMIN_CFG_DEFAULT.items()}
@@ -69,3 +81,8 @@ def get_scan_root():
 def get_cleanup_cfg():
     """运行时清理策略（OR 组合，任一超限即执行对应清理）：0 = 不启用。"""
     return load_admin_cfg()["cleanup"]
+
+
+def get_scan_defaults():
+    """扫描页面默认值：dpi / mode / crop。"""
+    return load_admin_cfg().get("scan_defaults", ADMIN_CFG_DEFAULT["scan_defaults"])

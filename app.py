@@ -17,7 +17,7 @@ import admin
 import jobs
 import scanner
 from config import BIND, CONVERT, MAX_PDF_PAGES, PORT, SCANIMAGE, SECRET, TOKEN
-from config import get_scan_root
+from config import get_scan_root, get_scan_defaults
 
 app = Flask(__name__)
 app.secret_key = SECRET
@@ -68,7 +68,8 @@ def index():
     jobs.cleanup()
     return render_template("index.html", jobs=jobs.list_jobs(),
                            scanimage_ok=os.path.exists(SCANIMAGE),
-                           convert_ok=os.path.exists(CONVERT))
+                           convert_ok=os.path.exists(CONVERT),
+                           scan_defaults=get_scan_defaults())
 
 
 @app.route("/job/<job>")
@@ -228,7 +229,7 @@ def api_devices():
 
     devs = []
     for dev in dev_names:
-        info = {"name": dev, "modes": ["Color", "Gray"], "sources": []}
+        info = {"name": dev, "modes": ["Color", "Gray"], "sources": [], "dpis": ["150", "300", "600"]}
         try:
             a = subprocess.run([SCANIMAGE, "-A", "--format", "pnm", "-d", dev],
                                capture_output=True, text=True, timeout=15)
@@ -241,6 +242,10 @@ def api_devices():
             s = re.search(r'--source\s+([^\[]+)\[', out)
             if s:
                 info["sources"] = [src.strip() for src in s.group(1).split("|")]
+            # 解析 --resolution 行：如 --resolution 75|100|150|200|300|600|1200dpi [75]
+            r2 = re.search(r'--resolution\s+([^\[]+)\[', out)
+            if r2:
+                info["dpis"] = [d.strip().replace("dpi", "") for d in r2.group(1).split("|")]
         except Exception:
             pass  # 探测失败用默认值
         devs.append(info)
@@ -252,7 +257,13 @@ def api_devices():
             d["alias"] = aliases.get(d["name"], "")
     except Exception:
         pass
-    return jsonify(devs=devs)
+    # 附加扫描默认值（管理页设置的 DPI/模式/裁边）
+    try:
+        from config import get_scan_defaults
+        defaults = get_scan_defaults()
+    except Exception:
+        defaults = {}
+    return jsonify(devs=devs, defaults=defaults)
 
 
 # ---------------- 文件 ----------------

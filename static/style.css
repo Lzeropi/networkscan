@@ -289,6 +289,7 @@ figcaption a{padding:2px 8px;font-size:13px}
 .admin-table th{color:var(--mut);font-weight:600;background:#f6f9fd}
 .admin-table tr.locked-row td{background:#fdfbe8}
 .dev-card{border:1px solid var(--border);border-radius:8px;padding:10px 14px;margin-bottom:10px}
+.dev-num{display:inline-flex;align-items:center;justify-content:center;width:20px;height:20px;border-radius:50%;background:var(--acc,#4080ff);color:#fff;font-size:12px;font-weight:600;margin-right:4px}
 .dev-card .hint{margin:4px 0 8px}
 .dev-table{font-size:13px;border-collapse:collapse}
 .dev-table td{padding:3px 14px 3px 0;color:#333}

@@ -19,6 +19,12 @@ function loadDevices() {
   if (!devMenu) return;
   fetch("/api/devices").then(r => r.json()).then(data => {
     _devCaps = data.devs || [];
+    var defaults = data.defaults || {};
+    // 应用管理页设置的默认值到表单
+    var dpiHidden = document.querySelector('[data-name="dpi"] input[type=hidden]');
+    var modeHidden = document.querySelector("#modeDropdown input[type=hidden]");
+    if (defaults.dpi && dpiHidden) dpiHidden.value = defaults.dpi;
+    if (defaults.mode && modeHidden) modeHidden.value = defaults.mode;
     // 动态填充设备下拉
     devMenu.innerHTML = "";
     _devCaps.forEach((dev, i) => {
@@ -81,24 +87,46 @@ function updateDeviceOptions(selectedDev) {
   if (adfLabel) adfLabel.style.display = adfSources.length > 0 ? "" : "none";
   if (sourceName) sourceName.value = adfSources.length > 0 ? adfSources[0] : "";
 
-  // 动态填充色彩模式
+  // 动态填充色彩模式（选中管理页设置的默认值或第一个）
   if (modeDropdown) {
     const modeMenu = modeDropdown.querySelector(".dd-menu");
     const modeToggle = modeDropdown.querySelector(".dd-toggle");
     const modeHidden = modeDropdown.querySelector("input[type=hidden]");
     const modes = dev.modes || ["Gray"];
+    const defaultMode = modeHidden.value || modes[0];
     modeMenu.innerHTML = "";
-    modes.forEach((m, i) => {
+    modes.forEach(m => {
       const item = document.createElement("div");
-      item.className = "dd-item" + (i === 0 ? " selected" : "");
+      const isSel = (m === defaultMode) || (!modes.includes(defaultMode) && m === modes[0]);
+      item.className = "dd-item" + (isSel ? " selected" : "");
       item.dataset.value = m;
       item.textContent = MODE_CN[m] || m;
       modeMenu.appendChild(item);
     });
-    if (modes.length > 0) {
-      modeHidden.value = modes[0];
-      modeToggle.firstChild.textContent = MODE_CN[modes[0]] || modes[0];
-    }
+    const selMode = modes.includes(defaultMode) ? defaultMode : modes[0];
+    modeHidden.value = selMode;
+    modeToggle.firstChild.textContent = MODE_CN[selMode] || selMode;
+  }
+
+  // 动态填充分辨率（根据设备探测到的 DPI 列表）
+  if (dpiDropdown) {
+    const dpiMenu = dpiDropdown.querySelector(".dd-menu");
+    const dpiToggle = dpiDropdown.querySelector(".dd-toggle");
+    const dpiHidden = dpiDropdown.querySelector("input[type=hidden]");
+    const dpis = dev.dpis || ["150", "300", "600"];
+    const defaultDpi = dpiHidden.value || dpis[0];
+    dpiMenu.innerHTML = "";
+    dpis.forEach(d => {
+      const item = document.createElement("div");
+      const isSel = (d === defaultDpi) || (!dpis.includes(defaultDpi) && d === dpis[0]);
+      item.className = "dd-item" + (isSel ? " selected" : "");
+      item.dataset.value = d;
+      item.textContent = d;
+      dpiMenu.appendChild(item);
+    });
+    const selDpi = dpis.includes(defaultDpi) ? defaultDpi : dpis[0];
+    dpiHidden.value = selDpi;
+    dpiToggle.firstChild.textContent = selDpi;
   }
 
   // 提示文字

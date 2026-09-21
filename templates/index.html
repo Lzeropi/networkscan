@@ -20,7 +20,7 @@
           <input type="hidden" name="device" value="">
         </div>
       </div>
-      <label class="crop-label"><input type="checkbox" name="crop"> 按 A4 尺寸裁边</label>
+      <label class="crop-label"><input type="checkbox" name="crop" {% if scan_defaults.crop %}checked{% endif %}> 按 A4 尺寸裁边</label>
       <button type="submit" class="primary">创建并开始</button>
     </div>
     <details class="adv">
@@ -38,7 +38,7 @@
             <button type="button" class="dd-toggle">加载中…<span class="dd-caret"></span></button>
             <div class="dd-menu" id="dpiMenu">
             </div>
-            <input type="hidden" name="dpi" value="150">
+            <input type="hidden" name="dpi" value="{{ scan_defaults.dpi }}">
           </div>
           <span class="dd-unit">dpi</span>
         </div>
@@ -48,7 +48,7 @@
             <button type="button" class="dd-toggle">加载中…<span class="dd-caret"></span></button>
             <div class="dd-menu">
             </div>
-            <input type="hidden" name="mode" value="Gray">
+            <input type="hidden" name="mode" value="{{ scan_defaults.mode }}">
           </div>
         </div>
       </div>

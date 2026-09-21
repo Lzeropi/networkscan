@@ -144,10 +144,14 @@
       return;
     }
     box.innerHTML = "";
-    d.devs.forEach(x => {
+    d.devs.forEach((x, i) => {
       const modes = (x.modes || []).map(m => MODE_CN[m] || m).join(" / ") || "未知";
+      const alias = (x.alias || "").trim();
+      const devTitle = alias ? alias + ' <span class="hint">(' + x.name + ')</span>' : x.name;
       box.insertAdjacentHTML("beforeend",
-        '<div class="dev-card"><b>' + x.name + "</b>" +
+        '<div class="dev-card">' +
+        (d.devs.length > 1 ? '<span class="dev-num">' + (i + 1) + '</span> ' : '') +
+        '<b>' + devTitle + "</b>" +
         '<p class="hint">' + (x.desc || "") + "</p>" +
         '<table class="dev-table">' +
         "<tr><td>扫描能力</td><td>" + x.scan_type + "</td></tr>" +
@@ -258,6 +262,36 @@
       const n = (d.deleted || []).length;
       show(msg, "清理策略已保存 ✓" + (n ? "本次立即清理了 " + n + " 个超限任务（锁定任务未动）" : "（当前无超限任务）"));
       loadJobs();
+    } else {
+      show(msg, d.msg || "保存失败", true);
+    }
+  });
+
+  /* ---------------- 扫描默认值 ---------------- */
+  async function loadDefaults() {
+    const cfg = await api("/api/admin/config");
+    if (cfg._status === 401) return;
+    const sd = cfg.scan_defaults || {};
+    if (sd.dpi && $("cfgDpi")) $("cfgDpi").value = sd.dpi;
+    if (sd.mode && $("cfgMode")) $("cfgMode").value = sd.mode;
+    if ($("cfgCrop")) $("cfgCrop").checked = !!sd.crop;
+  }
+  loadDefaults();
+
+  $("btnSaveDefaults").addEventListener("click", async () => {
+    const msg = $("defaultsMsg");
+    const d = await api("/api/admin/config", {
+      method: "POST",
+      body: JSON.stringify({
+        scan_defaults: {
+          dpi: $("cfgDpi").value,
+          mode: $("cfgMode").value,
+          crop: $("cfgCrop").checked
+        }
+      })
+    });
+    if (d.ok) {
+      show(msg, "扫描默认值已保存 ✓ 刷新首页即可生效");
     } else {
       show(msg, d.msg || "保存失败", true);
     }
