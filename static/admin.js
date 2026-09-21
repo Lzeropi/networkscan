@@ -156,7 +156,7 @@
         (x.error ? '<tr><td>探测异常</td><td class="err">' + x.error + "</td></tr>" : "") +
         "</table></div>");
     });
-    $("devCacheNote").textContent = d.cached ? "（5 分钟内使用缓存，点"重新探测"强制刷新）" : "（刚完成实时探测）";
+    $("devCacheNote").textContent = d.cached ? "（5 分钟内使用缓存，点「重新探测」强制刷新）" : "（刚完成实时探测）";
     // 加载设备别名 UI
     loadDevAlias(d.devs);
   }

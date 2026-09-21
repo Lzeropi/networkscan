@@ -140,9 +140,11 @@ function addThumbPlaceholder(job, png) {
   const fig = document.createElement("figure");
   fig.dataset.name = png;
   fig.id = "fig_" + png.replace(".", "_");
+  fig.className = "converting";
   fig.innerHTML =
-    `<a><img src="/job/${job}/thumb/${png.replace(".png", ".jpg")}" style="opacity:0.3" alt="转换中"></a>` +
-    `<figcaption><span>${png} · 正在转换…</span></figcaption>`;
+    '<a><div class="convert-placeholder"><div class="spinner"></div>' +
+    '<span class="convert-text">正在转换…</span></div></a>' +
+    '<figcaption><span>' + png + ' · 转换中</span></figcaption>';
   wall.appendChild(fig);
   const c = document.getElementById("pgcount");
   if (c) c.textContent = wall.querySelectorAll("figure").length;
@@ -162,12 +164,12 @@ function pollThumbReady(job, png, retries) {
       // 转换完成，刷新缩略图
       const fig = document.getElementById("fig_" + png.replace(".", "_"));
       if (fig) {
-        const img = fig.querySelector("img");
-        img.src = thumbUrl + "?t=" + Date.now();
-        img.style.opacity = "1";
-        img.parentElement.href = `/job/${job}/raw/${png}`;
+        fig.classList.remove("converting");
+        const a = fig.querySelector("a");
+        a.innerHTML = '<img src="' + thumbUrl + "?t=" + Date.now() + '" alt="' + png + '">';
+        a.href = '/job/' + job + '/raw/' + png;
         fig.querySelector("figcaption").innerHTML =
-          `<span>${png}</span><a href="/job/${job}/raw/${png}" download title="下载">⬇</a>`;
+          '<span>' + png + '</span><a href="/job/' + job + '/raw/' + png + '" download title="下载">\u2B07</a>';
       }
       setStatus("已完成：" + png);
     } else {
