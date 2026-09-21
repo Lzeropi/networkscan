@@ -175,7 +175,7 @@
         '<p class="hint">' + (x.desc || "") + "</p>" +
         '<table class="dev-table">' +
         "<tr><td>扫描能力</td><td>" + x.scan_type + "</td></tr>" +
-        "<tr><td>分辨率范围</td><td>" + (x.dpi || "未知") + "</td></tr>" +
+        "<tr><td>分辨率</td><td>" + ((x.dpi_raw && x.dpi_raw.length) ? x.dpi_raw.join("|") + "dpi [" + (x.dpi_raw[0]) + "]" : (x.dpi || "未知")) + "</td></tr>" +
         "<tr><td>色彩模式</td><td>" + modes + "</td></tr>" +
         (x.error ? '<tr><td>探测异常</td><td class="err">' + x.error + "</td></tr>" : "") +
         "</table>" +
