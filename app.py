@@ -16,6 +16,7 @@ from waitress import serve
 import admin
 import jobs
 import scanner
+import time as _time
 from config import BIND, CONVERT, MAX_PDF_PAGES, PORT, SCANIMAGE, SECRET, TOKEN
 from config import get_scan_root, get_scan_defaults
 
@@ -218,38 +219,49 @@ def api_reorder(job):
     return jsonify(ok=True)
 
 
+# 设备探测缓存（5 分钟 TTL，与 admin 页共享）
+_DEV_CACHE = {"data": None, "ts": 0}
+_DEV_CACHE_SEC = 300
+
 @app.get("/api/devices")
 def api_devices():
-    """列出设备并探测每台设备支持的扫描模式和进纸源（scanimage -A）。"""
-    try:
-        r = subprocess.run([SCANIMAGE, "-L"], capture_output=True, text=True, timeout=15)
-        dev_names = re.findall(r"device `([^']+)'", r.stdout)
-    except Exception:
-        dev_names = []
-
-    devs = []
-    for dev in dev_names:
-        info = {"name": dev, "modes": ["Color", "Gray"], "sources": [], "dpis": ["150", "300", "600"]}
+    """列出设备并探测每台设备支持的扫描模式和进纸源（scanimage -A）。
+    5 分钟服务端缓存，避免每次刷新页面都重新探测。"""
+    now = _time.time()
+    cached = False
+    if _DEV_CACHE["data"] is not None and now - _DEV_CACHE["ts"] < _DEV_CACHE_SEC:
+        cached = True
+    else:
         try:
-            a = subprocess.run([SCANIMAGE, "-A", "--format", "pnm", "-d", dev],
-                               capture_output=True, text=True, timeout=15)
-            out = a.stdout + a.stderr
-            # 解析 --mode 行：如 --mode Gray|Color [Color]
-            m = re.search(r'--mode\s+([^\[]+)\[', out)
-            if m:
-                info["modes"] = [s.strip() for s in m.group(1).split("|")]
-            # 解析 --source 行：如 --source Flatbed|ADF [Flatbed]
-            s = re.search(r'--source\s+([^\[]+)\[', out)
-            if s:
-                info["sources"] = [src.strip() for src in s.group(1).split("|")]
-            # 解析 --resolution 行：如 --resolution 75|100|150|200|300|600|1200dpi [75]
-            r2 = re.search(r'--resolution\s+([^\[]+)\[', out)
-            if r2:
-                info["dpis"] = [d.strip().replace("dpi", "") for d in r2.group(1).split("|")]
+            r = subprocess.run([SCANIMAGE, "-L"], capture_output=True, text=True, timeout=15)
+            dev_names = re.findall(r"device `([^']+)'", r.stdout)
         except Exception:
-            pass  # 探测失败用默认值
-        devs.append(info)
-    # 附加设备别名（管理页设置的自定义名称）
+            dev_names = []
+
+        devs = []
+        for dev in dev_names:
+            info = {"name": dev, "modes": ["Color", "Gray"], "sources": [], "dpis": ["150", "300", "600"]}
+            try:
+                a = subprocess.run([SCANIMAGE, "-A", "--format", "pnm", "-d", dev],
+                                   capture_output=True, text=True, timeout=15)
+                out = a.stdout + a.stderr
+                m = re.search(r'--mode\s+([^\[]+)\[', out)
+                if m:
+                    info["modes"] = [s.strip() for s in m.group(1).split("|")]
+                s = re.search(r'--source\s+([^\[]+)\[', out)
+                if s:
+                    info["sources"] = [src.strip() for src in s.group(1).split("|")]
+                r2 = re.search(r'--resolution\s+([^\[]+)\[', out)
+                if r2:
+                    info["dpis"] = [d.strip().replace("dpi", "") for d in r2.group(1).split("|")]
+            except Exception:
+                pass
+            devs.append(info)
+        _DEV_CACHE["data"] = devs
+        _DEV_CACHE["ts"] = now
+
+    devs = _DEV_CACHE["data"] or []
+    # 附加设备别名（每次都读，因为别名可能随时改）
     try:
         from config import load_admin_cfg
         aliases = load_admin_cfg().get("device_alias", {})
@@ -257,7 +269,7 @@ def api_devices():
             d["alias"] = aliases.get(d["name"], "")
     except Exception:
         pass
-    # 附加扫描默认值（管理页设置的 DPI/模式/裁边）
+    # 附加扫描默认值（每次都读）
     try:
         from config import get_scan_defaults
         defaults = get_scan_defaults()
