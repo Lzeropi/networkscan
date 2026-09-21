@@ -13,7 +13,7 @@ from waitress import serve
 
 import jobs
 import scanner
-from config import BIND, CONVERT, PORT, SCANIMAGE, SECRET, TOKEN
+from config import BIND, CONVERT, MAX_PDF_PAGES, PORT, SCANIMAGE, SECRET, TOKEN
 
 app = Flask(__name__)
 app.secret_key = SECRET
@@ -109,6 +109,8 @@ def api_status(job):
 
 @app.delete("/api/jobs/<job>")
 def api_delete(job):
+    if scanner.get_state(job)["state"] == "scanning":
+        return jsonify(ok=False, msg="扫描进行中，请等待完成后再删除"), 409
     scanner.state.pop(job, None)
     jobs.delete(job)
     return jsonify(ok=True)
@@ -188,6 +190,8 @@ def dl_pdf(job):
     files = jobs.pages(job)
     if not files:
         abort(404)
+    if len(files) > MAX_PDF_PAGES:
+        abort(413)
     imgs = [Image.open(os.path.join(base, f)).convert("RGB") for f in files]
     buf = io.BytesIO()
     imgs[0].save(buf, "PDF", save_all=True, append_images=imgs[1:])

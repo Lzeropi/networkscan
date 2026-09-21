@@ -110,9 +110,13 @@ def cleanup():
         cutoff = time.time() - MAX_AGE_DAYS * 86400
         for j in list_jobs():
             try:
-                if os.path.getctime(validate(j["name"])) < cutoff:
-                    delete(j["name"])
-            except JobError:
+                m = load(j["name"])
+                created_str = m.get("created", "")
+                if created_str:
+                    created_ts = time.mktime(time.strptime(created_str, "%Y-%m-%d %H:%M:%S"))
+                    if created_ts < cutoff:
+                        delete(j["name"])
+            except (JobError, ValueError):
                 pass
     if MAX_TOTAL_BYTES > 0:
         total = dir_size(SCAN_ROOT)

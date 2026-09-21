@@ -1,4 +1,5 @@
 import os
+import re
 import subprocess
 import threading
 
@@ -12,7 +13,7 @@ scan_lock = threading.Lock()          # 扫描仪全局独占锁
 state = {}                            # job -> {"state": "scanning|done|error", "msg": str}
 
 VALID_DPI = {"75", "150", "200", "300", "400", "600", "1200", "2400"}
-VALID_MODE = {"Color", "Gray", "Lineart"}
+VALID_MODE = {"Color", "Gray"}  # M1005 只支持这两种模式（scanimage -A 确认无 Lineart）
 
 
 def _params(job):
@@ -38,6 +39,22 @@ def _rm(path):
             os.remove(path)
     except OSError:
         pass
+
+
+def _convert_pnms(job, start):
+    """把 ADF batch 产出的 .pnm 全部转成 .png 并删除原文件。"""
+    p = jobs.validate(job)
+    for f in os.listdir(p):
+        m = re.fullmatch(r"p(\d{3})\.pnm", f)
+        if m and int(m.group(1)) >= start:
+            src = os.path.join(p, f)
+            dst = os.path.join(p, f[:-4] + ".png")
+            try:
+                subprocess.run([CONVERT, src, dst], stderr=subprocess.PIPE,
+                               timeout=120, check=True)
+                os.remove(src)
+            except (subprocess.CalledProcessError, OSError):
+                _rm(src)  # 转换失败删掉 pnm 垃圾文件
 
 
 def _mk_thumb(job, fname):
@@ -85,10 +102,13 @@ def scan_adf(job):
             st.update(state="scanning", msg="ADF 连续扫描中…")
             start = len(jobs.pages(job)) + 1
             pat = os.path.join(SCAN_ROOT, job, "p%d.pnm")
-            cmd = _base_cmd(p) + ["--source", SCAN_SOURCE,
-                                  "--batch=" + pat, f"--batch-start={start}"]
+            cmd = _base_cmd(p)
+            if SCAN_SOURCE:                    # 只在有值时传 --source（M1005 无 ADF，默认空）
+                cmd += ["--source", SCAN_SOURCE]
+            cmd += ["--batch=" + pat, f"--batch-start={start}"]
             try:
                 r = subprocess.run(cmd, capture_output=True, text=True, timeout=3600)
+                _convert_pnms(job, start)            # PNM → PNG（hpljm1005 后端不支持直接输出 PNG）
                 got = jobs.pages(job)          # 已转 png 的页
                 new = [f for f in got if int(f[1:4]) >= start]
                 for f in new:

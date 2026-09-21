@@ -6,15 +6,16 @@ After=network.target
 Type=simple
 User=scanops
 Group=scanops
-WorkingDirectory=/opt/scanweb
-Environment=SCAN_ROOT=/opt/smb_share/scan
+WorkingDirectory=/opt/network_scan_service
+Environment=SCAN_ROOT=/opt/smb_share/scans
 Environment=SCANWEB_PORT=9230
 Environment=SCAN_DEVICE=hpljm1005:
 # Environment=SCANWEB_TOKEN=在这里设置访问口令
-# Environment=SCAN_SOURCE=ADF
+# Environment=SCAN_SOURCE=ADF              # M1005 无 ADF，需要时再取消注释
+# Environment=SCANWEB_MAX_PDF_PAGES=20      # PDF 合成页数上限（防 OOM）
 # Environment=SCAN_MAX_TOTAL_BYTES=2147483648
 # Environment=SCAN_MAX_AGE_DAYS=30
-ExecStart=/opt/scanweb/.venv/bin/python /opt/scanweb/app.py
+ExecStart=/opt/network_scan_service/.venv/bin/python /opt/network_scan_service/app.py
 Restart=always
 RestartSec=3
 UMask=0002

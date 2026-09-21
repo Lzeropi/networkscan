@@ -1,18 +1,20 @@
 import os
+import secrets
 import shutil
 
-SCAN_ROOT = os.environ.get("SCAN_ROOT", "/opt/smb_share/scan")
+SCAN_ROOT = os.environ.get("SCAN_ROOT", "/opt/smb_share/scans")
 # 设备名只写后端前缀，不写 :libusb:xxx:xxx（重启后总线号会变导致失效）
 DEVICE = os.environ.get("SCAN_DEVICE", "hpljm1005:")
-SCAN_SOURCE = os.environ.get("SCAN_SOURCE", "ADF")    # ADF 源名称，用 scanimage -A 查看
+SCAN_SOURCE = os.environ.get("SCAN_SOURCE", "")   # ADF 源名称（M1005 无 ADF，留空不传 --source）
 BIND = os.environ.get("SCANWEB_BIND", "0.0.0.0")
 PORT = int(os.environ.get("SCANWEB_PORT", "9230"))
 TOKEN = os.environ.get("SCANWEB_TOKEN", "")           # 空 = 不启用登录
-SECRET = os.environ.get("SCANWEB_SECRET", "scanweb-secret-change-me")
+SECRET = os.environ.get("SCANWEB_SECRET") or secrets.token_hex(32)
 
 # 存储保护（0 = 关闭）：目录总配额（字节）、任务保留天数，超限自动删最旧任务
 MAX_TOTAL_BYTES = int(os.environ.get("SCAN_MAX_TOTAL_BYTES", "0"))
 MAX_AGE_DAYS = int(os.environ.get("SCAN_MAX_AGE_DAYS", "0"))
+MAX_PDF_PAGES = int(os.environ.get("SCANWEB_MAX_PDF_PAGES", "20"))  # PDF 合成页数上限，超限拒绝（防 OOM）
 
 THUMB_SIZE = (300, 300)
 

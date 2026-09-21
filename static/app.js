@@ -81,8 +81,13 @@ function addThumb(job, png) {
 
 async function delJob(job) {
   if (!confirm(`确定删除任务 ${job} ？此操作不可恢复。`)) return;
-  await fetch(`/api/jobs/${job}`, { method: "DELETE" });
-  location.href = "/";
+  const r = await fetch(`/api/jobs/${job}`, { method: "DELETE" });
+  const d = await r.json();
+  if (d.ok) {
+    location.href = "/";
+  } else {
+    alert(d.msg || "删除失败");
+  }
 }
 
 /* 任务页初始化：灯箱 */
