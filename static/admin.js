@@ -62,6 +62,7 @@
     panel.style.display = "";
     loadOverview();
     loadDevices(false);
+    loadConfigs();
     loadJobs();
     startAutoRefresh();
   }
@@ -82,12 +83,12 @@
     $(valId).textContent = text;
   }
 
-  async function loadOverview() {
+  async function loadOverview(onlyResources) {
     const d = await api("/api/admin/overview");
     if (d._status === 401) { location.reload(); return; }
     $("verBadge").textContent = "v" + (d.version || "");
     $("uptime").textContent = d.uptime || "--";
-    // 资源
+    // 资源（每次都刷新）
     setBar("barCpu", "valCpu", d.cpu.percent, d.cpu.percent + "%");
     const temp = d.cpu.temp;
     setBar("barTemp", "valTemp", temp == null ? 0 : Math.min(100, temp / 90 * 100),
@@ -99,7 +100,8 @@
     setBar("barScan", "valScan", d.disk_scan.percent,
       d.disk_scan.percent + "%（剩 " + d.disk_scan.free_gb + " GB）");
     $("scanDirSize").textContent = "扫描目录当前占用：" + fmtSize(d.scan_dir_size);
-    // 依赖
+    // 依赖表和配置回显只在首次加载时执行，自动刷新时跳过（防闪烁）
+    if (onlyResources) return;
     const tb = $("envTable").querySelector("tbody");
     tb.innerHTML = "";
     (d.env.deps || []).forEach(x => {
@@ -115,7 +117,7 @@
     tb.insertAdjacentHTML("beforeend",
       "<tr><td>存储目录</td><td>" + (d.env.scan_root_writable ? "✓" : "✗") + "</td><td>" + d.env.scan_root +
       (d.env.scan_root_writable ? "（可写）" : (d.env.scan_root_exists ? "（无写入权限！）" : "（不存在！）")) + "</td></tr>");
-    // 配置回显
+    // 配置回显（首次加载）
     if (!$("scanRootInput").value) $("scanRootInput").value = d.scan_root || "";
     if (document.activeElement !== $("cfgJobs")) $("cfgJobs").value = d.cleanup.max_jobs;
     if (document.activeElement !== $("cfgDays")) $("cfgDays").value = d.cleanup.max_age_days;
@@ -125,11 +127,13 @@
   let autoTimer = null;
   function startAutoRefresh() {
     if (autoTimer) clearInterval(autoTimer);
-    autoTimer = setInterval(loadOverview, 30000);
+    autoTimer = setInterval(() => loadOverview(true), 30000);
   }
 
-  /* ---------------- 设备 ---------------- */
+  /* ---------------- 设备（含别名+默认值） ---------------- */
   const MODE_CN = { Color: "彩色", Gray: "灰度", Lineart: "黑白" };
+  let _devAliases = {};
+  let _devDefaults = {};
   async function loadDevices(force) {
     const box = $("devBox");
     box.innerHTML = '<p class="hint">探测中…（scanimage -L/-A，ARM 设备约需数秒）</p>';
@@ -143,26 +147,83 @@
       box.innerHTML = '<p class="status err">未发现扫描设备：请检查扫描仪电源与 USB 连接</p>';
       return;
     }
+    // 获取当前配置（别名+默认值）
+    const cfg = await api("/api/admin/config");
+    _devAliases = cfg.device_alias || {};
+    _devDefaults = cfg.scan_defaults || {};
+
     box.innerHTML = "";
-    d.devs.forEach(x => {
+    d.devs.forEach((x, i) => {
       const modes = (x.modes || []).map(m => MODE_CN[m] || m).join(" / ") || "未知";
+      const alias = (_devAliases[x.name] || "").trim();
+      const devTitle = alias ? alias + ' <span class="hint">(' + x.name + ')</span>' : x.name;
+      const eid = btoa(x.name).replace(/=/g, "");
+      const dv = _devDefaults[x.name] || {};
+      const curDpi = dv.dpi || "150";
+      const curMode = dv.mode || "Gray";
+      const curCrop = dv.crop ? "checked" : "";
+      // DPI 选项从设备探测结果生成
+      const dpis = x.dpi_raw || ["75","100","150","200","300","600","1200"];
+      const dpiOpts = dpis.map(d => '<option value="'+d+'"'+(d===curDpi?' selected':'')+'>'+d+'</option>').join("");
+      const modeOpts = (x.modes || ["Gray","Color"]).map(m =>
+        '<option value="'+m+'"'+(m===curMode?' selected':'')+'>'+(MODE_CN[m]||m)+'</option>').join("");
+
       box.insertAdjacentHTML("beforeend",
-        '<div class="dev-card"><b>' + x.name + "</b>" +
+        '<div class="dev-card">' +
+        (d.devs.length > 1 ? '<span class="dev-num">' + (i + 1) + '</span> ' : '') +
+        '<b>' + devTitle + "</b>" +
         '<p class="hint">' + (x.desc || "") + "</p>" +
         '<table class="dev-table">' +
         "<tr><td>扫描能力</td><td>" + x.scan_type + "</td></tr>" +
-        "<tr><td>分辨率范围</td><td>" + (x.dpi || "未知") + "</td></tr>" +
+        "<tr><td>分辨率</td><td>" + ((x.dpi_raw && x.dpi_raw.length) ? x.dpi_raw.join("|") + "dpi [" + (x.dpi_raw[0]) + "]" : (x.dpi || "未知")) + "</td></tr>" +
         "<tr><td>色彩模式</td><td>" + modes + "</td></tr>" +
         (x.error ? '<tr><td>探测异常</td><td class="err">' + x.error + "</td></tr>" : "") +
-        "</table></div>");
+        "</table>" +
+        '<div style="margin-top:10px;border-top:1px solid var(--border);padding-top:10px">' +
+        '<div class="cfg-row" style="margin-bottom:6px">' +
+        '<label class="hint" style="white-space:nowrap">别名</label>' +
+        '<input type="text" id="alias_'+eid+'" placeholder="'+x.name+'" value="'+alias+'" style="flex:1;min-width:80px">' +
+        '</div>' +
+        '<div class="cfg-grid" style="grid-template-columns:auto auto auto 1fr;gap:6px;align-items:center">' +
+        '<span class="hint" style="display:flex;align-items:center;gap:4px">默认DPI <select id="dpi_'+eid+'" style="padding:4px;border-radius:6px;border:1px solid var(--border)">'+dpiOpts+'</select></span>' +
+        '<span class="hint" style="display:flex;align-items:center;gap:4px">默认色彩 <select id="mode_'+eid+'" style="padding:4px;border-radius:6px;border:1px solid var(--border)">'+modeOpts+'</select></span>' +
+        '<span class="hint" style="display:flex;align-items:center;gap:4px"><input type="checkbox" id="crop_'+eid+'" '+curCrop+'> 裁边</span>' +
+        '<button class="primary" data-dev-save="'+x.name+'" style="white-space:nowrap">保存</button>' +
+        '</div></div></div>');
     });
-    $("devCacheNote").textContent = d.cached ? "（5 分钟内使用缓存，点“重新探测”强制刷新）" : "（刚完成实时探测）";
+    $("devCacheNote").textContent = d.cached ? "（5 分钟内使用缓存，点「重新探测」强制刷新）" : "（刚完成实时探测）";
+
+    // 绑定保存按钮
+    box.querySelectorAll("[data-dev-save]").forEach(btn => {
+      btn.addEventListener("click", async () => {
+        const devName = btn.dataset.devSave;
+        const eid = btoa(devName).replace(/=/g, "");
+        const alias = $("alias_" + eid).value.trim();
+        const dpi = $("dpi_" + eid).value;
+        const mode = $("mode_" + eid).value;
+        const crop = $("crop_" + eid).checked;
+        // 保存别名
+        if (alias) { _devAliases[devName] = alias; } else { delete _devAliases[devName]; }
+        // 保存默认值
+        _devDefaults[devName] = { dpi: dpi, mode: mode, crop: crop };
+        const d = await api("/api/admin/config", {
+          method: "POST",
+          body: JSON.stringify({ device_alias: _devAliases, scan_defaults: _devDefaults })
+        });
+        if (d.ok) {
+          btn.textContent = "已保存 ✓";
+          setTimeout(() => btn.textContent = "保存", 1500);
+        } else {
+          alert(d.msg || "保存失败");
+        }
+      });
+    });
   }
 
   $("btnProbe").addEventListener("click", () => loadDevices(true));
-  $("btnRefreshAll").addEventListener("click", () => { loadOverview(); loadDevices(false); loadJobs(); });
+  $("btnRefreshAll").addEventListener("click", () => { loadOverview(); loadDevices(false); loadConfigs(); loadJobs(); });
   $("btnTestScan").addEventListener("click", async () => {
-    if (!confirm("将执行一次平板单页测试扫描（约 10–30 秒，灰度 150dpi），生成一个“测试扫描”任务。继续？")) return;
+    if (!confirm("将执行一次平板单页测试扫描（约 10–30 秒，灰度 150dpi），生成一个「测试扫描」任务。继续？")) return;
     const btn = $("btnTestScan");
     btn.disabled = true; btn.textContent = "扫描中…";
     const d = await api("/api/admin/testscan", { method: "POST" });
@@ -176,6 +237,14 @@
   });
 
   /* ---------------- 配置 ---------------- */
+  async function loadConfigs() {
+    const cfg = await api("/api/admin/config");
+    if (cfg._status === 401) { return; }
+    if ($("scanRootInput")) $("scanRootInput").value = cfg.scan_root || "";
+    if ($("cfgJobs")) $("cfgJobs").value = (cfg.cleanup || {}).max_jobs || 0;
+    if ($("cfgDays")) $("cfgDays").value = (cfg.cleanup || {}).max_age_days || 0;
+    if ($("cfgMB")) $("cfgMB").value = (cfg.cleanup || {}).max_total_mb || 0;
+  }
   $("btnSaveRoot").addEventListener("click", async () => {
     const msg = $("rootMsg");
     const path = $("scanRootInput").value.trim();

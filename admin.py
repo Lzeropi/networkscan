@@ -148,7 +148,19 @@ def disk_info(path):
 
 
 def cpu_temp():
-    """取所有 thermal_zone 中的最高温度（°C）；无传感器返回 None。"""
+    """CPU 温度（°C）；无传感器返回 None。
+    优先读海思机顶盒的 /proc/msp/pm_cpu（Tsensor 行），通用 Linux 回退 /sys/class/thermal。"""
+    # 海思方案：/proc/msp/pm_cpu 里有 "Tsensor: temperature = 59 degree"
+    try:
+        with open("/proc/msp/pm_cpu") as f:
+            m = re.search(r"Tsensor:\s*temperature\s*=\s*(\d+)\s*degree", f.read())
+        if m:
+            t = int(m.group(1))
+            if 0 < t < 120:
+                return float(t)
+    except (OSError, ValueError):
+        pass
+    # 通用回退：/sys/class/thermal 各 thermal_zone 取最高
     best = None
     base = "/sys/class/thermal"
     try:
@@ -249,7 +261,7 @@ def probe_devices(force=False):
             for m in re.finditer(r"device `([^']+)' is a (.+)", r.stdout + r.stderr):
                 dev, desc = m.group(1), m.group(2).strip()
                 info = {"name": dev, "desc": desc, "modes": [], "sources": [],
-                        "dpi": "", "scan_type": "未知", "error": ""}
+                        "dpi": "", "dpi_raw": [], "scan_type": "未知", "error": ""}
                 try:
                     a = subprocess.run([SCANIMAGE, "-A", "-d", dev],
                                         capture_output=True, text=True, timeout=25)
@@ -262,9 +274,16 @@ def probe_devices(force=False):
                         info["sources"] = [s.strip() for s in ms.group(1).split("|")]
                     has_adf = any("adf" in s.lower() for s in info["sources"])
                     info["scan_type"] = "平板 + ADF 连续" if has_adf else "仅平板单张"
-                    md = re.search(r"--resolution\s+(\d+)\.\.(\d+)", ao)
-                    if md:
-                        info["dpi"] = "%s–%s dpi" % (md.group(1), md.group(2))
+                    # 完整 DPI 列表（如 --resolution 75|100|150|200|300|600|1200dpi [75]）
+                    mr = re.search(r"--resolution\s+([^\[]+)\[", ao)
+                    if mr:
+                        info["dpi_raw"] = [d.strip().replace("dpi", "")
+                                           for d in mr.group(1).split("|")]
+                        info["dpi"] = info["dpi_raw"][0] + "–" + info["dpi_raw"][-1] + " dpi" if info["dpi_raw"] else ""
+                    else:
+                        md = re.search(r"--resolution\s+(\d+)\.\.(\d+)", ao)
+                        if md:
+                            info["dpi"] = "%s–%s dpi" % (md.group(1), md.group(2))
                 except Exception as e:
                     info["error"] = str(e)[:120]
                 devs.append(info)
@@ -310,6 +329,8 @@ def api_get_config():
     return jsonify(scan_root=get_scan_root(),
                    custom_root=cfg["scan_root"],
                    cleanup=cfg["cleanup"],
+                   device_alias=cfg.get("device_alias", {}),
+                   scan_defaults=cfg.get("scan_defaults", {}),
                    admin_cfg_path=os.path.basename(__import__("config").ADMIN_CFG_PATH))
 
 
@@ -346,10 +367,36 @@ def api_save_config():
                     cfg["cleanup"][k] = max(0, int(str(d["cleanup"][k]).strip() or 0))
                 except ValueError:
                     cfg["cleanup"][k] = 0
+    # 3) 设备别名
+    if "device_alias" in d:
+        alias = d["device_alias"]
+        if alias is None:
+            cfg["device_alias"] = {}
+        elif isinstance(alias, dict):
+            cfg["device_alias"] = {k: str(v)[:50] for k, v in alias.items() if v}
+    # 4) 扫描默认值（按设备存储：{ "设备名": {"dpi":"150","mode":"Gray","crop":false} }）
+    if "scan_defaults" in d:
+        sd = d["scan_defaults"]
+        if sd is None:
+            cfg["scan_defaults"] = {}
+        elif isinstance(sd, dict):
+            cleaned = {}
+            for dev_name, dv in sd.items():
+                if not isinstance(dv, dict):
+                    continue
+                cleaned[dev_name] = {
+                    "dpi": str(dv.get("dpi", "150")),
+                    "mode": str(dv.get("mode", "Gray")),
+                    "crop": bool(dv.get("crop", False))
+                }
+            cfg["scan_defaults"] = cleaned
     save_admin_cfg(cfg)
     deleted = jobs.cleanup()
     return jsonify(ok=True, scan_root=get_scan_root(),
-                   cleanup=cfg["cleanup"], deleted=deleted)
+                   cleanup=cfg["cleanup"],
+                   device_alias=cfg.get("device_alias", {}),
+                   scan_defaults=cfg.get("scan_defaults", {}),
+                   deleted=deleted)
 
 
 # ---------------- 任务管理 ----------------

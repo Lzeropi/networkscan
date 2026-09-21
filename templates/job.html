@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block title %}{{ job }} - 扫描仪{% endblock %}
+{% block title %}{{ job }} - 网络扫描仪{% endblock %}
 {% block content %}
 <p><a href="/">← 返回首页</a></p>
 <section class="card">
@@ -25,8 +25,9 @@
     <h2>扫描图像</h2>
     {% if pairs|length > 1 %}
     <div class="reorder-controls">
-      <button class="btn" id="btnReorder" onclick="toggleReorderMode('{{ job }}')">调整顺序</button>
-      <button class="btn primary" id="btnSaveOrder" style="display:none" onclick="saveReorder('{{ job }}')">保存顺序</button>
+      <button class="btn" id="btnReorder" onclick="toggleReorderMode('{{ job }}')">调整图片</button>
+      <button class="btn primary" id="btnSaveOrder" style="display:none" onclick="saveReorder('{{ job }}')">保存排序</button>
+      <button class="btn danger-fill" id="btnDeletePages" style="display:none" onclick="toggleDeleteMode('{{ job }}')">删除图片</button>
       <button class="btn" id="btnCancelOrder" style="display:none" onclick="cancelReorder()">取消</button>
     </div>
     {% endif %}

@@ -8,7 +8,7 @@ User=scanops
 Group=scanops
 WorkingDirectory=/opt/network_scan_service
 Environment=SCAN_ROOT=/opt/smb_share/scans
-Environment=SCANWEB_PORT=9230
+Environment=SCANWEB_PORT=9203
 Environment=SCAN_DEVICE=hpljm1005:
 # Environment=SCANWEB_TOKEN=在这里设置访问口令
 # Environment=SCAN_SOURCE=ADF              # M1005 无 ADF，需要时再取消注释

@@ -3,10 +3,10 @@ AIGC:
   ContentProducer: '001191110102MAD55U9H0F10002'
   ContentPropagator: '001191110102MAD55U9H0F10002'
   Label: '1'
-  ProduceID: '8f341227-a2d4-4f43-855c-ed7457a097e1'
-  PropagateID: '8f341227-a2d4-4f43-855c-ed7457a097e1'
-  ReservedCode1: '119bec7f-786a-4469-8a64-4061386c501a'
-  ReservedCode2: '119bec7f-786a-4469-8a64-4061386c501a'
+  ProduceID: '599680b1-94fa-4826-98ed-c8ac16ee7036'
+  PropagateID: '599680b1-94fa-4826-98ed-c8ac16ee7036'
+  ReservedCode1: 'a22a396a-27b2-46f2-b88e-1f489943a23e'
+  ReservedCode2: 'a22a396a-27b2-46f2-b88e-1f489943a23e'
 ---
 
 # ScanWeb — 局域网网页扫描系统
@@ -15,15 +15,19 @@ AIGC:
 
 | 项目信息 | 说明 |
 |---|---|
-| 当前版本 | v1.12 |
+| 当前版本 | v1.13 |
 | 适配硬件 | hi3798mv100 机顶盒（ARM32/armhf）或其他 Linux 小主机 |
 | 适配系统 | Ubuntu 20.04 (focal) / Python 3.8+ |
 | 主要设备 | HP LaserJet M1005（其他 SANE 兼容扫描仪亦可） |
 | 技术栈 | Flask + Waitress ｜ SANE scanimage ｜ ImageMagick convert ｜ Pillow |
 | 前端形态 | 单页原生 HTML/CSS/JS，零外部依赖、零数据库、无 CDN 引用 |
-| 默认端口 | 9230 |
+| 默认端口 | 9203 |
 
+> v1.13 更新：① 内置示例任务（输出目录为空时启动自动部署，带 🔒 锁定防清理）；② 默认端口改为 9203；③ CPU 温度优先读海思 /proc/msp/pm_cpu；④ 修复扫描报错——设备短名自动解析为完整名（hpljm1005: → hpljm1005:libusb:xxx:xxx，缓存 60 秒）+ 显式 --format=pnm 消除警告。⑤ 新增交互式系统架构图（/architecture），管理员手册第 12 章。
+>
 > v1.12 测试版修复记录：① 中文任务名 ZIP 下载报错（Content-Disposition 改为 RFC 5987 编码）；② 缩略图/原图缺失时返回 404 而非 500；③ 非法任务名/任务不存在统一返回 404。共 79 项端到端测试全部通过（排序 19 + 管理页 28 + 开关模式 10 + 功能 22）。
+
+> **版本历史**：完整变更记录见 [CHANGELOG.md](CHANGELOG.md)，源码以 MIT 协议开源（[LICENSE](LICENSE)）。
 
 ## 一、项目介绍
 
@@ -31,7 +35,7 @@ AIGC:
 
 办公室或家庭中，扫描仪通常只能插在一台电脑上使用，其他设备要用就得拷来拷去。ScanWeb 把扫描仪接到一台低功耗 Linux 小主机（如闲置机顶盒）上，以 Web 服务形式共享给整个局域网：
 
-- **多设备共享**：手机/平板/电脑浏览器直接访问 `http://<主机IP>:9230`，即可发起扫描并当场下载
+- **多设备共享**：手机/平板/电脑浏览器直接访问 `http://<主机IP>:9203`，即可发起扫描并当场下载
 - **零客户端**：扫描、预览、排序、打包全部在浏览器完成，移动端无需装任何 App
 - **低成本**：一台闲置盒子 + 一台扫描仪即可搭建，整机功耗个位数瓦
 - **数据不外传**：所有图片保存在本地磁盘，可对接 Samba 共享给局域网
@@ -39,13 +43,15 @@ AIGC:
 ### 工作原理
 
 ```
-浏览器 ──HTTP──▶ Flask(Waitress:9230) ──调用──▶ scanimage(SANE) ──USB──▶ 扫描仪
+浏览器 ──HTTP──▶ Flask(Waitress:9203) ──调用──▶ scanimage(SANE) ──USB──▶ 扫描仪
                      │
                      ├── PNM 原始输出 → ImageMagick convert → PNG（+Pillow 生成缩略图）
                      └── 任务目录：<SCAN_ROOT>/<任务名>/p001.png、p002.png… + meta.json
 ```
 
 hpljm1005 后端不支持 `--format=png`，扫描输出为 PNM 格式，需 convert 转 PNG 后进入任务目录（`p%03d.png` 连续编号）。
+
+> **交互式系统架构图**：上述 ASCII 图的完整交互版（含管理支路、守护支路、配置与存储链路）支持节点搜索、悬停高亮、点击查看详情、缩放平移、深浅主题切换与 SVG/PNG 导出。服务启动后访问 `http://<盒子IP>:9203/architecture`，或在管理员手册第 12 章打开。
 
 ## 二、功能介绍
 
@@ -119,11 +125,11 @@ df -h /
 
 ```bash
 # 本机执行（传压缩包到盒子）
-scp scanweb-v1.12.tar.gz root@192.168.1.203:/opt/network_scan_service/
+scp scanweb-v1.13.tar.gz root@192.168.1.203:/opt/network_scan_service/
 # 盒子上执行
 cd /opt/network_scan_service
-tar xzf scanweb-v1.12.tar.gz --strip-components=1
-rm -f scanweb-v1.12.tar.gz .python-version
+tar xzf scanweb-v1.13.tar.gz --strip-components=1
+rm -f scanweb-v1.13.tar.gz .python-version
 ```
 
 ### 第三步：安装编译依赖并安装 Python 包
@@ -250,9 +256,9 @@ systemctl daemon-reload && systemctl enable --now networkscan
 
 ```bash
 systemctl status networkscan --no-pager
-curl -s http://127.0.0.1:9230/ | head -5
-# 局域网任意设备浏览器打开 http://192.168.1.203:9230 即可使用
-# 管理页：http://192.168.1.203:9230/admin（首次访问设置 PIN）
+curl -s http://127.0.0.1:9203/ | head -5
+# 局域网任意设备浏览器打开 http://192.168.1.203:9203 即可使用
+# 管理页：http://192.168.1.203:9203/admin（首次访问设置 PIN）
 ```
 
 ## 稳定性设计
@@ -268,7 +274,7 @@ curl -s http://127.0.0.1:9230/ | head -5
 systemctl status networkscan      # 状态
 systemctl restart networkscan     # 重启
 journalctl -u networkscan -f      # 看日志
-ss -tlnp | grep 9230              # 确认端口监听
+ss -tlnp | grep 9203              # 确认端口监听
 ```
 
 ## 五、配置说明
@@ -278,7 +284,7 @@ ss -tlnp | grep 9230              # 确认端口监听
 | 变量 | 默认 | 说明 |
 |---|---|---|
 | `SCAN_ROOT` | /opt/smb_share/scans | 扫描输出根目录（仅作初始默认，v1.10 起可在管理页运行时修改并持久化） |
-| `SCANWEB_PORT` | 9230 | 监听端口 |
+| `SCANWEB_PORT` | 9203 | 监听端口 |
 | `SCANWEB_TOKEN` | 空（不启用） | 全站访问口令，设置后需登录 |
 | `SCAN_DEVICE` | hpljm1005: | 设备后端名，只写前缀，不带 `:libusb:xxx:xxx` |
 | `SCAN_SOURCE` | 空 | ADF 源名称。M1005 无 ADF 留空；换设备后用 `scanimage -A` 查看 |
@@ -296,7 +302,7 @@ ss -tlnp | grep 9230              # 确认端口监听
 ├── jobs.py           # 任务/页面文件管理、锁定、自动清理
 ├── config.py         # 环境变量与管理配置文件（admin_config.json）读取
 ├── templates/        # Jinja2 页面（首页/任务页/手册/管理页/登录）
-├── static/           # app.js / admin.js / style.css（零外部依赖）
+├── static/           # app.js / admin.js / style.css / architecture.html（零外部依赖）
 └── deploy/networkscan.service
 ```
 
@@ -309,8 +315,17 @@ ss -tlnp | grep 9230              # 确认端口监听
 | 模式 | Gray、Color（无 Lineart） |
 | 扫描区域 | 220mm × 330mm |
 | ADF | 不支持（`scanimage -A` 无 `--source` 选项） |
-| 输出格式 | 默认 PNM（convert 必需） |
+| 输出格式 | PNM（convert 转 PNG，需 ImageMagick） |
 | USB 权限 | `/dev/bus/usb/001/003` 属 `root:lp`，服务用户需加入 lp 组 |
+| 扫描耗时 | scanimage 约 7 秒（灯管预热+物理扫描），convert 约 9 秒（后台转换不阻塞下一次扫描） |
+
+> **手动查看设备能力**：
+> ```bash
+> # 列出可用设备
+> sudo -u scanops scanimage -L
+> # 查看设备支持的所有参数（分辨率、色彩模式、扫描区域等）
+> sudo -u scanops scanimage -d "hpljm1005:libusb:001:003" -A
+> ```
 
 ## 七、使用指南
 
@@ -330,5 +345,130 @@ ss -tlnp | grep 9230              # 确认端口监听
 - **删除任务提示"扫描进行中"**：等待扫描完成后再删除
 - **管理页忘记 PIN**：删除服务目录下 `admin_config.json` 后重启服务，重新设置
 - **自动清理误删担心**：给重要任务上 🔒 锁定，锁定任务永不参与清理
+
+## 九、更新与版本管理
+
+### 一键更新
+
+部署完成后，`webscan` 命令已安装到 `/usr/local/bin/webscan`，支持以下操作：
+
+```bash
+webscan status              # 查看服务状态与版本
+webscan update              # 自动检测目录下的 scanweb-v*.tar.gz 并更新
+webscan update /path/pkg.tar.gz   # 指定更新包路径
+webscan restart             # 重启服务
+webscan stop                # 停止服务
+webscan start               # 启动服务
+webscan logs 100            # 查看最近 100 行日志
+webscan version             # 查看当前版本
+```
+
+**更新流程（典型场景）**：
+
+```bash
+# 1. 本机上传新版本包
+scp scanweb-v1.13.tar.gz root@192.168.1.203:/opt/network_scan_service/
+
+# 2. SSH 登录盒子
+ssh root@192.168.1.203
+
+# 3. 一键更新
+webscan update
+```
+
+更新过程自动完成：停止服务 → 保留 `.venv` 和 `admin_config.json` → 替换全部源码 → 修复权限 → 更新 service 文件 → 启动服务 → 验证状态。
+
+> 更新不会丢失已设置的 PIN、存储路径配置和清理策略。Python 依赖（.venv）也不受影响，除非新版本 README 中明确要求重装依赖。
+
+### 版本号规范
+
+- **格式**：`v主版本.次版本`（如 v1.13）
+- **次版本递增**（v1.13 → v1.14）：bug 修复、小功能改进、配置调整
+- **主版本递增**（v1.x → v2.0）：架构性改动、不兼容升级（需重新安装依赖或迁移数据）
+- **版本号写入位置**：`config.py` 的 `VERSION` 变量、README 版本表、git tag
+- **发布包命名**：`scanweb-v1.13.tar.gz`（`webscan update` 按此模式自动检测）
+
+### 更新包内容约定
+
+| 更新时保留 | 更新时覆盖 |
+|---|---|
+| `.venv/`（Python 依赖） | 全部 `.py` 源码 |
+| `admin_config.json`（PIN 与配置） | `templates/`、`static/` |
+| `/opt/smb_share/scans/`（扫描数据） | `deploy/`（含 service 文件与 webscan 脚本） |
+| | `README.md`、`pyproject.toml` |
+
+如新版本需要更新 Python 依赖，README 第三步会标注，手动执行即可：
+```bash
+cd /opt/network_scan_service
+uv pip install --index-url https://pypi.tuna.tsinghua.edu.cn/simple <新依赖>
+```
+
+## 十、完整卸载
+
+> **快捷方式**：`webscan uninstall` 会自动完成第 1-3 步（停止服务、移除代码和脚本），但**不会**卸载系统依赖包和用户（避免影响其他业务）。如需彻底清理，按下方完整步骤操作。
+
+### 第 1 步：停止并移除服务
+
+```bash
+systemctl stop networkscan
+systemctl disable networkscan
+rm -f /etc/systemd/system/networkscan.service
+systemctl daemon-reload
+```
+
+### 第 2 步：移除部署目录与管理脚本
+
+```bash
+rm -rf /opt/network_scan_service          # 应用代码 + .venv + 配置
+rm -f /usr/local/bin/webscan              # webscan 管理命令
+```
+
+> **扫描数据**（`/opt/smb_share/scans/`）默认保留——里面有历史扫描件，确认不需要后再删：
+> ```bash
+> rm -rf /opt/smb_share/scans
+> ```
+> `/opt/smb_share/` 本身被 Samba 共享使用，**不要删**。
+
+### 第 3 步：移除服务用户
+
+> 仅当确认没有其他服务使用 `scanops` 用户时才执行。可先检查：
+> ```bash
+> grep -r scanops /etc/systemd/system/*.service    # 应只有 networkscan（已删）
+> ```
+
+```bash
+userdel -r scanops                        # 删除用户及其家目录
+```
+
+### 第 4 步：移除系统依赖包（按需，注意安全）
+
+> 以下包是部署 ScanWeb 时安装的。**每项标注了安全等级**，请按实际情况决定是否卸载。
+> 其他软件可能依赖这些包，卸载前请用 `apt rdepends --installed <包名>` 检查。
+
+| 包名 | 用途 | 安全等级 | 卸载命令 |
+|---|---|---|---|
+| `libjpeg-turbo8-dev` | Pillow 编译用 JPEG 头文件 | **安全卸载**（纯开发库，运行时不需要） | `apt remove -y libjpeg-turbo8-dev && apt autoremove -y` |
+| `python3.8-venv` | Python 虚拟环境支持 | **谨慎**（其他 Python 项目可能用到） | `apt remove -y python3.8-venv` |
+| `sane-utils` | scanimage 命令 | **谨慎**（CUPS 扫描功能依赖 SANE） | `apt remove -y sane-utils` |
+| `libsane` + `libsane-common` | SANE 扫描库 | **不建议卸载**（CUPS 等系统组件可能依赖） | — |
+| `uv` | Python 包管理器 | **不建议卸载**（可能被其他项目使用） | — |
+
+**建议操作**：只卸载 `libjpeg-turbo8-dev`（安全），其余保留。如果确认盒子上没有其他扫描需求，可以额外卸载 `sane-utils`。
+
+### 第 5 步：清理缓存
+
+```bash
+rm -rf /root/.cache/uv                    # uv 编译缓存（部署时已清，保险起见再查）
+```
+
+### 卸载验证
+
+```bash
+systemctl status networkscan              # 应显示 "could not be found"
+ls /opt/network_scan_service              # 应不存在
+id scanops                                # 应显示 "no such user"
+which webscan                             # 应无输出
+ss -tlnp | grep 9203                     # 应无监听
+```
 
 > AI生成

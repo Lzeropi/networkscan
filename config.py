@@ -8,7 +8,7 @@ SCAN_ROOT = os.environ.get("SCAN_ROOT", "/opt/smb_share/scans")
 DEVICE = os.environ.get("SCAN_DEVICE", "hpljm1005:")
 SCAN_SOURCE = os.environ.get("SCAN_SOURCE", "")   # ADF 源名称（M1005 无 ADF，留空不传 --source）
 BIND = os.environ.get("SCANWEB_BIND", "0.0.0.0")
-PORT = int(os.environ.get("SCANWEB_PORT", "9230"))
+PORT = int(os.environ.get("SCANWEB_PORT", "9203"))
 TOKEN = os.environ.get("SCANWEB_TOKEN", "")           # 空 = 不启用登录
 SECRET = os.environ.get("SCANWEB_SECRET") or secrets.token_hex(32)
 
@@ -24,13 +24,15 @@ SCANIMAGE = os.environ.get("SCANIMAGE", shutil.which("scanimage") or "/usr/bin/s
 CONVERT = os.environ.get("CONVERT_BIN", shutil.which("convert") or "/usr/bin/convert")
 
 # ---------------- v1.10 管理页配置（admin_config.json，优先级高于环境变量） ----------------
-VERSION = "1.12"
+VERSION = "1.13"
 ADMIN_CFG_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "admin_config.json")
 
 # 默认值：scan_root 为空表示沿用环境变量/内置默认；三项清理策略 0 = 不启用
 ADMIN_CFG_DEFAULT = {
     "pin_hash": "",                 # sha256(PIN)，空 = 尚未设置（首次访问 /admin 引导设置）
     "scan_root": "",                # 自定义扫描存储路径
+    "device_alias": {},             # 设备别名映射 { "hpljm1005:libusb:001:003": "HP M1005" }
+    "scan_defaults": {},            # 按设备存储扫描默认值 { "设备名": {"dpi":"150","mode":"Gray","crop":false} }
     "cleanup": {"max_jobs": 0, "max_age_days": 0, "max_total_mb": 0}
 }
 
@@ -47,6 +49,12 @@ def load_admin_cfg():
         if isinstance(raw, dict):
             cl.update({k: int(raw.get(k, 0)) for k in cl})
         out["cleanup"] = cl
+        # scan_defaults 是按设备存储的字典，直接透传
+        raw_sd = cfg.get("scan_defaults")
+        if isinstance(raw_sd, dict):
+            out["scan_defaults"] = raw_sd
+        else:
+            out["scan_defaults"] = {}
         return out
     except (OSError, ValueError, TypeError):
         return {k: (dict(v) if isinstance(v, dict) else v) for k, v in ADMIN_CFG_DEFAULT.items()}
@@ -68,3 +76,11 @@ def get_scan_root():
 def get_cleanup_cfg():
     """运行时清理策略（OR 组合，任一超限即执行对应清理）：0 = 不启用。"""
     return load_admin_cfg()["cleanup"]
+
+
+def get_scan_defaults(device=None):
+    """扫描页面默认值（按设备存储）。device 为空时返回全部。"""
+    all_defaults = load_admin_cfg().get("scan_defaults", {})
+    if device:
+        return all_defaults.get(device, {"dpi": "150", "mode": "Gray", "crop": False})
+    return all_defaults

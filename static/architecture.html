@@ -1,0 +1,626 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="dark">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ScanWeb v1.13 系统架构图</title>
+<style>
+/* ===== CSS 变量：深色主题（默认） ===== */
+:root[data-theme="dark"] {
+  --bg: #0f0f1a;
+  --bg-canvas: #141428;
+  --bg-node: #1a1a2e;
+  --bg-panel: #16213e;
+  --text: #e0e0e0;
+  --text-dim: #8888aa;
+  --text-bright: #ffffff;
+  --border: #2a2a4a;
+  --grid-line: #1a1a3a;
+  --connection: #4a4a6a;
+  --highlight: #4080ff;
+  --hover-glow: rgba(64,128,255,0.3);
+  --dim-opacity: 0.2;
+  --kind-frontend-bg: #1a1a2e; --kind-frontend-border: #e94560;
+  --kind-backend-bg: #16213e;  --kind-backend-border: #06d6a0;
+  --kind-database-bg: #0d1b2a; --kind-database-border: #48bfe3;
+  --kind-cache-bg: #1a1a2e;    --kind-cache-border: #f5a623;
+  --kind-queue-bg: #1a1a2e;    --kind-queue-border: #a78bfa;
+  --kind-external-bg: #2d1b2e; --kind-external-border: #ec4899;
+  --kind-service-bg: #16213e;  --kind-service-border: #06d6a0;
+  --kind-gateway-bg: #1a1a2e;  --kind-gateway-border: #f72585;
+  --boundary-border: #4a4a6a;
+  --boundary-bg: rgba(74,74,106,0.08);
+  --toolbar-bg: #141428;
+  --toolbar-border: #2a2a4a;
+  --btn-bg: #1a1a2e;
+  --btn-hover: #2a2a4a;
+  --label-bg: #141428;
+}
+/* ===== CSS 变量：浅色主题 ===== */
+:root[data-theme="light"] {
+  --bg: #f8f9fa;
+  --bg-canvas: #ffffff;
+  --bg-node: #ffffff;
+  --bg-panel: #f0f4ff;
+  --text: #1a1a2e;
+  --text-dim: #6b7280;
+  --text-bright: #0f0f1a;
+  --border: #e0e0e8;
+  --grid-line: #f0f0f4;
+  --connection: #9ca3af;
+  --highlight: #4080ff;
+  --hover-glow: rgba(64,128,255,0.15);
+  --dim-opacity: 0.3;
+  --kind-frontend-bg: #f0f4ff; --kind-frontend-border: #3b82f6;
+  --kind-backend-bg: #f0fdf4;  --kind-backend-border: #22c55e;
+  --kind-database-bg: #fefce8; --kind-database-border: #eab308;
+  --kind-cache-bg: #fff7ed;    --kind-cache-border: #f97316;
+  --kind-queue-bg: #faf5ff;    --kind-queue-border: #8b5cf6;
+  --kind-external-bg: #fdf2f8; --kind-external-border: #ec4899;
+  --kind-service-bg: #f0fdf4;  --kind-service-border: #14b8a6;
+  --kind-gateway-bg: #fef2f2;  --kind-gateway-border: #ef4444;
+  --boundary-border: #cbd5e1;
+  --boundary-bg: rgba(203,213,225,0.1);
+  --toolbar-bg: #ffffff;
+  --toolbar-border: #e0e0e8;
+  --btn-bg: #f8f9fa;
+  --btn-hover: #e8e8f0;
+  --label-bg: #ffffff;
+}
+/* ===== 全局 ===== */
+* { margin:0; padding:0; box-sizing:border-box; }
+body {
+  font-family: -apple-system, "PingFang SC", "Microsoft YaHei", "Noto Sans CJK SC", sans-serif;
+  background: var(--bg); color: var(--text); height:100vh; overflow:hidden;
+  user-select: none;
+}
+/* ===== 工具栏 ===== */
+#toolbar {
+  position: fixed; top:0; left:0; right:0; height:52px; z-index:100;
+  background: var(--toolbar-bg); border-bottom: 1px solid var(--toolbar-border);
+  display: flex; align-items: center; gap:12px; padding: 0 16px;
+}
+#toolbar h1 { font-size:15px; font-weight:600; color:var(--text-bright); white-space:nowrap; }
+#toolbar .spacer { flex:1; }
+#search-box {
+  width:200px; padding:6px 12px; border:1px solid var(--border); border-radius:6px;
+  background: var(--bg-node); color: var(--text); font-size:13px; outline:none;
+}
+#search-box:focus { border-color: var(--highlight); }
+.tb-btn {
+  padding:6px 14px; border:1px solid var(--border); border-radius:6px;
+  background: var(--btn-bg); color: var(--text); font-size:13px; cursor:pointer;
+  transition: background .15s;
+}
+.tb-btn:hover { background: var(--btn-hover); }
+.tb-btn.active { border-color: var(--highlight); color: var(--highlight); }
+/* ===== 画布 ===== */
+#canvas-wrap {
+  position: fixed; top:52px; left:0; right:0; bottom:0; overflow:auto;
+  background: var(--bg-canvas);
+  background-image: linear-gradient(var(--grid-line) 1px, transparent 1px),
+                    linear-gradient(90deg, var(--grid-line) 1px, transparent 1px);
+  background-size: 40px 40px;
+}
+#canvas-inner {
+  position: relative; width:820px; height:1230px;
+  transform-origin: 0 0;
+}
+/* ===== 边界容器 ===== */
+.boundary {
+  position: absolute; border: 2px dashed var(--boundary-border);
+  border-radius: 12px; background: var(--boundary-bg); padding: 24px 16px 16px;
+  pointer-events: none;
+}
+.boundary.solid { border-style: solid; }
+.boundary-label {
+  position: absolute; top: -10px; left: 16px; padding: 2px 12px;
+  background: var(--bg-canvas); font-size: 12px; color: var(--text-dim);
+  border-radius: 4px; pointer-events: none; white-space: nowrap;
+}
+/* ===== 节点 ===== */
+.node {
+  position: absolute; min-width: 140px; max-width: 220px;
+  padding: 12px 16px; border-radius: 8px; border: 2px solid;
+  background: var(--bg-node); cursor: pointer; text-align: center;
+  transition: box-shadow .15s, opacity .2s, transform .15s;
+  z-index: 10;
+}
+.node .node-icon { font-size: 20px; margin-bottom: 4px; }
+.node .node-label { font-size: 13px; font-weight: 600; color: var(--text-bright); }
+.node .node-kind { font-size: 11px; color: var(--text-dim); margin-top: 2px; text-transform: uppercase; }
+.node[data-kind="frontend"]  { border-color: var(--kind-frontend-border); background: var(--kind-frontend-bg); }
+.node[data-kind="backend"]   { border-color: var(--kind-backend-border);  background: var(--kind-backend-bg); }
+.node[data-kind="database"]  { border-color: var(--kind-database-border); background: var(--kind-database-bg); border-radius: 8px; }
+.node[data-kind="cache"]     { border-color: var(--kind-cache-border);    background: var(--kind-cache-bg); }
+.node[data-kind="queue"]     { border-color: var(--kind-queue-border);    background: var(--kind-queue-bg); }
+.node[data-kind="external"]  { border-color: var(--kind-external-border); background: var(--kind-external-bg); }
+.node[data-kind="service"]   { border-color: var(--kind-service-border);  background: var(--kind-service-bg); }
+.node[data-kind="gateway"]   { border-color: var(--kind-gateway-border);  background: var(--kind-gateway-bg); }
+.node:hover { box-shadow: 0 0 16px var(--hover-glow); transform: translateY(-2px); }
+.node.highlighted { box-shadow: 0 0 20px var(--hover-glow); border-width: 3px; }
+.node.dimmed { opacity: var(--dim-opacity); }
+.node.matched { animation: pulse 1s ease-in-out infinite; }
+@keyframes pulse { 0%,100%{box-shadow:0 0 8px var(--highlight)} 50%{box-shadow:0 0 24px var(--highlight)} }
+/* ===== SVG 连线 ===== */
+#svg-layer {
+  position: absolute; top:0; left:0; width:100%; height:100%;
+  pointer-events: none; z-index: 5; overflow: visible;
+}
+.conn-path {
+  fill: none; stroke: var(--connection); stroke-width: 2;
+  transition: stroke .2s, stroke-width .2s, opacity .2s;
+}
+.conn-path.highlight { stroke: var(--highlight); stroke-width: 3; }
+.conn-path.dimmed { opacity: var(--dim-opacity); }
+.conn-label {
+  fill: var(--text-dim); font-size: 11px; text-anchor: middle;
+  paint-order: stroke; stroke: var(--label-bg); stroke-width: 4px; stroke-linejoin: round;
+  transition: opacity .2s;
+}
+.conn-label.dimmed { opacity: var(--dim-opacity); }
+.conn-label.highlight { fill: var(--highlight); font-weight: 600; }
+/* ===== 详情面板 ===== */
+#detail-panel {
+  position: fixed; top:52px; right:0; bottom:0; width:320px; z-index:50;
+  background: var(--bg-panel); border-left: 1px solid var(--border);
+  transform: translateX(100%); transition: transform .25s; padding: 20px;
+  overflow-y: auto;
+}
+#detail-panel.open { transform: translateX(0); }
+#detail-panel .dp-title { font-size:16px; font-weight:700; color:var(--text-bright); margin-bottom:12px; }
+#detail-panel .dp-kind { font-size:12px; color:var(--text-dim); text-transform:uppercase; margin-bottom:16px; }
+#detail-panel .dp-desc { font-size:13px; line-height:1.6; color:var(--text); margin-bottom:16px; }
+#detail-panel .dp-section { margin-bottom:16px; }
+#detail-panel .dp-section h3 { font-size:12px; color:var(--text-dim); margin-bottom:6px; text-transform:uppercase; }
+#detail-panel .dp-rel { display:flex; align-items:center; gap:6px; font-size:13px; padding:4px 0; }
+#detail-panel .dp-rel .arrow { color:var(--text-dim); }
+#detail-panel .dp-close { position:absolute; top:12px; right:16px; cursor:pointer; font-size:20px; color:var(--text-dim); }
+#detail-panel .dp-close:hover { color:var(--text-bright); }
+/* ===== 图例 ===== */
+#legend {
+  position: fixed; bottom:16px; left:16px; z-index:40;
+  background: var(--toolbar-bg); border:1px solid var(--toolbar-border);
+  border-radius: 8px; padding: 12px 16px; font-size: 11px;
+}
+#legend .lg-title { font-weight:600; margin-bottom:6px; color:var(--text-dim); }
+#legend .lg-item { display:inline-flex; align-items:center; gap:4px; margin-right:12px; }
+#legend .lg-dot { width:10px; height:10px; border-radius:3px; border:2px solid; }
+#legend .lg-flow { margin-top:8px; color: var(--text-dim); }
+#legend .lg-flow-line { display:inline-block; width:24px; height:0; border-top:3px solid var(--highlight); vertical-align:middle; margin-right:4px; }
+</style>
+</head>
+<body>
+<div id="toolbar">
+  <h1 id="diagram-title">ScanWeb v1.13 系统架构</h1>
+  <div class="spacer"></div>
+  <input type="text" id="search-box" placeholder="搜索组件..." />
+  <button class="tb-btn" id="btn-theme" onclick="toggleTheme()">☀ 浅色</button>
+  <button class="tb-btn" id="btn-export-svg" onclick="exportSVG()">导出 SVG</button>
+  <button class="tb-btn" id="btn-export-png" onclick="exportPNG()">导出 PNG</button>
+  <button class="tb-btn" id="btn-reset" onclick="resetView()">重置视图</button>
+</div>
+
+<div id="canvas-wrap" onwheel="handleWheel(event)" onmousedown="startPan(event)">
+  <div id="canvas-inner">
+    <svg id="svg-layer"></svg>
+    <!-- 节点和边界由 JS 动态生成 -->
+  </div>
+</div>
+
+<div id="detail-panel">
+  <span class="dp-close" onclick="closeDetail()">✕</span>
+  <div class="dp-title" id="dp-title"></div>
+  <div class="dp-kind" id="dp-kind"></div>
+  <div class="dp-desc" id="dp-desc"></div>
+  <div class="dp-section" id="dp-connections"></div>
+  <div class="dp-section" id="dp-metadata"></div>
+</div>
+
+<div id="legend">
+  <div class="lg-title">组件类型</div>
+  <span class="lg-item"><span class="lg-dot" style="border-color:var(--kind-frontend-border)"></span>前端</span>
+  <span class="lg-item"><span class="lg-dot" style="border-color:var(--kind-backend-border)"></span>后端</span>
+  <span class="lg-item"><span class="lg-dot" style="border-color:var(--kind-service-border)"></span>服务模块</span>
+  <span class="lg-item"><span class="lg-dot" style="border-color:var(--kind-gateway-border)"></span>系统网关</span>
+  <span class="lg-item"><span class="lg-dot" style="border-color:var(--kind-database-border)"></span>数据/存储</span>
+  <span class="lg-item"><span class="lg-dot" style="border-color:var(--kind-external-border)"></span>外设</span>
+  <div class="lg-flow"><span class="lg-flow-line"></span>扫描主数据流（可悬停/点击查看详情）</div>
+</div>
+
+<script>
+/* ===== JSON IR 数据：ScanWeb v1.13 架构 ===== */
+const IR = {
+  "diagram_type": "architecture",
+  "meta": { "title": "ScanWeb v1.13 系统架构", "locale": "zh-CN", "theme": "dark", "preset": "signal-flow" },
+  "components": [
+    { "id": "browser", "label": "局域网浏览器", "kind": "frontend",
+      "description": "局域网内 PC / 手机浏览器，访问 http://192.168.1.203:9203 即可使用，无需安装任何客户端。页面为原生 HTML/CSS/JS 单页，无外部依赖。",
+      "metadata": { "协议": "HTTP", "端口": "9203", "页面": "首页 / 任务页 / 用户手册" } },
+    { "id": "app", "label": "Flask 主服务", "kind": "backend",
+      "description": "app.py + Waitress WSGI，监听 :9203。提供页面路由与全部 JSON API；启动时自动部署示例任务；/api/devices 带 5 分钟服务端缓存（冷启动 7.4s，命中 0.07s）；提供缩略图、ZIP/PDF 打包下载、二维码分享。",
+      "metadata": { "框架": "Flask + Waitress", "端口": "9203", "核心文件": "app.py" } },
+    { "id": "admin", "label": "管理模块", "kind": "service",
+      "description": "admin.py：PIN 认证（连续错 5 次锁定 60 秒）、资源监控（CPU/内存/磁盘/温度，30 秒自动刷新且只刷资源数据）、依赖检测、SANE 设备探测（含 dpi_raw 完整分辨率列表）、按设备的扫描默认值配置、存储超限自动清理策略。",
+      "metadata": { "核心文件": "admin.py", "页面": "/admin + /admin/manual", "配置": "admin_config.json" } },
+    { "id": "jobs", "label": "任务管理", "kind": "service",
+      "description": "jobs.py：扫描任务的创建与列表；任务页拖拽排序（占位语义）；删除标记 / 取消删除 / 保存删除；保存删除后文件删除并对剩余页连续重编号。",
+      "metadata": { "核心文件": "jobs.py", "API": "/api/new /api/reorder /api/delete" } },
+    { "id": "scanner", "label": "扫描模块", "kind": "service",
+      "description": "scanner.py：_resolve_device() 自动解析完整设备名（hpljm1005:libusb:001:003，缓存 60 秒）；scan_flatbed() 平板扫描完成后立即释放设备锁，PNM→PNG 转换交由后台线程执行，不阻塞下一次扫描。",
+      "metadata": { "核心文件": "scanner.py", "扫描耗时": "约 7 秒/页", "转换": "后台线程约 9 秒" } },
+    { "id": "convert", "label": "图像转换", "kind": "service",
+      "description": "ImageMagick convert + Pillow：把 scanimage 输出的 PNM 原图转为 PNG/JPEG 成品，并生成缩略图。转换在后台线程进行，前端通过占位图动画 + 轮询就绪后替换缩略图。",
+      "metadata": { "工具": "convert / Pillow", "格式": "PNM → PNG/JPEG" } },
+    { "id": "systemd", "label": "systemd + webscan", "kind": "service",
+      "description": "networkscan.service 负责开机自启与守护；/usr/local/bin/webscan 管理脚本提供 start / stop / restart / status / logs / update / version / uninstall 八条命令，一键更新安装包。",
+      "metadata": { "服务": "networkscan.service", "脚本": "/usr/local/bin/webscan" } },
+    { "id": "sane", "label": "SANE 扫描栈", "kind": "gateway",
+      "description": "scanimage 命令行 + hpaio 后端 + libsane。探测命令 scanimage -L 的输出为左反引号右单引号格式；扫描必须携带 --format=pnm 参数。",
+      "metadata": { "设备": "hpljm1005:libusb:001:003", "命令": "scanimage" } },
+    { "id": "cfg", "label": "admin_config.json", "kind": "database",
+      "description": "运行时配置文件：PIN 哈希、设备别名、按设备独立存储的扫描默认值（DPI / 色彩 / 裁边）、清理策略（max_total_mb=300）。管理页每次实时读取。",
+      "metadata": { "路径": "部署目录下 admin_config.json", "内容": "PIN / 别名 / 默认值 / 清理" } },
+    { "id": "store", "label": "扫描输出目录", "kind": "database",
+      "description": "任务文件存储（盒子为 /opt/smb_share/scans）：每个任务一个目录，含 PNM 原图、PNG 成品、缩略图；示例任务在服务首次启动时自动部署。",
+      "metadata": { "路径": "/opt/smb_share/scans", "内容": "PNM / PNG / 缩略图" } },
+    { "id": "m1005", "label": "HP LaserJet M1005", "kind": "external",
+      "description": "USB 平板扫描仪。支持 Gray / Color 两种色彩模式（无 Lineart）、75~1200dpi 七档分辨率、无自动进纸器（ADF）。单页扫描约 7 秒。",
+      "metadata": { "接口": "USB · libusb", "色彩": "Gray / Color", "DPI": "75 ~ 1200" } }
+  ],
+  "boundaries": [
+    { "id": "lan", "label": "局域网（客户端）", "members": ["browser"] },
+    { "id": "box", "label": "机顶盒 hi3798mv100（Ubuntu 20.04 · ARM32）", "members": ["app","admin","jobs","scanner","convert","systemd","sane","cfg","store"], "style": "solid" },
+    { "id": "usb", "label": "USB 外设", "members": ["m1005"] }
+  ],
+  "connections": [
+    { "from": "browser", "to": "app", "label": "HTTP :9203", "highlight": true },
+    { "from": "systemd", "to": "app", "label": "守护启动", "style": "dashed" },
+    { "from": "app", "to": "scanner", "label": "/api/scan 发起扫描", "highlight": true },
+    { "from": "app", "to": "jobs", "label": "任务 API 排序/删除" },
+    { "from": "app", "to": "admin", "label": "管理路由 PIN 保护" },
+    { "from": "scanner", "to": "sane", "label": "scanimage --format=pnm", "highlight": true },
+    { "from": "sane", "to": "m1005", "label": "USB · libusb", "highlight": true },
+    { "from": "scanner", "to": "convert", "label": "PNM→PNG 后台线程", "highlight": true },
+    { "from": "scanner", "to": "store", "label": "写 PNM + 占位图" },
+    { "from": "convert", "to": "store", "label": "写 PNG + 缩略图" },
+    { "from": "jobs", "to": "store", "label": "排序 · 删除 · 重编号" },
+    { "from": "admin", "to": "sane", "label": "scanimage -L 探测设备" },
+    { "from": "admin", "to": "cfg", "label": "别名 / 默认值 / 清理" },
+    { "from": "scanner", "to": "cfg", "label": "读按设备默认值" }
+  ]
+};
+
+/* ===== 显式分层布局 ===== */
+const LAYERS = [
+  ["browser"],
+  ["app"],
+  ["admin", "jobs", "scanner"],
+  ["systemd", "convert", "sane"],
+  ["cfg", "store"],
+  ["m1005"]
+];
+const NODE_W = 180, NODE_H = 64, GAP_X = 80, GAP_Y = 140, MARGIN = 48;
+
+/* ===== 状态 ===== */
+let nodePositions = {};
+let scale = 1, panX = 0, panY = 0;
+let isPanning = false, panStart = { x:0, y:0, px:0, py:0 };
+
+/* ===== 图标映射 ===== */
+const KIND_ICONS = {
+  frontend:"🖥️", backend:"⚙️", database:"🗄️", cache:"⚡",
+  queue:"📨", external:"🖨️", service:"🔧", gateway:"🔌"
+};
+const KIND_NAMES = {
+  frontend:"前端", backend:"后端", database:"数据/存储", cache:"缓存",
+  queue:"队列", external:"外设", service:"服务模块", gateway:"系统网关"
+};
+
+/* ===== 渲染入口 ===== */
+function render() {
+  document.getElementById("diagram-title").textContent = IR.meta.title;
+  document.documentElement.setAttribute("data-theme", IR.meta.theme || "dark");
+  layoutNodes();
+  renderBoundaries();
+  renderNodes();
+  renderConnections();
+  updateTransform();
+}
+
+/* ===== 布局：按 LAYERS 分层并逐层水平居中 ===== */
+function layoutNodes() {
+  nodePositions = {};
+  const totalW = Math.max(...LAYERS.map(l => l.length * NODE_W + (l.length - 1) * GAP_X));
+  let y = MARGIN;
+  LAYERS.forEach(layer => {
+    const layerW = layer.length * NODE_W + (layer.length - 1) * GAP_X;
+    const startX = MARGIN + (totalW - layerW) / 2;
+    layer.forEach((id, i) => {
+      nodePositions[id] = { x: startX + i * (NODE_W + GAP_X), y: y, w: NODE_W, h: NODE_H };
+    });
+    y += NODE_H + GAP_Y;
+  });
+}
+
+/* ===== 渲染边界 ===== */
+function renderBoundaries() {
+  const canvas = document.getElementById("canvas-inner");
+  if (!IR.boundaries) return;
+  IR.boundaries.forEach(b => {
+    const members = b.members.map(id => nodePositions[id]).filter(Boolean);
+    if (members.length === 0) return;
+    const minX = Math.min(...members.map(m=>m.x)) - 24;
+    const minY = Math.min(...members.map(m=>m.y)) - 24;
+    const maxX = Math.max(...members.map(m=>m.x+m.w)) + 24;
+    const maxY = Math.max(...members.map(m=>m.y+m.h)) + 24;
+    const div = document.createElement("div");
+    div.className = "boundary" + (b.style === "solid" ? " solid" : "");
+    div.style.cssText = "left:"+minX+"px;top:"+minY+"px;width:"+(maxX-minX)+"px;height:"+(maxY-minY)+"px;";
+    div.innerHTML = "<span class='boundary-label'>" + b.label + "</span>";
+    canvas.insertBefore(div, document.getElementById("svg-layer"));
+  });
+}
+
+/* ===== 渲染节点 ===== */
+function renderNodes() {
+  const canvas = document.getElementById("canvas-inner");
+  IR.components.forEach(c => {
+    const pos = nodePositions[c.id];
+    if (!pos) return;
+    const div = document.createElement("div");
+    div.className = "node";
+    div.id = "node-" + c.id;
+    div.dataset.kind = c.kind;
+    div.dataset.id = c.id;
+    div.style.cssText = "left:"+pos.x+"px;top:"+pos.y+"px;width:"+pos.w+"px;";
+    div.innerHTML =
+      "<div class='node-icon'>" + (KIND_ICONS[c.kind] || "📦") + "</div>" +
+      "<div class='node-label'>" + c.label + "</div>" +
+      "<div class='node-kind'>" + (KIND_NAMES[c.kind] || c.kind) + "</div>";
+    div.addEventListener("mouseenter", () => highlightNode(c.id));
+    div.addEventListener("mouseleave", () => clearHighlight());
+    div.addEventListener("click", () => showDetail(c.id));
+    canvas.appendChild(div);
+  });
+}
+
+/* ===== 渲染连线 ===== */
+function renderConnections() {
+  const svg = document.getElementById("svg-layer");
+  svg.innerHTML = "";
+  const defs = document.createElementNS("http://www.w3.org/2000/svg","defs");
+  defs.innerHTML =
+    "<marker id='arrow' markerWidth='10' markerHeight='7' refX='9' refY='3.5' orient='auto'>" +
+    "<polygon points='0 0, 10 3.5, 0 7' fill='var(--connection)' /></marker>" +
+    "<marker id='arrow-hl' markerWidth='10' markerHeight='7' refX='9' refY='3.5' orient='auto'>" +
+    "<polygon points='0 0, 10 3.5, 0 7' fill='var(--highlight)' /></marker>";
+  svg.appendChild(defs);
+
+  IR.connections.forEach((conn, idx) => {
+    const from = nodePositions[conn.from];
+    const to = nodePositions[conn.to];
+    if (!from || !to) return;
+    const x1 = from.x + from.w/2, y1 = from.y + from.h;
+    const x2 = to.x + to.w/2, y2 = to.y;
+    const midY = (y1 + y2) / 2;
+    const d = "M " + x1 + " " + y1 + " C " + x1 + " " + midY + ", " + x2 + " " + midY + ", " + x2 + " " + y2;
+
+    const path = document.createElementNS("http://www.w3.org/2000/svg","path");
+    path.setAttribute("d", d);
+    path.setAttribute("class", "conn-path" + (conn.highlight ? " highlight" : ""));
+    path.setAttribute("marker-end", conn.highlight ? "url(#arrow-hl)" : "url(#arrow)");
+    path.id = "conn-" + idx;
+    if (conn.style === "dashed") path.setAttribute("stroke-dasharray", "6,4");
+    svg.appendChild(path);
+
+    if (conn.label) {
+      const text = document.createElementNS("http://www.w3.org/2000/svg","text");
+      text.setAttribute("x", (x1+x2)/2);
+      text.setAttribute("y", midY - 4);
+      text.setAttribute("class", "conn-label" + (conn.highlight ? " highlight" : ""));
+      text.id = "connlabel-" + idx;
+      text.textContent = conn.label;
+      svg.appendChild(text);
+    }
+  });
+}
+
+/* ===== 交互：Hover 高亮 ===== */
+function highlightNode(id) {
+  const related = new Set([id]);
+  IR.connections.forEach(c => {
+    if (c.from === id) related.add(c.to);
+    if (c.to === id) related.add(c.from);
+  });
+  document.querySelectorAll(".node").forEach(n => {
+    if (related.has(n.dataset.id)) n.classList.add("highlighted");
+    else n.classList.add("dimmed");
+  });
+  IR.connections.forEach((c, i) => {
+    const path = document.getElementById("conn-" + i);
+    const label = document.getElementById("connlabel-" + i);
+    if (c.from === id || c.to === id) {
+      if (path) { path.classList.remove("dimmed"); path.classList.add("highlight"); }
+      if (label) { label.classList.remove("dimmed"); label.classList.add("highlight"); }
+    } else {
+      if (path) path.classList.add("dimmed");
+      if (label) label.classList.add("dimmed");
+    }
+  });
+}
+function clearHighlight() {
+  document.querySelectorAll(".node").forEach(n => { n.classList.remove("highlighted","dimmed"); });
+  IR.connections.forEach((c, i) => {
+    const path = document.getElementById("conn-" + i);
+    const label = document.getElementById("connlabel-" + i);
+    if (path) {
+      path.classList.remove("dimmed");
+      if (!c.highlight) path.classList.remove("highlight");
+    }
+    if (label) {
+      label.classList.remove("dimmed");
+      if (!c.highlight) label.classList.remove("highlight");
+    }
+  });
+}
+
+/* ===== 交互：详情面板 ===== */
+function showDetail(id) {
+  const comp = IR.components.find(c => c.id === id);
+  if (!comp) return;
+  document.getElementById("dp-title").textContent = comp.label;
+  document.getElementById("dp-kind").textContent = KIND_NAMES[comp.kind] + " · " + comp.kind;
+  document.getElementById("dp-desc").textContent = comp.description || "无描述";
+
+  const upstream = IR.connections.filter(c => c.to === id).map(c => {
+    const src = IR.components.find(x => x.id === c.from);
+    return "<div class='dp-rel'><span style='color:var(--highlight)'>" + (src ? src.label : c.from) + "</span><span class='arrow'>→</span><span>" + (c.label || "") + "</span></div>";
+  }).join("");
+  const downstream = IR.connections.filter(c => c.from === id).map(c => {
+    const tgt = IR.components.find(x => x.id === c.to);
+    return "<div class='dp-rel'><span>" + (c.label || "") + "</span><span class='arrow'>→</span><span style='color:var(--highlight)'>" + (tgt ? tgt.label : c.to) + "</span></div>";
+  }).join("");
+  document.getElementById("dp-connections").innerHTML =
+    "<h3>上游依赖</h3>" + (upstream || "<div style='color:var(--text-dim)'>无</div>") +
+    "<h3 style='margin-top:12px'>下游调用</h3>" + (downstream || "<div style='color:var(--text-dim)'>无</div>");
+
+  if (comp.metadata) {
+    const meta = Object.entries(comp.metadata).map(([k,v]) => "<div style='font-size:13px'><strong>" + k + ":</strong> " + v + "</div>").join("");
+    document.getElementById("dp-metadata").innerHTML = "<h3>元数据</h3>" + meta;
+  } else {
+    document.getElementById("dp-metadata").innerHTML = "";
+  }
+  document.getElementById("detail-panel").classList.add("open");
+}
+function closeDetail() { document.getElementById("detail-panel").classList.remove("open"); }
+
+/* ===== 交互：搜索 ===== */
+document.getElementById("search-box").addEventListener("input", function(e) {
+  const q = e.target.value.toLowerCase().trim();
+  if (!q) { document.querySelectorAll(".node").forEach(n => n.classList.remove("matched")); return; }
+  IR.components.forEach(c => {
+    const el = document.getElementById("node-" + c.id);
+    if (!el) return;
+    if (c.label.toLowerCase().includes(q) || c.kind.toLowerCase().includes(q) || c.id.toLowerCase().includes(q) || (c.description || "").toLowerCase().includes(q)) {
+      el.classList.add("matched");
+    } else {
+      el.classList.remove("matched");
+    }
+  });
+});
+
+/* ===== 交互：缩放平移 ===== */
+function handleWheel(e) {
+  e.preventDefault();
+  const delta = e.deltaY > 0 ? 0.9 : 1.1;
+  scale = Math.max(0.5, Math.min(3, scale * delta));
+  updateTransform();
+}
+function startPan(e) {
+  if (e.target.closest(".node") || e.target.closest(".boundary")) return;
+  isPanning = true;
+  panStart = { x: e.clientX, y: e.clientY, px: panX, py: panY };
+  document.addEventListener("mousemove", doPan);
+  document.addEventListener("mouseup", endPan);
+}
+function doPan(e) {
+  if (!isPanning) return;
+  panX = panStart.px + (e.clientX - panStart.x);
+  panY = panStart.py + (e.clientY - panStart.y);
+  updateTransform();
+}
+function endPan() { isPanning = false; document.removeEventListener("mousemove", doPan); document.removeEventListener("mouseup", endPan); }
+function updateTransform() {
+  document.getElementById("canvas-inner").style.transform = "translate(" + panX + "px," + panY + "px) scale(" + scale + ")";
+}
+function resetView() { scale=1; panX=0; panY=0; updateTransform(); }
+
+/* ===== 交互：主题切换 ===== */
+function toggleTheme() {
+  const cur = document.documentElement.getAttribute("data-theme");
+  const next = cur === "dark" ? "light" : "dark";
+  document.documentElement.setAttribute("data-theme", next);
+  document.getElementById("btn-theme").textContent = next === "dark" ? "☀ 浅色" : "🌙 深色";
+  renderConnections();
+}
+
+/* ===== 导出：SVG（连同节点一起导出） ===== */
+function exportSVG() {
+  const canvas = document.getElementById("canvas-inner");
+  const serializer = new XMLSerializer();
+  const nodesSvg = [];
+  IR.components.forEach(c => {
+    const pos = nodePositions[c.id];
+    if (!pos) return;
+    const el = document.getElementById("node-" + c.id);
+    const style = el ? getComputedStyle(el) : null;
+    const bg = style ? style.backgroundColor : "#1a1a2e";
+    const bc = style ? style.borderColor : "#4a4a6a";
+    nodesSvg.push(
+      "<g><rect x='" + pos.x + "' y='" + pos.y + "' width='" + pos.w + "' height='" + NODE_H + "' rx='8' fill='" + bg + "' stroke='" + bc + "' stroke-width='2'/>" +
+      "<text x='" + (pos.x + pos.w/2) + "' y='" + (pos.y + NODE_H/2 + 5) + "' text-anchor='middle' font-size='13' font-weight='600' fill='#e0e0e0' font-family='sans-serif'>" + c.label + "</text></g>"
+    );
+  });
+  const svgStr = "<svg xmlns='http://www.w3.org/2000/svg' width='820' height='1230'>" +
+    "<rect width='820' height='1230' fill='#141428'/>" +
+    document.getElementById("svg-layer").innerHTML.replace(/var\(--connection\)/g, "#4a4a6a").replace(/var\(--highlight\)/g, "#4080ff") +
+    nodesSvg.join("") + "</svg>";
+  const blob = new Blob(["<?xml version='1.0'?>\n" + svgStr], { type: "image/svg+xml" });
+  downloadBlob(blob, (IR.meta.title || "archify") + ".svg");
+}
+
+/* ===== 导出：PNG ===== */
+function exportPNG() {
+  const pngCanvas = document.createElement("canvas");
+  pngCanvas.width = 1640; pngCanvas.height = 2460;
+  const ctx = pngCanvas.getContext("2d");
+  ctx.fillStyle = document.documentElement.getAttribute("data-theme") === "dark" ? "#141428" : "#ffffff";
+  ctx.fillRect(0, 0, pngCanvas.width, pngCanvas.height);
+  /* 连线 */
+  IR.connections.forEach(conn => {
+    const from = nodePositions[conn.from], to = nodePositions[conn.to];
+    if (!from || !to) return;
+    const x1 = (from.x + from.w/2)*2, y1 = (from.y + from.h)*2;
+    const x2 = (to.x + to.w/2)*2, y2 = (to.y)*2;
+    const midY = (y1+y2)/2;
+    ctx.strokeStyle = conn.highlight ? "#4080ff" : "#9ca3af";
+    ctx.lineWidth = conn.highlight ? 5 : 3;
+    ctx.beginPath();
+    ctx.moveTo(x1, y1);
+    ctx.bezierCurveTo(x1, midY, x2, midY, x2, y2);
+    ctx.stroke();
+  });
+  /* 节点 */
+  IR.components.forEach(c => {
+    const pos = nodePositions[c.id]; if (!pos) return;
+    const el = document.getElementById("node-" + c.id); if (!el) return;
+    const style = getComputedStyle(el);
+    const x = pos.x * 2, y = pos.y * 2, w2 = pos.w * 2;
+    ctx.fillStyle = style.backgroundColor;
+    ctx.strokeStyle = style.borderColor;
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.roundRect(x, y, w2, NODE_H * 2, 16);
+    ctx.fill(); ctx.stroke();
+    ctx.fillStyle = style.color;
+    ctx.font = "bold 26px 'PingFang SC', 'Microsoft YaHei', sans-serif";
+    ctx.textAlign = "center";
+    ctx.fillText(c.label, x + w2/2, y + NODE_H * 2 / 2 + 10);
+  });
+  pngCanvas.toBlob(blob => downloadBlob(blob, (IR.meta.title||"archify")+".png"), "image/png");
+}
+
+/* ===== 工具函数 ===== */
+function downloadBlob(blob, filename) {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url; a.download = filename; a.click();
+  URL.revokeObjectURL(url);
+}
+
+/* ===== 初始化 ===== */
+render();
+</script>
+</body>
+</html>

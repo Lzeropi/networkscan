@@ -29,8 +29,35 @@ def _params(job):
             "source_name": prm.get("source_name", "")}
 
 
+def _resolve_device(name):
+    """把短设备名（如 'hpljm1005:'）解析为完整设备名（如 'hpljm1005:libusb:001:003'）。
+    hi3798mv100 上 hpaio 后端不接受纯后缀名（open 报 Invalid argument），
+    必须用 scanimage -L 列出的完整名。解析结果缓存 60 秒，USB 重插后自动刷新。"""
+    if not name or ":" not in name:
+        return name                       # 无后缀名，原样返回
+    backend, _, suffix = name.partition(":")
+    if suffix.strip():                    # 已带完整路径（libusb:xxx），直接用
+        return name
+    cache = globals().get("_dev_cache")
+    now = time.time()
+    if cache and cache[0] > now and cache[1].startswith(backend + ":"):
+        return cache[1]                   # 缓存有效且同后端
+    try:
+        out = subprocess.run([SCANIMAGE, "-L"], capture_output=True, timeout=15)
+        for line in out.stdout.decode(errors="ignore").splitlines():
+            m = re.match(r"device [`']([^`']+)[`']", line.strip())
+            if m and m.group(1).startswith(backend + ":"):
+                globals()["_dev_cache"] = (now + 60, m.group(1))
+                return m.group(1)
+    except (OSError, subprocess.SubprocessError):
+        pass
+    return name                           # 解析失败退回原名（由 scanimage 报错）
+
+
 def _base_cmd(p):
-    cmd = [SCANIMAGE, "-d", p["device"], "--mode", p["mode"],
+    cmd = [SCANIMAGE, "-d", _resolve_device(p["device"]),
+           "--format", "pnm",             # 显式指定格式，消除"Output format is not set"警告
+           "--mode", p["mode"],
            "--resolution", p["dpi"]]
     if p["crop"]:                       # 可选：按 A4 毫米尺寸裁边（默认不裁）
         cmd += ["-x", "210", "-y", "297"]
@@ -86,7 +113,8 @@ def _mk_thumb(job, fname):
 
 
 def scan_flatbed(job):
-    """平板单页扫描：scanimage 输出 PNM 到 /tmp，convert 转 PNG 进任务目录。
+    """平板单页扫描：scanimage 输出 PNM 到 /tmp 后立即释放锁，
+    convert+缩略图在后台线程执行，不阻塞下一次扫描。
     扫描仪忙时立即返回提示，不阻塞等待。"""
     global _scan_start_time, _scan_job
     p = _params(job)
@@ -94,35 +122,55 @@ def scan_flatbed(job):
         busy_job = _scan_job or ""
         elapsed = int(time.time() - _scan_start_time) if _scan_start_time else 0
         raise RuntimeError("设备忙，%s 正在扫描（已用 %d 秒），请稍后再试" % (busy_job, elapsed))
+    n = len(jobs.pages(job)) + 1          # 以磁盘实际页数为准，防编号冲突
+    fname = f"p{n:03d}.png"
+    out = os.path.join(get_scan_root(), job, fname)
+    tmp = os.path.join("/tmp", f"scanweb_{job}_{n:03d}.pnm")
+
+    # 预占位：先创建空的 .png 占位文件，前端能看到"正在转换"状态
+    try:
+        open(out, "wb").close()
+    except OSError:
+        pass
+
+    # 阶段 1：scanimage 扫描（持锁）
+    scan_error = None
     try:
         _scan_start_time = time.time()
         _scan_job = job
-        n = len(jobs.pages(job)) + 1          # 以磁盘实际页数为准，防编号冲突
-        fname = f"p{n:03d}.png"
-        out = os.path.join(get_scan_root(), job, fname)
-        tmp = os.path.join("/tmp", f"scanweb_{job}_{n:03d}.pnm")
         try:
             with open(tmp, "wb") as fh:
                 subprocess.run(_base_cmd(p), stdout=fh, stderr=subprocess.PIPE,
                                timeout=300, check=True)
-            subprocess.run([CONVERT, tmp, out], stderr=subprocess.PIPE,
-                           timeout=120, check=True)
-            _mk_thumb(job, fname)
         except subprocess.CalledProcessError as e:
             err = (e.stderr or b"").decode(errors="ignore").strip()
-            raise RuntimeError(err[:300] or f"命令退出码 {e.returncode}")
-        except Exception:
-            raise
-        finally:
+            scan_error = err[:300] or f"命令退出码 {e.returncode}"
             _rm(tmp)
-        meta = jobs.load(job)
-        meta["pages"] = len(jobs.pages(job))
-        jobs.save(job, meta)
-        return fname
+            _rm(out)                       # 清空占位文件
     finally:
         _scan_job = None
         _scan_start_time = None
         scan_lock.release()
+
+    if scan_error:
+        raise RuntimeError(scan_error)
+
+    # 阶段 2：后台转换 PNM → PNG + 缩略图（不持锁，不阻塞下一次扫描）
+    def _convert_worker():
+        try:
+            subprocess.run([CONVERT, tmp, out], stderr=subprocess.PIPE,
+                           timeout=120, check=True)
+            _mk_thumb(job, fname)
+            meta = jobs.load(job)
+            meta["pages"] = len(jobs.pages(job))
+            jobs.save(job, meta)
+        except Exception:
+            pass                           # 转换失败保留 PNM，下次启动时 cleanup_tmp_pnms 清理
+        finally:
+            _rm(tmp)
+
+    threading.Thread(target=_convert_worker, daemon=True).start()
+    return fname
 
 
 def scan_adf(job):
