@@ -9,7 +9,10 @@
 <body>
 <header>
   <h1>📄 扫描仪</h1>
-  {% if authed %}<a href="/logout">退出登录</a>{% endif %}
+  <nav>
+    <a href="/manual">操作手册</a>
+    {% if authed %}<a href="/logout">退出登录</a>{% endif %}
+  </nav>
 </header>
 <script src="{{ url_for('static', filename='app.js') }}"></script>
 <main>{% block content %}{% endblock %}</main>

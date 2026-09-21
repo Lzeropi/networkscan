@@ -8,24 +8,104 @@ function setStatus(t, isErr) {
   el.className = "status" + (isErr ? " err" : "");
 }
 
-/* 首页：动态加载 scanimage -L 的设备列表到高级选项 */
+/* 首页：动态加载 scanimage -L 的设备列表 + 探测能力 */
+let _devCaps = [];   // 缓存设备能力数据
+
 function loadDevices() {
-  const sel = document.getElementById("devsel");
-  if (!sel) return;
-  fetch("/api/devices").then(r => r.json()).then(d => {
-    (d.devs || []).forEach(dev => {
-      const o = document.createElement("option");
-      o.value = dev; o.textContent = dev;
-      sel.appendChild(o);
+  const devMenu = document.getElementById("devMenu");
+  if (!devMenu) return;
+  fetch("/api/devices").then(r => r.json()).then(data => {
+    _devCaps = data.devs || [];
+    _devCaps.forEach(dev => {
+      const item = document.createElement("div");
+      item.className = "dd-item";
+      item.dataset.value = dev.name;
+      item.textContent = dev.name;
+      devMenu.appendChild(item);
     });
+    if (_devCaps.length > 0) {
+      updateDeviceOptions("");  // 空值 = 默认设备 = 第一台
+    } else {
+      const hint = document.getElementById("advHint");
+      if (hint) hint.textContent = "未探测到扫描设备，请检查设备连接和权限。";
+    }
   }).catch(() => {});
+}
+
+/* 根据选中设备的能力，动态显示/隐藏 ADF 选项和模式选项 */
+function updateDeviceOptions(selectedDev) {
+  // 选中设备为空 = 默认设备，取第一台探测到的设备能力
+  const dev = selectedDev
+    ? _devCaps.find(d => d.name === selectedDev)
+    : _devCaps[0];
+
+  const adfLabel = document.getElementById("adfLabel");
+  const sourceName = document.getElementById("source_name");
+  const modeDropdown = document.getElementById("modeDropdown");
+  const hint = document.getElementById("advHint");
+
+  if (!dev) {
+    // 探测失败：全部显示（降级模式，由 scanimage 报错兜底）
+    if (adfLabel) adfLabel.style.display = "";
+    if (hint) hint.textContent = "设备能力探测失败，所有选项可用。不支持的参数扫描时会报错。";
+    return;
+  }
+
+  // ADF：设备有非 Flatbed 的 source 才显示 ADF 选项
+  const adfSources = (dev.sources || []).filter(s =>
+    /adf|feeder/i.test(s) && !/flatbed/i.test(s)
+  );
+  if (adfLabel) {
+    adfLabel.style.display = adfSources.length > 0 ? "" : "none";
+    // 如果 ADF 被隐藏，强制切回平板
+    if (adfSources.length === 0) {
+      const flatbedRadio = document.querySelector('input[name="source"][value="flatbed"]');
+      if (flatbedRadio) flatbedRadio.checked = true;
+    }
+  }
+  if (sourceName) {
+    sourceName.value = adfSources.length > 0 ? adfSources[0] : "";
+  }
+
+  // 模式：只保留设备支持的选项（自定义下拉版本）
+  if (modeDropdown && dev.modes && dev.modes.length > 0) {
+    const modeToggle = modeDropdown.querySelector(".dd-toggle");
+    const modeHidden = modeDropdown.querySelector("input[type=hidden]");
+    const modeItems = modeDropdown.querySelectorAll(".dd-item");
+    const currentVal = modeHidden.value;
+    modeItems.forEach(item => {
+      item.classList.toggle("hidden", !dev.modes.includes(item.dataset.value));
+    });
+    // 当前选中的模式如果不支持，切到第一个支持的
+    if (!dev.modes.includes(currentVal)) {
+      const firstOk = Array.from(modeItems).find(i => dev.modes.includes(i.dataset.value) && !i.classList.contains("hidden"));
+      if (firstOk) {
+        modeHidden.value = firstOk.dataset.value;
+        modeToggle.firstChild.textContent = firstOk.textContent;
+        modeItems.forEach(i => i.classList.remove("selected"));
+        firstOk.classList.add("selected");
+      }
+    }
+  }
+
+  // 提示文字
+  if (hint) {
+    const parts = [];
+    parts.push("模式：" + (dev.modes || ["未知"]).join("/"));
+    if (adfSources.length > 0) {
+      parts.push("ADF 源：" + adfSources.join("/"));
+    } else {
+      parts.push("无 ADF（平板模式）");
+    }
+    hint.textContent = "设备能力已探测 → " + parts.join("，");
+  }
 }
 
 /* 任务页：平板扫一页（阻塞式，后端持有设备锁） */
 async function scanPage(job) {
   const b = document.getElementById("btnScan");
   b.disabled = true;
-  setStatus("正在扫描，请稍候（平板扫描约需 10–30 秒）…");
+  setStatus("正在扫描，请稍候（约需 10–30 秒）…");
   try {
     const r = await fetch(`/api/jobs/${job}/scan`, { method: "POST" });
     const d = await r.json();
@@ -102,5 +182,51 @@ function initJobPage() {
       lb.querySelector("img").src = a.href;
       lb.style.display = "flex";
     }
+  });
+}
+
+/* ---------- 自定义下拉框逻辑 ---------- */
+function initDropdowns() {
+  // 点击 toggle 展开/收起菜单
+  document.querySelectorAll(".dd-toggle").forEach(toggle => {
+    toggle.addEventListener("click", e => {
+      e.stopPropagation();
+      e.preventDefault();
+      const menu = toggle.nextElementSibling;
+      const isOpen = menu.classList.contains("open");
+      // 先关闭所有菜单
+      document.querySelectorAll(".dd-menu.open").forEach(m => {
+        if (m !== menu) m.classList.remove("open");
+      });
+      menu.classList.toggle("open");
+    });
+  });
+
+  // 点击选项：选中并关闭
+  document.querySelectorAll(".dd-menu").forEach(menu => {
+    menu.addEventListener("click", e => {
+      const item = e.target.closest(".dd-item");
+      if (!item || item.classList.contains("hidden")) return;
+      const dd = menu.closest(".dropdown");
+      const toggle = dd.querySelector(".dd-toggle");
+      const hidden = dd.querySelector("input[type=hidden]");
+      // 更新显示文本（保留 caret）
+      toggle.firstChild.textContent = item.textContent;
+      hidden.value = item.dataset.value;
+      // 标记选中
+      menu.querySelectorAll(".dd-item").forEach(i => i.classList.remove("selected"));
+      item.classList.add("selected");
+      // 关闭菜单
+      menu.classList.remove("open");
+      // 设备切换时触发能力探测
+      if (hidden.name === "device") {
+        updateDeviceOptions(hidden.value);
+      }
+    });
+  });
+
+  // 点击页面其他地方关闭所有菜单
+  document.addEventListener("click", () => {
+    document.querySelectorAll(".dd-menu.open").forEach(m => m.classList.remove("open"));
   });
 }

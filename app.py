@@ -73,12 +73,18 @@ def job_page(job):
                            pairs=jobs.page_pairs(job))
 
 
+@app.route("/manual")
+def manual():
+    return render_template("manual.html")
+
+
 # ---------------- API ----------------
 @app.post("/api/jobs")
 def api_create():
     name = jobs.create(
         request.form.get("remark", ""),
-        {"source": request.form.get("source", "flatbed"),
+        {         "source": request.form.get("source", "flatbed"),
+         "source_name": request.form.get("source_name", ""),
          "dpi": request.form.get("dpi", "150"),
          "mode": request.form.get("mode", "Gray"),
          "device": request.form.get("device", ""),
@@ -118,11 +124,32 @@ def api_delete(job):
 
 @app.get("/api/devices")
 def api_devices():
+    """列出设备并探测每台设备支持的扫描模式和进纸源（scanimage -A）。"""
     try:
         r = subprocess.run([SCANIMAGE, "-L"], capture_output=True, text=True, timeout=15)
-        return jsonify(devs=re.findall(r"device `([^`]+)`", r.stdout))
+        dev_names = re.findall(r"device `([^`]+)`", r.stdout)
     except Exception:
-        return jsonify(devs=[])
+        dev_names = []
+
+    devs = []
+    for dev in dev_names:
+        info = {"name": dev, "modes": ["Color", "Gray"], "sources": []}
+        try:
+            a = subprocess.run([SCANIMAGE, "-A", "-d", dev],
+                               capture_output=True, text=True, timeout=15)
+            out = a.stdout + a.stderr
+            # 解析 --mode 行：如 --mode Gray|Color [Color]
+            m = re.search(r'--mode\s+([^\[]+)\[', out)
+            if m:
+                info["modes"] = [s.strip() for s in m.group(1).split("|")]
+            # 解析 --source 行：如 --source Flatbed|ADF [Flatbed]
+            s = re.search(r'--source\s+([^\[]+)\[', out)
+            if s:
+                info["sources"] = [src.strip() for src in s.group(1).split("|")]
+        except Exception:
+            pass  # 探测失败用默认值
+        devs.append(info)
+    return jsonify(devs=devs)
 
 
 # ---------------- 文件 ----------------

@@ -13,7 +13,7 @@ scan_lock = threading.Lock()          # 扫描仪全局独占锁
 state = {}                            # job -> {"state": "scanning|done|error", "msg": str}
 
 VALID_DPI = {"75", "150", "200", "300", "400", "600", "1200", "2400"}
-VALID_MODE = {"Color", "Gray"}  # M1005 只支持这两种模式（scanimage -A 确认无 Lineart）
+VALID_MODE = {"Color", "Gray", "Lineart"}  # 完整模式集；实际支持由 scanimage -A 探测后前端动态过滤
 
 
 def _params(job):
@@ -22,7 +22,8 @@ def _params(job):
     return {"dpi": dpi if dpi in VALID_DPI else "150",
             "mode": mode if mode in VALID_MODE else "Gray",
             "device": prm.get("device") or DEVICE,
-            "crop": bool(prm.get("crop"))}
+            "crop": bool(prm.get("crop")),
+            "source_name": prm.get("source_name", "")}
 
 
 def _base_cmd(p):
@@ -102,9 +103,10 @@ def scan_adf(job):
             st.update(state="scanning", msg="ADF 连续扫描中…")
             start = len(jobs.pages(job)) + 1
             pat = os.path.join(SCAN_ROOT, job, "p%d.pnm")
+            source = p.get("source_name") or SCAN_SOURCE  # 优先用探测到的源名，其次配置回退
             cmd = _base_cmd(p)
-            if SCAN_SOURCE:                    # 只在有值时传 --source（M1005 无 ADF，默认空）
-                cmd += ["--source", SCAN_SOURCE]
+            if source:                      # 有值才传 --source（无 ADF 设备不传）
+                cmd += ["--source", source]
             cmd += ["--batch=" + pat, f"--batch-start={start}"]
             try:
                 r = subprocess.run(cmd, capture_output=True, text=True, timeout=3600)

@@ -6,41 +6,69 @@
   convert {{ "✓" if convert_ok else "✗ 未找到（sudo apt install imagemagick）" }}
 </div>
 {% endif %}
+
 <section class="card">
   <h2>新建扫描任务</h2>
   <form method="post" action="/api/jobs" class="newjob">
-    <input type="text" name="remark" placeholder="备注（选填，如：验收单）" maxlength="30">
-    <button type="submit" class="primary">创建并开始</button>
+    <div class="form-row">
+      <input type="text" name="remark" placeholder="备注（选填，如：验收单）" maxlength="30">
+      <label class="crop-label"><input type="checkbox" name="crop"> 按 A4 尺寸裁边</label>
+      <button type="submit" class="primary">创建并开始</button>
+    </div>
     <details class="adv">
       <summary>高级选项</summary>
-      <fieldset>
+      <fieldset id="sourceFieldset">
         <legend>扫描方式</legend>
         <label><input type="radio" name="source" value="flatbed" checked> 平板式 · 单张扫描（默认）</label>
-        <label><input type="radio" name="source" value="adf"> 连续进纸 · 多张自动扫描（ADF）</label>
+        <label id="adfLabel" style="display:none"><input type="radio" name="source" value="adf"> 连续进纸 · 多张自动扫描（ADF）</label>
+        <input type="hidden" name="source_name" id="source_name" value="">
       </fieldset>
       <div class="row">
-        <label>分辨率
-          <select name="dpi">
-            <option selected>150</option><option>300</option><option>600</option>
-          </select> dpi
-        </label>
-        <label>色彩
-          <select name="mode">
-            <option>Color</option><option selected>Gray</option>
-          </select>
-        </label>
-        <label>设备
-          <select name="device" id="devsel"><option value="">默认设备 (hpljm1005)</option></select>
-        </label>
-        <label><input type="checkbox" name="crop"> 按 A4 尺寸裁边（210×297mm）</label>
+        <div class="dd-group">
+          <span class="dd-label">分辨率</span>
+          <div class="dropdown" data-name="dpi">
+            <button type="button" class="dd-toggle">150<span class="dd-caret"></span></button>
+            <div class="dd-menu">
+              <div class="dd-item selected" data-value="150">150</div>
+              <div class="dd-item" data-value="300">300</div>
+              <div class="dd-item" data-value="600">600</div>
+            </div>
+            <input type="hidden" name="dpi" value="150">
+          </div>
+          <span class="dd-unit">dpi</span>
+        </div>
+        <div class="dd-group">
+          <span class="dd-label">色彩</span>
+          <div class="dropdown" data-name="mode" id="modeDropdown">
+            <button type="button" class="dd-toggle">Gray<span class="dd-caret"></span></button>
+            <div class="dd-menu">
+              <div class="dd-item" data-value="Color">Color</div>
+              <div class="dd-item selected" data-value="Gray">Gray</div>
+              <div class="dd-item" data-value="Lineart">Lineart</div>
+            </div>
+            <input type="hidden" name="mode" value="Gray">
+          </div>
+        </div>
+        <div class="dd-group">
+          <span class="dd-label">设备</span>
+          <div class="dropdown" data-name="device" id="devDropdown">
+            <button type="button" class="dd-toggle">默认设备 (hpljm1005)<span class="dd-caret"></span></button>
+            <div class="dd-menu" id="devMenu">
+              <div class="dd-item selected" data-value="">默认设备 (hpljm1005)</div>
+            </div>
+            <input type="hidden" name="device" value="">
+          </div>
+        </div>
       </div>
-      <p class="hint">提示：ADF 模式要求扫描仪带自动进纸器；任务页点“开始连续扫描”会把整叠纸一次扫完。普通平板扫描仪保持默认即可。</p>
+      <p class="hint" id="advHint">正在探测设备能力…</p>
     </details>
   </form>
 </section>
 
-<section>
+<div class="section-title">
   <h2>历史任务</h2>
+</div>
+<section>
   <div class="grid">
   {% for j in jobs %}
     <a class="jobcard" href="/job/{{ j.name }}">
@@ -51,9 +79,9 @@
       </div>
     </a>
   {% else %}
-    <p>还没有扫描任务。</p>
+    <p style="color:var(--mut);font-size:13px">还没有扫描任务。</p>
   {% endfor %}
   </div>
 </section>
-<script>loadDevices();</script>
+<script>loadDevices(); initDropdowns();</script>
 {% endblock %}

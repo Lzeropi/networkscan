@@ -9,7 +9,7 @@
      {% if meta.params.get('source') == 'adf' %}连续进纸{% else %}平板{% endif %}
      ｜ 共 <span id="pgcount">{{ pairs|length }}</span> 页</p>
   <div class="actions">
-    <button class="primary" id="btnScan" onclick="scanPage('{{ job }}')">扫描一页（平板）</button>
+    <button class="primary" id="btnScan" onclick="scanPage('{{ job }}')">扫描单页</button>
     {% if meta.params.get('source') == 'adf' %}
     <button id="btnAdf" onclick="startAdf('{{ job }}')">开始连续扫描（ADF）</button>
     {% endif %}
