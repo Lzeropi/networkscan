@@ -1,3 +1,14 @@
+---
+AIGC:
+  ContentProducer: '001191110102MAD55U9H0F10002'
+  ContentPropagator: '001191110102MAD55U9H0F10002'
+  Label: '1'
+  ProduceID: '6d0a8b7b-56cb-4fd7-ab60-ce84387a1a4c'
+  PropagateID: '6d0a8b7b-56cb-4fd7-ab60-ce84387a1a4c'
+  ReservedCode1: '796fbd61-1c9a-49d1-a87a-3101a9edb111'
+  ReservedCode2: '796fbd61-1c9a-49d1-a87a-3101a9edb111'
+---
+
 # ScanWeb — 局域网扫描仪网页端（HP M1005 适配）
 
 平板 / ADF 扫描仪的局域网 Web 界面：创建任务 → 逐页或连续扫描 → 缩略图预览 → ZIP / PDF 一键下载。
@@ -49,6 +60,27 @@ uv cache clean                                # 可选，释放 ~25MB 缓存
 
 > 如果盒子访问外网困难，uv 也可用 pip 安装：`sudo apt install -y python3-pip && pip3 install uv`。
 
+### 备用方案：ARM32 上 Pillow 编译失败时（推荐先用这个）
+
+armhf 架构如果拉不到 Pillow 预编译 wheel，`uv sync` 会现场编译（需 gcc，2~5 分钟），
+盒子内存小于 1GB 时可能编译失败或卡死。**改用系统自带的 ARM 版 Pillow，免编译：**
+
+```bash
+# 方案 A：继续用 uv，让 venv 复用系统已装的 Pillow（不需要编译）
+sudo apt install -y python3-pil              # 系统自带 Pillow 7.2，已满足 pyproject 的 pillow>=7.0
+uv venv --python /usr/bin/python3 --system-site-packages .venv   # 关键：创建时启用系统包
+uv sync --no-dev --python /usr/bin/python3   # 系统 Pillow 已满足，uv 跳过安装
+
+# 方案 B：完全不用 uv，纯 pip（更简单直观，Pillow 直接用系统的）
+sudo apt install -y python3-pil python3-venv
+cd /opt/scanweb
+python3 -m venv .venv
+.venv/bin/pip install --no-cache-dir flask waitress   # 不装 Pillow，用系统 7.2
+```
+
+> 注意：方案 A 的 `--system-site-packages` 必须在 `uv venv` 创建时指定才生效。
+> 两个方案的 systemd `ExecStart` 都不用改，仍是 `.venv/bin/python app.py`。
+
 ## 运行权限与 systemd
 
 ```bash
@@ -94,5 +126,7 @@ sudo systemctl enable --now scanweb
 - 看不到设备：`sudo -u scanops scanimage -L` 验证权限；检查 lp/scanner 组。
 - ADF 报错：M1005 没有自动进纸器，ADF 模式不可用，保持默认平板模式即可。
 - 想用 SMB 直接访问：任务目录与普通扫描文件同目录同权限，无需额外配置。
-- ARM32 上 Pillow 无预编译 wheel 时会本地编译，需要 `gcc`（`sudo apt install build-essential`），
-  编译时间约 2-5 分钟，属正常现象。
+- ARM32 上 Pillow 安装：优先用 `sudo apt install python3-pil`（系统自带 ARM 版，免编译），
+  不要让它源码编译，详见上方「备用方案」。
+
+> AI生成

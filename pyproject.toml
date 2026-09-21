@@ -2,11 +2,11 @@
 name = "scanweb"
 version = "0.1.0"
 description = "LAN scanner web UI (scanimage + Flask + waitress)"
-requires-python = ">=3.10"
+requires-python = ">=3.8"
 dependencies = [
     "flask>=3.0",
     "waitress>=3.0",
-    "pillow>=10.0",
+    "pillow>=7.0",
 ]
 
 [tool.uv]
