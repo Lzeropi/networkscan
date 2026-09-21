@@ -261,7 +261,7 @@ def probe_devices(force=False):
             for m in re.finditer(r"device `([^']+)' is a (.+)", r.stdout + r.stderr):
                 dev, desc = m.group(1), m.group(2).strip()
                 info = {"name": dev, "desc": desc, "modes": [], "sources": [],
-                        "dpi": "", "scan_type": "未知", "error": ""}
+                        "dpi": "", "dpi_raw": [], "scan_type": "未知", "error": ""}
                 try:
                     a = subprocess.run([SCANIMAGE, "-A", "-d", dev],
                                         capture_output=True, text=True, timeout=25)
@@ -274,9 +274,16 @@ def probe_devices(force=False):
                         info["sources"] = [s.strip() for s in ms.group(1).split("|")]
                     has_adf = any("adf" in s.lower() for s in info["sources"])
                     info["scan_type"] = "平板 + ADF 连续" if has_adf else "仅平板单张"
-                    md = re.search(r"--resolution\s+(\d+)\.\.(\d+)", ao)
-                    if md:
-                        info["dpi"] = "%s–%s dpi" % (md.group(1), md.group(2))
+                    # 完整 DPI 列表（如 --resolution 75|100|150|200|300|600|1200dpi [75]）
+                    mr = re.search(r"--resolution\s+([^\[]+)\[", ao)
+                    if mr:
+                        info["dpi_raw"] = [d.strip().replace("dpi", "")
+                                           for d in mr.group(1).split("|")]
+                        info["dpi"] = info["dpi_raw"][0] + "–" + info["dpi_raw"][-1] + " dpi" if info["dpi_raw"] else ""
+                    else:
+                        md = re.search(r"--resolution\s+(\d+)\.\.(\d+)", ao)
+                        if md:
+                            info["dpi"] = "%s–%s dpi" % (md.group(1), md.group(2))
                 except Exception as e:
                     info["error"] = str(e)[:120]
                 devs.append(info)

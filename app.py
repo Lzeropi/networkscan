@@ -84,6 +84,11 @@ def manual():
     return render_template("manual.html")
 
 
+@app.route("/admin/manual")
+def admin_manual():
+    return render_template("admin-manual.html")
+
+
 # ---------------- API ----------------
 @app.post("/api/jobs")
 def api_create():

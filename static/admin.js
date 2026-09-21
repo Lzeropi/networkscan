@@ -185,9 +185,9 @@
         '<input type="text" id="alias_'+eid+'" placeholder="'+x.name+'" value="'+alias+'" style="flex:1;min-width:80px">' +
         '</div>' +
         '<div class="cfg-grid" style="grid-template-columns:auto auto auto 1fr;gap:6px;align-items:center">' +
-        '<label class="hint">默认DPI <select id="dpi_'+eid+'" style="padding:4px;border-radius:6px;border:1px solid var(--border)">'+dpiOpts+'</select></label>' +
-        '<label class="hint">默认色彩 <select id="mode_'+eid+'" style="padding:4px;border-radius:6px;border:1px solid var(--border)">'+modeOpts+'</select></label>' +
-        '<label class="hint"><input type="checkbox" id="crop_'+eid+'" '+curCrop+'> 裁边</label>' +
+        '<span class="hint" style="display:flex;align-items:center;gap:4px">默认DPI <select id="dpi_'+eid+'" style="padding:4px;border-radius:6px;border:1px solid var(--border)">'+dpiOpts+'</select></span>' +
+        '<span class="hint" style="display:flex;align-items:center;gap:4px">默认色彩 <select id="mode_'+eid+'" style="padding:4px;border-radius:6px;border:1px solid var(--border)">'+modeOpts+'</select></span>' +
+        '<span class="hint" style="display:flex;align-items:center;gap:4px"><input type="checkbox" id="crop_'+eid+'" '+curCrop+'> 裁边</span>' +
         '<button class="primary" data-dev-save="'+x.name+'" style="white-space:nowrap">保存</button>' +
         '</div></div></div>');
     });
