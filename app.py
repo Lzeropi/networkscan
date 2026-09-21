@@ -29,7 +29,7 @@ FNAME_RE = re.compile(r"p\d{3}\.(png|jpg)")
 # ---------------- 登录（仅当设置 TOKEN 时启用） ----------------
 @app.before_request
 def require_login():
-    if not TOKEN or session.get("ok") or request.endpoint in ("login", "static"):
+    if not TOKEN or session.get("ok") or request.endpoint in ("login", "static", "architecture"):
         return
     return redirect(url_for("login"))
 
@@ -87,6 +87,11 @@ def manual():
 @app.route("/admin/manual")
 def admin_manual():
     return render_template("admin-manual.html")
+
+
+@app.route("/architecture")
+def architecture():
+    return send_file(os.path.join(app.static_folder, "architecture.html"))
 
 
 # ---------------- API ----------------

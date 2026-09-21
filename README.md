@@ -3,10 +3,10 @@ AIGC:
   ContentProducer: '001191110102MAD55U9H0F10002'
   ContentPropagator: '001191110102MAD55U9H0F10002'
   Label: '1'
-  ProduceID: 'cb249922-e719-4e6d-a1d4-b7cc6ceccf66'
-  PropagateID: 'cb249922-e719-4e6d-a1d4-b7cc6ceccf66'
-  ReservedCode1: '6fdcdb7d-d445-4314-9f87-7c3175078299'
-  ReservedCode2: '6fdcdb7d-d445-4314-9f87-7c3175078299'
+  ProduceID: '599680b1-94fa-4826-98ed-c8ac16ee7036'
+  PropagateID: '599680b1-94fa-4826-98ed-c8ac16ee7036'
+  ReservedCode1: 'a22a396a-27b2-46f2-b88e-1f489943a23e'
+  ReservedCode2: 'a22a396a-27b2-46f2-b88e-1f489943a23e'
 ---
 
 # ScanWeb — 局域网网页扫描系统
@@ -23,7 +23,7 @@ AIGC:
 | 前端形态 | 单页原生 HTML/CSS/JS，零外部依赖、零数据库、无 CDN 引用 |
 | 默认端口 | 9203 |
 
-> v1.13 更新：① 内置示例任务（输出目录为空时启动自动部署，带 🔒 锁定防清理）；② 默认端口改为 9203；③ CPU 温度优先读海思 /proc/msp/pm_cpu；④ 修复扫描报错——设备短名自动解析为完整名（hpljm1005: → hpljm1005:libusb:xxx:xxx，缓存 60 秒）+ 显式 --format=pnm 消除警告。
+> v1.13 更新：① 内置示例任务（输出目录为空时启动自动部署，带 🔒 锁定防清理）；② 默认端口改为 9203；③ CPU 温度优先读海思 /proc/msp/pm_cpu；④ 修复扫描报错——设备短名自动解析为完整名（hpljm1005: → hpljm1005:libusb:xxx:xxx，缓存 60 秒）+ 显式 --format=pnm 消除警告。⑤ 新增交互式系统架构图（/architecture），管理员手册第 12 章。
 >
 > v1.12 测试版修复记录：① 中文任务名 ZIP 下载报错（Content-Disposition 改为 RFC 5987 编码）；② 缩略图/原图缺失时返回 404 而非 500；③ 非法任务名/任务不存在统一返回 404。共 79 项端到端测试全部通过（排序 19 + 管理页 28 + 开关模式 10 + 功能 22）。
 
@@ -48,6 +48,8 @@ AIGC:
 ```
 
 hpljm1005 后端不支持 `--format=png`，扫描输出为 PNM 格式，需 convert 转 PNG 后进入任务目录（`p%03d.png` 连续编号）。
+
+> **交互式系统架构图**：上述 ASCII 图的完整交互版（含管理支路、守护支路、配置与存储链路）支持节点搜索、悬停高亮、点击查看详情、缩放平移、深浅主题切换与 SVG/PNG 导出。服务启动后访问 `http://<盒子IP>:9203/architecture`，或在管理员手册第 12 章打开。
 
 ## 二、功能介绍
 
@@ -298,7 +300,7 @@ ss -tlnp | grep 9203              # 确认端口监听
 ├── jobs.py           # 任务/页面文件管理、锁定、自动清理
 ├── config.py         # 环境变量与管理配置文件（admin_config.json）读取
 ├── templates/        # Jinja2 页面（首页/任务页/手册/管理页/登录）
-├── static/           # app.js / admin.js / style.css（零外部依赖）
+├── static/           # app.js / admin.js / style.css / architecture.html（零外部依赖）
 └── deploy/networkscan.service
 ```
 
