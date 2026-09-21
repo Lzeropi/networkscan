@@ -6,7 +6,7 @@ requires-python = ">=3.8"
 dependencies = [
     "flask>=3.0",
     "waitress>=3.0",
-    "pillow>=7.0",
+    "pillow>=7.0,<9",
 ]
 
 [tool.uv]
