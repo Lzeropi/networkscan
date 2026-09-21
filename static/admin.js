@@ -82,12 +82,12 @@
     $(valId).textContent = text;
   }
 
-  async function loadOverview() {
+  async function loadOverview(onlyResources) {
     const d = await api("/api/admin/overview");
     if (d._status === 401) { location.reload(); return; }
     $("verBadge").textContent = "v" + (d.version || "");
     $("uptime").textContent = d.uptime || "--";
-    // 资源
+    // 资源（每次都刷新）
     setBar("barCpu", "valCpu", d.cpu.percent, d.cpu.percent + "%");
     const temp = d.cpu.temp;
     setBar("barTemp", "valTemp", temp == null ? 0 : Math.min(100, temp / 90 * 100),
@@ -99,7 +99,8 @@
     setBar("barScan", "valScan", d.disk_scan.percent,
       d.disk_scan.percent + "%（剩 " + d.disk_scan.free_gb + " GB）");
     $("scanDirSize").textContent = "扫描目录当前占用：" + fmtSize(d.scan_dir_size);
-    // 依赖
+    // 依赖表和配置回显只在首次加载时执行，自动刷新时跳过（防闪烁）
+    if (onlyResources) return;
     const tb = $("envTable").querySelector("tbody");
     tb.innerHTML = "";
     (d.env.deps || []).forEach(x => {
@@ -115,7 +116,7 @@
     tb.insertAdjacentHTML("beforeend",
       "<tr><td>存储目录</td><td>" + (d.env.scan_root_writable ? "✓" : "✗") + "</td><td>" + d.env.scan_root +
       (d.env.scan_root_writable ? "（可写）" : (d.env.scan_root_exists ? "（无写入权限！）" : "（不存在！）")) + "</td></tr>");
-    // 配置回显
+    // 配置回显（首次加载）
     if (!$("scanRootInput").value) $("scanRootInput").value = d.scan_root || "";
     if (document.activeElement !== $("cfgJobs")) $("cfgJobs").value = d.cleanup.max_jobs;
     if (document.activeElement !== $("cfgDays")) $("cfgDays").value = d.cleanup.max_age_days;
@@ -125,7 +126,7 @@
   let autoTimer = null;
   function startAutoRefresh() {
     if (autoTimer) clearInterval(autoTimer);
-    autoTimer = setInterval(loadOverview, 30000);
+    autoTimer = setInterval(() => loadOverview(true), 30000);
   }
 
   /* ---------------- 设备（含别名+默认值） ---------------- */

@@ -465,6 +465,8 @@ function addDeleteMark(fig) {
   mark.addEventListener("click", async function(ev) {
     ev.stopPropagation();
     ev.preventDefault();
+    // 只在 del-btn 状态下响应（del-cancel 由全局 listener 处理）
+    if (!mark.classList.contains("del-btn")) return;
     const ok = await customConfirm("确认将此页标记为删除？", "删除图片");
     if (ok) {
       fig.classList.add("del-selected");
@@ -476,7 +478,7 @@ function addDeleteMark(fig) {
   fig.appendChild(mark);
 }
 
-/* 点击取消删除：直接恢复，不需要确认 */
+/* 点击取消删除：直接恢复，不需要确认（全局监听，拦截在冒泡前） */
 document.addEventListener("click", function(ev) {
   const mark = ev.target.closest(".del-mark.del-cancel");
   if (!mark) return;
@@ -487,7 +489,7 @@ document.addEventListener("click", function(ev) {
   mark.className = "del-mark del-btn";
   mark.textContent = "\u2715 删除";
   mark.title = "删除此页";
-});
+}, true);  /* 使用捕获阶段，确保在 addDeleteMark 的 click 之前执行 */
 
 function exitDeleteMode() {
   const wall = document.getElementById("wall");
