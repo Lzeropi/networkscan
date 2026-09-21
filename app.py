@@ -12,12 +12,14 @@ from flask import (Flask, Response, abort, jsonify, redirect,
                    stream_with_context, url_for)
 from waitress import serve
 
+import admin
 import jobs
 import scanner
 from config import BIND, CONVERT, MAX_PDF_PAGES, PORT, SCANIMAGE, SECRET, TOKEN
 
 app = Flask(__name__)
 app.secret_key = SECRET
+app.register_blueprint(admin.bp)
 FNAME_RE = re.compile(r"p\d{3}\.(png|jpg)")
 
 
@@ -279,4 +281,6 @@ def dl_pdf(job):
 
 
 if __name__ == "__main__":
+    jobs.cleanup()                      # 启动时执行一次清理（锁定任务永不动）
+    admin.start_cleanup_scheduler()     # 后台每小时检查一次
     serve(app, host=BIND, port=PORT, threads=8)

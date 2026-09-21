@@ -6,8 +6,8 @@ import threading
 from PIL import Image
 
 import jobs
-from config import (CONVERT, DEVICE, SCAN_ROOT, SCAN_SOURCE,
-                    SCANIMAGE, THUMB_SIZE)
+from config import (CONVERT, DEVICE, SCAN_SOURCE,
+                    SCANIMAGE, THUMB_SIZE, get_scan_root)
 
 scan_lock = threading.Lock()          # 扫描仪全局独占锁
 state = {}                            # job -> {"state": "scanning|done|error", "msg": str}
@@ -59,8 +59,8 @@ def _convert_pnms(job, start):
 
 
 def _mk_thumb(job, fname):
-    src = os.path.join(SCAN_ROOT, job, fname)
-    dst = os.path.join(SCAN_ROOT, job, ".thumbs", fname[:-4] + ".jpg")
+    src = os.path.join(get_scan_root(), job, fname)
+    dst = os.path.join(get_scan_root(), job, ".thumbs", fname[:-4] + ".jpg")
     im = Image.open(src)
     im.thumbnail(THUMB_SIZE)
     im.convert("RGB").save(dst, quality=80)
@@ -72,7 +72,7 @@ def scan_flatbed(job):
     with scan_lock:
         n = len(jobs.pages(job)) + 1          # 以磁盘实际页数为准，防编号冲突
         fname = f"p{n:03d}.png"
-        out = os.path.join(SCAN_ROOT, job, fname)
+        out = os.path.join(get_scan_root(), job, fname)
         tmp = os.path.join("/tmp", f"scanweb_{job}_{n:03d}.pnm")
         try:
             with open(tmp, "wb") as fh:
@@ -102,7 +102,7 @@ def scan_adf(job):
             st = state.setdefault(job, {})
             st.update(state="scanning", msg="ADF 连续扫描中…")
             start = len(jobs.pages(job)) + 1
-            pat = os.path.join(SCAN_ROOT, job, "p%03d.pnm")
+            pat = os.path.join(get_scan_root(), job, "p%03d.pnm")
             source = p.get("source_name") or SCAN_SOURCE  # 优先用探测到的源名，其次配置回退
             cmd = _base_cmd(p)
             if source:                      # 有值才传 --source（无 ADF 设备不传）

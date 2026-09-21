@@ -210,3 +210,35 @@ figcaption a{padding:2px 8px;font-size:13px}
   .jobcard .thumb{height:100px}
   .jobcard .thumb img{height:100px}
 }
+
+/* ---------- v1.10 管理页 ---------- */
+.admin-bar{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:14px;flex-wrap:wrap;gap:8px}
+.ver-badge{display:inline-block;background:var(--acc);color:#fff;font-size:12px;font-weight:600;border-radius:10px;padding:2px 10px;vertical-align:middle;margin-left:6px}
+.pin-gate{position:fixed;inset:0;background:rgba(30,60,120,.28);backdrop-filter:blur(3px);display:flex;align-items:center;justify-content:center;z-index:99}
+.pin-card{width:320px;text-align:center;padding:26px 22px}
+.pin-card input{width:100%;padding:10px 12px;margin:8px 0;border-radius:8px;border:1px solid var(--border);font-size:15px;box-sizing:border-box}
+.res-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:16px}
+.res-item .res-label{font-size:13px;color:var(--mut);margin-bottom:6px}
+.res-item .bar{height:10px;background:#eef2f8;border-radius:6px;overflow:hidden}
+.res-item .bar-fill{height:100%;width:0;background:var(--acc);border-radius:6px;transition:width .4s}
+.res-item .bar-fill.temp{background:#f0a020}
+.res-item .bar-fill.warn{background:#e05252}
+.res-item .res-val{font-size:13px;margin-top:5px;color:var(--mut)}
+.admin-table{width:100%;border-collapse:collapse;font-size:13px}
+.admin-table th,.admin-table td{padding:8px 10px;border-bottom:1px solid var(--border);text-align:left;vertical-align:top}
+.admin-table th{color:var(--mut);font-weight:600;background:#f6f9fd}
+.admin-table tr.locked-row td{background:#fdfbe8}
+.dev-card{border:1px solid var(--border);border-radius:8px;padding:10px 14px;margin-bottom:10px}
+.dev-card .hint{margin:4px 0 8px}
+.dev-table{font-size:13px;border-collapse:collapse}
+.dev-table td{padding:3px 14px 3px 0;color:#333}
+.dev-table td:first-child{color:var(--mut)}
+.cfg-row{display:flex;gap:10px;margin:10px 0;flex-wrap:wrap}
+.cfg-row input{padding:9px 12px;border-radius:8px;border:1px solid var(--border);font-size:14px}
+.cfg-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:12px;margin:10px 0}
+.cfg-grid label{display:flex;align-items:center;gap:6px;font-size:13px;color:#333;border:1px solid var(--border);border-radius:8px;padding:8px 12px;flex-wrap:wrap}
+.cfg-grid input{width:76px;padding:6px;border-radius:6px;border:1px solid var(--border);text-align:center}
+.btn.sm{padding:4px 10px;font-size:12px}
+.btn.danger{color:#c0392b;border-color:#e0b4b0}
+.btn.danger:hover{background:#fbecea}
+.btn:disabled{opacity:.45;cursor:not-allowed}

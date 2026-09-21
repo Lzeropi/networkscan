@@ -1,0 +1,128 @@
+{% extends "base.html" %}
+{% block title %}系统管理 - 扫描仪{% endblock %}
+{% block content %}
+<p><a href="/">← 返回首页</a></p>
+
+<!-- PIN 登录层（未登录时全屏覆盖） -->
+<div id="pinGate" class="pin-gate" style="display:none">
+  <div class="pin-card card">
+    <h2 id="pinTitle">🔒 管理验证</h2>
+    <p class="hint" id="pinHint">请输入管理 PIN 码</p>
+    <p class="hint" id="pinConfirmHint" style="display:none">请再输入一次以确认</p>
+    <input type="password" id="pinInput" placeholder="PIN（至少 4 位）" maxlength="16" autocomplete="off">
+    <input type="password" id="pinConfirm" placeholder="再输入一次" maxlength="16" style="display:none">
+    <button class="primary" id="pinBtn" style="width:100%">进入</button>
+    <p class="status err" id="pinErr" style="display:none"></p>
+  </div>
+</div>
+
+<!-- 管理面板（登录后显示） -->
+<div id="adminPanel" style="display:none">
+
+  <div class="admin-bar">
+    <div>
+      <h2 style="margin:0">系统管理 <span class="ver-badge" id="verBadge"></span></h2>
+      <p class="hint" style="margin:4px 0 0">服务运行：<span id="uptime"></span></p>
+    </div>
+    <div class="reorder-controls">
+      <button class="btn" id="btnRefreshAll">刷新全部</button>
+      <button class="btn" id="btnLogout">退出管理</button>
+    </div>
+  </div>
+
+  <!-- 资源监控 -->
+  <section class="card">
+    <div class="section-title"><h2>宿主机资源</h2><p class="hint">每 30 秒自动刷新</p></div>
+    <div class="res-grid">
+      <div class="res-item">
+        <div class="res-label">CPU 使用率</div>
+        <div class="bar"><div class="bar-fill" id="barCpu"></div></div>
+        <div class="res-val" id="valCpu">--</div>
+      </div>
+      <div class="res-item">
+        <div class="res-label">CPU 温度</div>
+        <div class="bar"><div class="bar-fill temp" id="barTemp"></div></div>
+        <div class="res-val" id="valTemp">--</div>
+      </div>
+      <div class="res-item">
+        <div class="res-label">内存</div>
+        <div class="bar"><div class="bar-fill" id="barMem"></div></div>
+        <div class="res-val" id="valMem">--</div>
+      </div>
+      <div class="res-item">
+        <div class="res-label">系统盘 (/)</div>
+        <div class="bar"><div class="bar-fill" id="barRoot"></div></div>
+        <div class="res-val" id="valRoot">--</div>
+      </div>
+      <div class="res-item">
+        <div class="res-label">扫描目录所在盘</div>
+        <div class="bar"><div class="bar-fill" id="barScan"></div></div>
+        <div class="res-val" id="valScan">--</div>
+      </div>
+    </div>
+    <p class="hint" id="scanDirSize"></p>
+  </section>
+
+  <!-- 环境/依赖检测 -->
+  <section class="card">
+    <div class="section-title"><h2>环境 / 依赖检测</h2></div>
+    <table class="admin-table" id="envTable">
+      <thead><tr><th>项目</th><th>状态</th><th>版本 / 说明</th></tr></thead>
+      <tbody></tbody>
+    </table>
+    <p class="hint" id="envExtra"></p>
+  </section>
+
+  <!-- 扫描设备 -->
+  <section class="card">
+    <div class="section-title">
+      <h2>扫描设备</h2>
+      <div class="reorder-controls">
+        <button class="btn" id="btnProbe">重新探测</button>
+        <button class="btn primary" id="btnTestScan">测试扫描</button>
+      </div>
+    </div>
+    <div id="devBox"><p class="hint">加载中…</p></div>
+    <p class="hint" id="devCacheNote"></p>
+  </section>
+
+  <!-- 存储位置配置 -->
+  <section class="card">
+    <div class="section-title"><h2>扫描存储位置</h2></div>
+    <p class="hint">扫描生成的图片保存目录。修改后立即生效（无需重启服务）；历史任务列表将显示新目录中的内容。</p>
+    <div class="cfg-row">
+      <input type="text" id="scanRootInput" placeholder="/opt/smb_share/scans" style="flex:1">
+      <button class="primary" id="btnSaveRoot">保存路径</button>
+    </div>
+    <p class="hint">默认值：/opt/smb_share/scans（未修改时沿用环境变量或该默认值）</p>
+    <p class="status" id="rootMsg" style="display:none"></p>
+  </section>
+
+  <!-- 清理策略 -->
+  <section class="card">
+    <div class="section-title"><h2>历史记录自动清理</h2></div>
+    <p class="hint">三项可任意组合（填 0 表示不启用该条）；<b>任意一条超出限制即执行对应清理</b>，从最旧任务开始删除。<b>带 🔒 锁定的任务永远不会被清理或删除</b>。</p>
+    <div class="cfg-grid">
+      <label>任务数不超过 <input type="number" id="cfgJobs" min="0" step="1" value="0"> 条</label>
+      <label>任务保留不超过 <input type="number" id="cfgDays" min="0" step="1" value="0"> 天</label>
+      <label>总占用不超过 <input type="number" id="cfgMB" min="0" step="1" value="0"> MB</label>
+    </div>
+    <div class="cfg-row">
+      <button class="primary" id="btnSaveCleanup">保存清理策略（保存后立即执行一次）</button>
+    </div>
+    <p class="status" id="cleanupMsg" style="display:none"></p>
+  </section>
+
+  <!-- 历史任务管理 -->
+  <section class="card">
+    <div class="section-title"><h2>历史任务管理</h2><button class="btn" id="btnReloadJobs">刷新列表</button></div>
+    <table class="admin-table" id="jobsTable">
+      <thead><tr><th>任务</th><th>创建时间</th><th>页数</th><th>大小</th><th>操作</th></tr></thead>
+      <tbody></tbody>
+    </table>
+  </section>
+
+</div>
+
+<script src="{{ url_for('static', filename='admin.js') }}"></script>
+{% endblock %}
