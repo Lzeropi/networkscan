@@ -1,5 +1,6 @@
 {% extends "base.html" %}
 {% block title %}系统管理 - 网络扫描仪{% endblock %}
+{% block nav %}<a href="/admin/manual">管理员操作手册</a>{% endblock %}
 {% block content %}
 <p><a href="/">← 返回首页</a></p>
 
@@ -25,7 +26,6 @@
       <p class="hint" style="margin:4px 0 0">服务运行：<span id="uptime"></span></p>
     </div>
     <div class="reorder-controls">
-      <a class="btn" href="/admin/manual">管理员手册</a>
       <button class="btn" id="btnRefreshAll">刷新全部</button>
       <button class="btn" id="btnLogout">退出管理</button>
     </div>
