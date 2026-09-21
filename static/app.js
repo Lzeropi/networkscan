@@ -19,25 +19,39 @@ function loadDevices() {
   if (!devMenu) return;
   fetch("/api/devices").then(r => r.json()).then(data => {
     _devCaps = data.devs || [];
-    _devCaps.forEach(dev => {
+    // 动态填充设备下拉
+    devMenu.innerHTML = "";
+    _devCaps.forEach((dev, i) => {
       const item = document.createElement("div");
-      item.className = "dd-item";
+      item.className = "dd-item" + (i === 0 ? " selected" : "");
       item.dataset.value = dev.name;
       item.textContent = dev.alias || dev.name;
       devMenu.appendChild(item);
     });
     if (_devCaps.length > 0) {
-      updateDeviceOptions("");  // 空值 = 默认设备 = 第一台
+      // 选中第一台设备
+      const first = _devCaps[0];
+      const devToggle = document.querySelector("#devDropdown .dd-toggle");
+      const devHidden = document.querySelector("#devDropdown input[type=hidden]");
+      if (devToggle) devToggle.firstChild.textContent = first.alias || first.name;
+      if (devHidden) devHidden.value = first.name;
+      updateDeviceOptions(first.name);
     } else {
+      // 无设备
+      const devToggle = document.querySelector("#devDropdown .dd-toggle");
+      if (devToggle) devToggle.firstChild.textContent = "未找到有效设备";
+      const dpiToggle = document.querySelector('[data-name="dpi"] .dd-toggle');
+      if (dpiToggle) dpiToggle.firstChild.textContent = "—";
+      const modeToggle = document.querySelector("#modeDropdown .dd-toggle");
+      if (modeToggle) modeToggle.firstChild.textContent = "—";
       const hint = document.getElementById("advHint");
-      if (hint) hint.textContent = "未探测到扫描设备，请检查设备连接和权限。";
+      if (hint) hint.textContent = "未找到有效设备，请检查扫描仪连接和权限。";
     }
   }).catch(() => {});
 }
 
-/* 根据选中设备的能力，动态显示/隐藏 ADF 选项和模式选项 */
+/* 根据选中设备的能力，动态填充分辨率和色彩模式 */
 function updateDeviceOptions(selectedDev) {
-  // 选中设备为空 = 默认设备，取第一台探测到的设备能力
   const dev = selectedDev
     ? _devCaps.find(d => d.name === selectedDev)
     : _devCaps[0];
@@ -45,70 +59,53 @@ function updateDeviceOptions(selectedDev) {
   const adfLabel = document.getElementById("adfLabel");
   const sourceName = document.getElementById("source_name");
   const modeDropdown = document.getElementById("modeDropdown");
+  const dpiDropdown = document.querySelector('[data-name="dpi"]');
   const hint = document.getElementById("advHint");
+  const sourceFieldset = document.getElementById("sourceFieldset");
 
   if (!dev) {
-    // 无设备：隐藏所有选项，明确提示
     if (sourceFieldset) sourceFieldset.style.display = "none";
     if (modeDropdown) modeDropdown.style.display = "none";
+    if (dpiDropdown) dpiDropdown.style.display = "none";
     if (hint) hint.textContent = "未找到有效设备，请检查扫描仪连接和权限。";
     return;
   }
-  // 有设备：确保选项区可见
   if (modeDropdown) modeDropdown.style.display = "";
+  if (dpiDropdown) dpiDropdown.style.display = "";
 
-  // ADF：设备有非 Flatbed 的 source 才显示"扫描方式"区块
+  // ADF
   const adfSources = (dev.sources || []).filter(s =>
     /adf|feeder/i.test(s) && !/flatbed/i.test(s)
   );
-  const sourceFieldset = document.getElementById("sourceFieldset");
-  if (sourceFieldset) {
-    // 无 ADF 时隐藏整个"扫描方式"区块（只有一个选项的 radio 无意义）
-    sourceFieldset.style.display = adfSources.length > 0 ? "" : "none";
-  }
-  if (adfLabel) {
-    adfLabel.style.display = adfSources.length > 0 ? "" : "none";
-    if (adfSources.length === 0) {
-      const flatbedRadio = document.querySelector('input[name="source"][value="flatbed"]');
-      if (flatbedRadio) flatbedRadio.checked = true;
-    }
-  }
-  if (sourceName) {
-    sourceName.value = adfSources.length > 0 ? adfSources[0] : "";
-  }
+  if (sourceFieldset) sourceFieldset.style.display = adfSources.length > 0 ? "" : "none";
+  if (adfLabel) adfLabel.style.display = adfSources.length > 0 ? "" : "none";
+  if (sourceName) sourceName.value = adfSources.length > 0 ? adfSources[0] : "";
 
-  // 模式：只保留设备支持的选项（自定义下拉版本）
-  if (modeDropdown && dev.modes && dev.modes.length > 0) {
+  // 动态填充色彩模式
+  if (modeDropdown) {
+    const modeMenu = modeDropdown.querySelector(".dd-menu");
     const modeToggle = modeDropdown.querySelector(".dd-toggle");
     const modeHidden = modeDropdown.querySelector("input[type=hidden]");
-    const modeItems = modeDropdown.querySelectorAll(".dd-item");
-    const currentVal = modeHidden.value;
-    modeItems.forEach(item => {
-      item.classList.toggle("hidden", !dev.modes.includes(item.dataset.value));
+    const modes = dev.modes || ["Gray"];
+    modeMenu.innerHTML = "";
+    modes.forEach((m, i) => {
+      const item = document.createElement("div");
+      item.className = "dd-item" + (i === 0 ? " selected" : "");
+      item.dataset.value = m;
+      item.textContent = MODE_CN[m] || m;
+      modeMenu.appendChild(item);
     });
-    // 当前选中的模式如果不支持，切到第一个支持的
-    if (!dev.modes.includes(currentVal)) {
-      const firstOk = Array.from(modeItems).find(i => dev.modes.includes(i.dataset.value) && !i.classList.contains("hidden"));
-      if (firstOk) {
-        modeHidden.value = firstOk.dataset.value;
-        modeToggle.firstChild.textContent = firstOk.textContent;
-        modeItems.forEach(i => i.classList.remove("selected"));
-        firstOk.classList.add("selected");
-      }
+    if (modes.length > 0) {
+      modeHidden.value = modes[0];
+      modeToggle.firstChild.textContent = MODE_CN[modes[0]] || modes[0];
     }
   }
 
-  // 提示文字（模式用中文显示）
+  // 提示文字
   if (hint) {
-    const parts = [];
     const cnModes = (dev.modes || ["未知"]).map(m => MODE_CN[m] || m);
-    parts.push("模式：" + cnModes.join("/"));
-    if (adfSources.length > 0) {
-      parts.push("ADF 源：" + adfSources.join("/"));
-    } else {
-      parts.push("无 ADF（平板模式）");
-    }
-    hint.textContent = "设备能力已探测 → " + parts.join("，");
+    hint.textContent = "设备能力已探测 → 模式：" + cnModes.join("/") +
+      (adfSources.length > 0 ? "，ADF 源：" + adfSources.join("/") : "，无 ADF（平板模式）");
   }
 }
 
@@ -368,55 +365,41 @@ function toggleBtnSortMode() {
 }
 
 /* ---------- 删除图片模式 ---------- */
+/* 流程：点删除图片 → 每图显示删除图标 → 点图标弹确认 → 确认后变预删除(灰色+取消删除) → 点保存删除弹确认 → 确认后删文件+重编号
+   取消按钮始终可用 → 清除所有预删除+退出删除模式 */
 function toggleDeleteMode(job) {
   const wall = document.getElementById("wall");
   const btnDel = document.getElementById("btnDeletePages");
-  const btnSave = document.getElementById("btnSaveOrder");
-  const btnCancel = document.getElementById("btnCancelOrder");
-  const btnToggle = document.getElementById("btnToggleBtnSort");
   if (!wall) return;
 
   if (!_deleteMode) {
     // 进入删除模式
     _deleteMode = true;
     wall.classList.add("delete-mode");
-    // 按钮切换：删除图片 → 保存删除（红色）
     btnDel.textContent = "保存删除";
-    // 其他按钮变灰
-    btnSave.classList.add("controls-disabled");
-    btnCancel.classList.add("controls-disabled");
+    // 其他按钮变灰，但取消按钮保持可用
+    const btnSave = document.getElementById("btnSaveOrder");
+    const btnToggle = document.getElementById("btnToggleBtnSort");
+    if (btnSave) btnSave.classList.add("controls-disabled");
     if (btnToggle) btnToggle.classList.add("controls-disabled");
     // 隐藏拖拽箭头按钮
     document.querySelectorAll("#wall figure .mv-btns").forEach(w => w.style.display = "none");
     // 给每张图添加删除图标
     wall.querySelectorAll("figure").forEach(fig => {
-      if (fig.classList.contains("converting")) return;  // 转换中的不标记
-      let mark = fig.querySelector(".del-mark");
-      if (!mark) {
-        mark = document.createElement("div");
-        mark.className = "del-mark";
-        mark.textContent = "\u2715";
-        mark.title = "删除此页";
-        mark.addEventListener("click", function(ev) {
-          ev.stopPropagation();
-          ev.preventDefault();
-          toggleDeleteMark(fig);
-        });
-        fig.appendChild(mark);
-      }
-      mark.style.display = "flex";
+      if (fig.classList.contains("converting")) return;
       fig.draggable = false;
+      let mark = fig.querySelector(".del-mark");
+      if (mark) mark.remove();
+      addDeleteMark(fig);
     });
   } else {
-    // 保存删除
+    // 点保存删除
     const marked = Array.from(wall.querySelectorAll("figure.del-selected")).map(f => f.dataset.name);
     if (marked.length === 0) {
-      // 没有选中删除的，直接退出删除模式
       exitDeleteMode();
       return;
     }
     if (!confirm("确认删除 " + marked.length + " 张图片？删除后页面将重新编号。")) return;
-    // 收集剩余文件名（按当前顺序）
     const remaining = Array.from(wall.querySelectorAll("figure:not(.del-selected)"))
       .filter(f => !f.classList.contains("converting"))
       .map(f => f.dataset.name);
@@ -424,28 +407,52 @@ function toggleDeleteMode(job) {
   }
 }
 
-function toggleDeleteMark(fig) {
-  fig.classList.toggle("del-selected");
+function addDeleteMark(fig) {
+  const mark = document.createElement("div");
+  mark.className = "del-mark del-btn";
+  mark.textContent = "\u2715";
+  mark.title = "删除此页";
+  mark.addEventListener("click", function(ev) {
+    ev.stopPropagation();
+    ev.preventDefault();
+    if (confirm("确认将此页标记为删除？")) {
+      fig.classList.add("del-selected");
+      mark.className = "del-mark del-cancel";
+      mark.textContent = "\u21BA";
+      mark.title = "取消删除";
+    }
+  });
+  fig.appendChild(mark);
 }
+
+/* 点击取消删除图标：直接恢复，不需要确认 */
+document.addEventListener("click", function(ev) {
+  const mark = ev.target.closest(".del-mark.del-cancel");
+  if (!mark) return;
+  ev.stopPropagation();
+  ev.preventDefault();
+  const fig = mark.closest("figure");
+  fig.classList.remove("del-selected");
+  mark.className = "del-mark del-btn";
+  mark.textContent = "\u2715";
+  mark.title = "删除此页";
+});
 
 function exitDeleteMode() {
   const wall = document.getElementById("wall");
   const btnDel = document.getElementById("btnDeletePages");
   const btnSave = document.getElementById("btnSaveOrder");
-  const btnCancel = document.getElementById("btnCancelOrder");
   const btnToggle = document.getElementById("btnToggleBtnSort");
   _deleteMode = false;
   wall.classList.remove("delete-mode");
   btnDel.textContent = "删除图片";
-  btnSave.classList.remove("controls-disabled");
-  btnCancel.classList.remove("controls-disabled");
+  if (btnSave) btnSave.classList.remove("controls-disabled");
   if (btnToggle) btnToggle.classList.remove("controls-disabled");
   // 移除删除图标和标记
   wall.querySelectorAll("figure").forEach(fig => {
     fig.classList.remove("del-selected");
     const mark = fig.querySelector(".del-mark");
-    if (mark) mark.style.display = "none";
-    // 恢复箭头按钮显隐
+    if (mark) mark.remove();
     const mv = fig.querySelector(".mv-btns");
     if (mv) mv.style.display = _btnSortMode ? "flex" : "none";
     fig.draggable = true;

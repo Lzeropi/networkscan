@@ -3,12 +3,13 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>{% block title %}扫描仪{% endblock %}</title>
+<title>{% block title %}网络扫描仪{% endblock %}</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'><rect x='3' y='3' width='18' height='4' rx='1' fill='%234080ff'/><rect x='5' y='9' width='14' height='8' rx='1' fill='%234080ff' opacity='0.25'/><rect x='7' y='11' width='10' height='1' fill='%234080ff'/><rect x='7' y='13' width='10' height='1' fill='%234080ff'/><rect x='7' y='15' width='6' height='1' fill='%234080ff'/><rect x='8' y='19' width='8' height='3' rx='1' fill='%2380c0ff'/></svg>">
 <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
 </head>
 <body>
 <header>
-  <h1>📄 扫描仪</h1>
+  <h1>🖨️ 网络扫描仪</h1>
   <nav>
     <a href="/manual">操作手册</a>
     {% if authed %}<a href="/logout">退出登录</a>{% endif %}
