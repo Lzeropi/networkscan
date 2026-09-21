@@ -18,7 +18,7 @@ import jobs
 import scanner
 import time as _time
 from config import BIND, CONVERT, MAX_PDF_PAGES, PORT, SCANIMAGE, SECRET, TOKEN
-from config import get_scan_root, get_scan_defaults
+from config import get_scan_root
 
 app = Flask(__name__)
 app.secret_key = SECRET
@@ -69,8 +69,7 @@ def index():
     jobs.cleanup()
     return render_template("index.html", jobs=jobs.list_jobs(),
                            scanimage_ok=os.path.exists(SCANIMAGE),
-                           convert_ok=os.path.exists(CONVERT),
-                           scan_defaults=get_scan_defaults())
+                           convert_ok=os.path.exists(CONVERT))
 
 
 @app.route("/job/<job>")
@@ -261,21 +260,18 @@ def api_devices():
         _DEV_CACHE["ts"] = now
 
     devs = _DEV_CACHE["data"] or []
-    # 附加设备别名（每次都读，因为别名可能随时改）
+    # 附加设备别名和按设备的扫描默认值（每次都读，可能随时改）
     try:
         from config import load_admin_cfg
-        aliases = load_admin_cfg().get("device_alias", {})
+        cfg = load_admin_cfg()
+        aliases = cfg.get("device_alias", {})
+        all_defaults = cfg.get("scan_defaults", {})
         for d in devs:
             d["alias"] = aliases.get(d["name"], "")
+            d["defaults"] = all_defaults.get(d["name"], {})
     except Exception:
         pass
-    # 附加扫描默认值（每次都读）
-    try:
-        from config import get_scan_defaults
-        defaults = get_scan_defaults()
-    except Exception:
-        defaults = {}
-    return jsonify(devs=devs, defaults=defaults)
+    return jsonify(devs=devs)
 
 
 # ---------------- 文件 ----------------

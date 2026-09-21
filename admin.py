@@ -367,18 +367,22 @@ def api_save_config():
             cfg["device_alias"] = {}
         elif isinstance(alias, dict):
             cfg["device_alias"] = {k: str(v)[:50] for k, v in alias.items() if v}
-    # 4) 扫描默认值
+    # 4) 扫描默认值（按设备存储：{ "设备名": {"dpi":"150","mode":"Gray","crop":false} }）
     if "scan_defaults" in d:
         sd = d["scan_defaults"]
-        if isinstance(sd, dict):
-            cur = cfg.get("scan_defaults", {})
-            if "dpi" in sd:
-                cur["dpi"] = str(sd["dpi"])
-            if "mode" in sd:
-                cur["mode"] = str(sd["mode"])
-            if "crop" in sd:
-                cur["crop"] = bool(sd["crop"])
-            cfg["scan_defaults"] = cur
+        if sd is None:
+            cfg["scan_defaults"] = {}
+        elif isinstance(sd, dict):
+            cleaned = {}
+            for dev_name, dv in sd.items():
+                if not isinstance(dv, dict):
+                    continue
+                cleaned[dev_name] = {
+                    "dpi": str(dv.get("dpi", "150")),
+                    "mode": str(dv.get("mode", "Gray")),
+                    "crop": bool(dv.get("crop", False))
+                }
+            cfg["scan_defaults"] = cleaned
     save_admin_cfg(cfg)
     deleted = jobs.cleanup()
     return jsonify(ok=True, scan_root=get_scan_root(),

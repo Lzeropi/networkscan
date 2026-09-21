@@ -84,11 +84,6 @@
     </div>
     <div id="devBox"><p class="hint">加载中…</p></div>
     <p class="hint" id="devCacheNote"></p>
-    <div id="devAliasBox" style="margin-top:12px;display:none">
-      <h3 style="font-size:14px;margin-bottom:6px">设备别名</h3>
-      <p class="hint">给设备设置一个好记的名字，扫描页面将显示此名称代替原始设备名。</p>
-      <div id="devAliasList"></div>
-    </div>
   </section>
 
   <!-- 存储位置配置 -->
@@ -101,34 +96,6 @@
     </div>
     <p class="hint">默认值：/opt/smb_share/scans（未修改时沿用环境变量或该默认值）</p>
     <p class="status" id="rootMsg" style="display:none"></p>
-  </section>
-
-  <!-- 扫描默认值 -->
-  <section class="card">
-    <div class="section-title"><h2>扫描页面默认值</h2></div>
-    <p class="hint">设置扫描页面的初始选项（用户可在创建任务时自行修改）。</p>
-    <div class="cfg-grid">
-      <label>默认分辨率
-        <select id="cfgDpi" style="width:80px;padding:6px;border-radius:6px;border:1px solid var(--border)">
-          <option value="75">75</option><option value="100">100</option>
-          <option value="150">150</option><option value="200">200</option>
-          <option value="300">300</option><option value="600">600</option>
-          <option value="1200">1200</option><option value="2400">2400</option>
-        </select> dpi
-      </label>
-      <label>默认色彩
-        <select id="cfgMode" style="width:80px;padding:6px;border-radius:6px;border:1px solid var(--border)">
-          <option value="Gray">灰度</option>
-          <option value="Color">彩色</option>
-          <option value="Lineart">黑白</option>
-        </select>
-      </label>
-      <label><input type="checkbox" id="cfgCrop"> 默认裁边（A4）</label>
-    </div>
-    <div class="cfg-row" style="margin-top:10px">
-      <button class="primary" id="btnSaveDefaults">保存默认值</button>
-    </div>
-    <p class="status" id="defaultsMsg" style="display:none"></p>
   </section>
 
   <!-- 清理策略 -->

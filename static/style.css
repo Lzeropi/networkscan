@@ -178,34 +178,54 @@ figure.converting .convert-placeholder::after{
 }
 .reorder-mode figcaption a{display:none}
 
+/* ---------- 自定义弹窗 ---------- */
+.modal-overlay{
+  position:fixed;inset:0;background:rgba(0,0,0,.4);
+  display:none;align-items:center;justify-content:center;z-index:9999;
+  backdrop-filter:blur(2px)
+}
+.modal-box{
+  background:var(--card);border-radius:12px;padding:0;
+  min-width:320px;max-width:90vw;box-shadow:0 8px 32px rgba(0,0,0,.2);
+  overflow:hidden;animation:modalIn .2s ease-out
+}
+@keyframes modalIn{from{transform:scale(.92);opacity:0}to{transform:scale(1);opacity:1}}
+.modal-title{
+  padding:16px 20px 8px;font-size:16px;font-weight:600;color:var(--fg);
+  border-bottom:1px solid var(--border)
+}
+.modal-body{padding:16px 20px;font-size:14px;color:#444;line-height:1.6}
+.modal-actions{
+  padding:12px 20px 16px;display:flex;justify-content:flex-end;gap:8px
+}
+.modal-actions .modal-ok{background:#e74c3c;color:#fff;border-color:#c0392b}
+.modal-actions .modal-ok:hover{background:#c0392b}
+.modal-actions .modal-cancel{background:#f5f5f5;color:#666;border:1px solid var(--border)}
+
 /* ---------- 删除图片模式 ---------- */
+.del-mark.del-btn{
+  position:absolute;bottom:6px;right:6px;
+  padding:3px 10px;border-radius:14px;
+  background:rgba(231,76,60,.92);color:#fff;
+  font-size:12px;font-weight:500;cursor:pointer;
+  border:none;box-shadow:0 1px 6px rgba(0,0,0,.3);
+  z-index:10;transition:transform .15s
+}
+.del-mark.del-btn:hover{transform:scale(1.06);background:#e74c3c}
+.del-mark.del-cancel{
+  position:absolute;bottom:6px;right:6px;
+  padding:3px 10px;border-radius:14px;
+  background:rgba(46,204,113,.92);color:#fff;
+  font-size:12px;font-weight:500;cursor:pointer;
+  border:none;box-shadow:0 1px 6px rgba(0,0,0,.3);
+  z-index:10;transition:transform .15s
+}
+.del-mark.del-cancel:hover{transform:scale(1.06);background:#27ae60}
 .btn.danger-fill{background:#e74c3c;color:#fff;border-color:#c0392b}
 .btn.danger-fill:hover{background:#c0392b}
 .delete-mode figure{cursor:default}
 .delete-mode figure img{cursor:default}
 .delete-mode .mv-btns{display:none !important}
-/* 删除图标：红色 */
-.del-mark.del-btn{
-  position:absolute;bottom:6px;right:6px;
-  width:28px;height:28px;border-radius:50%;
-  background:rgba(231,76,60,.92);color:#fff;
-  display:flex;align-items:center;justify-content:center;
-  font-size:16px;font-weight:700;cursor:pointer;
-  border:2px solid #fff;box-shadow:0 1px 6px rgba(0,0,0,.3);
-  z-index:10;transition:transform .15s
-}
-.del-mark.del-btn:hover{transform:scale(1.15);background:#e74c3c}
-/* 取消删除图标：绿色 */
-.del-mark.del-cancel{
-  position:absolute;bottom:6px;right:6px;
-  width:28px;height:28px;border-radius:50%;
-  background:rgba(46,204,113,.92);color:#fff;
-  display:flex;align-items:center;justify-content:center;
-  font-size:16px;font-weight:700;cursor:pointer;
-  border:2px solid #fff;box-shadow:0 1px 6px rgba(0,0,0,.3);
-  z-index:10;transition:transform .15s
-}
-.del-mark.del-cancel:hover{transform:scale(1.15);background:#27ae60}
 /* 预删除状态：半透明灰色 */
 figure.del-selected{opacity:.35;position:relative}
 figure.del-selected::after{

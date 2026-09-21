@@ -1,6 +1,31 @@
 /* ScanWeb 前端逻辑 */
 "use strict";
 
+/* ---------- 自定义弹窗（替代浏览器 confirm） ---------- */
+function customConfirm(message, title) {
+  return new Promise(resolve => {
+    const overlay = document.createElement("div");
+    overlay.className = "modal-overlay";
+    const modal = document.createElement("div");
+    modal.className = "modal-box";
+    modal.innerHTML =
+      '<div class="modal-title">' + (title || "确认操作") + '</div>' +
+      '<div class="modal-body">' + message + '</div>' +
+      '<div class="modal-actions">' +
+      '<button class="btn modal-cancel">取消</button>' +
+      '<button class="btn modal-ok">确认</button>' +
+      '</div>';
+    overlay.appendChild(modal);
+    document.body.appendChild(overlay);
+    overlay.style.display = "flex";
+    const close = (val) => { overlay.remove(); resolve(val); };
+    modal.querySelector(".modal-ok").addEventListener("click", () => close(true));
+    modal.querySelector(".modal-cancel").addEventListener("click", () => close(false));
+    overlay.addEventListener("click", e => { if (e.target === overlay) close(false); });
+    modal.querySelector(".modal-ok").focus();
+  });
+}
+
 function setStatus(t, isErr) {
   const el = document.getElementById("status");
   if (!el) return;
@@ -19,12 +44,6 @@ function loadDevices() {
   if (!devMenu) return;
   fetch("/api/devices").then(r => r.json()).then(data => {
     _devCaps = data.devs || [];
-    var defaults = data.defaults || {};
-    // 应用管理页设置的默认值到表单
-    var dpiHidden = document.querySelector('[data-name="dpi"] input[type=hidden]');
-    var modeHidden = document.querySelector("#modeDropdown input[type=hidden]");
-    if (defaults.dpi && dpiHidden) dpiHidden.value = defaults.dpi;
-    if (defaults.mode && modeHidden) modeHidden.value = defaults.mode;
     // 动态填充设备下拉
     devMenu.innerHTML = "";
     _devCaps.forEach((dev, i) => {
@@ -35,7 +54,6 @@ function loadDevices() {
       devMenu.appendChild(item);
     });
     if (_devCaps.length > 0) {
-      // 选中第一台设备
       const first = _devCaps[0];
       const devToggle = document.querySelector("#devDropdown .dd-toggle");
       const devHidden = document.querySelector("#devDropdown input[type=hidden]");
@@ -43,7 +61,6 @@ function loadDevices() {
       if (devHidden) devHidden.value = first.name;
       updateDeviceOptions(first.name);
     } else {
-      // 无设备
       const devToggle = document.querySelector("#devDropdown .dd-toggle");
       if (devToggle) devToggle.firstChild.textContent = "未找到有效设备";
       const dpiToggle = document.querySelector('[data-name="dpi"] .dd-toggle');
@@ -93,7 +110,8 @@ function updateDeviceOptions(selectedDev) {
     const modeToggle = modeDropdown.querySelector(".dd-toggle");
     const modeHidden = modeDropdown.querySelector("input[type=hidden]");
     const modes = dev.modes || ["Gray"];
-    const defaultMode = modeHidden.value || modes[0];
+    const dv = dev.defaults || {};
+    const defaultMode = dv.mode || modes[0];
     modeMenu.innerHTML = "";
     modes.forEach(m => {
       const item = document.createElement("div");
@@ -108,13 +126,14 @@ function updateDeviceOptions(selectedDev) {
     modeToggle.firstChild.textContent = MODE_CN[selMode] || selMode;
   }
 
-  // 动态填充分辨率（根据设备探测到的 DPI 列表）
+  // 动态填充分辨率（根据设备探测到的 DPI 列表 + 管理页默认值）
   if (dpiDropdown) {
     const dpiMenu = dpiDropdown.querySelector(".dd-menu");
     const dpiToggle = dpiDropdown.querySelector(".dd-toggle");
     const dpiHidden = dpiDropdown.querySelector("input[type=hidden]");
     const dpis = dev.dpis || ["150", "300", "600"];
-    const defaultDpi = dpiHidden.value || dpis[0];
+    const dv = dev.defaults || {};
+    const defaultDpi = dv.dpi || dpis[0];
     dpiMenu.innerHTML = "";
     dpis.forEach(d => {
       const item = document.createElement("div");
@@ -127,6 +146,12 @@ function updateDeviceOptions(selectedDev) {
     const selDpi = dpis.includes(defaultDpi) ? defaultDpi : dpis[0];
     dpiHidden.value = selDpi;
     dpiToggle.firstChild.textContent = selDpi;
+  }
+
+  // 裁边 checkbox 默认值
+  const cropCheckbox = document.querySelector('input[name="crop"]');
+  if (cropCheckbox) {
+    cropCheckbox.checked = !!(dev.defaults && dev.defaults.crop);
   }
 
   // 提示文字
@@ -393,26 +418,22 @@ function toggleBtnSortMode() {
 }
 
 /* ---------- 删除图片模式 ---------- */
-/* 流程：点删除图片 → 每图显示删除图标 → 点图标弹确认 → 确认后变预删除(灰色+取消删除) → 点保存删除弹确认 → 确认后删文件+重编号
-   取消按钮始终可用 → 清除所有预删除+退出删除模式 */
+/* 流程：点删除图片 → 每图显示删除按钮 → 点按钮弹自定义确认 → 确认后变预删除(灰色+文字"取消删除") → 点取消删除直接恢复
+   点保存删除弹自定义确认 → 确认后删文件+重编号。取消按钮始终可用。 */
 function toggleDeleteMode(job) {
   const wall = document.getElementById("wall");
   const btnDel = document.getElementById("btnDeletePages");
   if (!wall) return;
 
   if (!_deleteMode) {
-    // 进入删除模式
     _deleteMode = true;
     wall.classList.add("delete-mode");
     btnDel.textContent = "保存删除";
-    // 其他按钮变灰，但取消按钮保持可用
     const btnSave = document.getElementById("btnSaveOrder");
     const btnToggle = document.getElementById("btnToggleBtnSort");
     if (btnSave) btnSave.classList.add("controls-disabled");
     if (btnToggle) btnToggle.classList.add("controls-disabled");
-    // 隐藏拖拽箭头按钮
     document.querySelectorAll("#wall figure .mv-btns").forEach(w => w.style.display = "none");
-    // 给每张图添加删除图标
     wall.querySelectorAll("figure").forEach(fig => {
       if (fig.classList.contains("converting")) return;
       fig.draggable = false;
@@ -421,39 +442,41 @@ function toggleDeleteMode(job) {
       addDeleteMark(fig);
     });
   } else {
-    // 点保存删除
     const marked = Array.from(wall.querySelectorAll("figure.del-selected")).map(f => f.dataset.name);
     if (marked.length === 0) {
       exitDeleteMode();
       return;
     }
-    if (!confirm("确认删除 " + marked.length + " 张图片？删除后页面将重新编号。")) return;
-    const remaining = Array.from(wall.querySelectorAll("figure:not(.del-selected)"))
-      .filter(f => !f.classList.contains("converting"))
-      .map(f => f.dataset.name);
-    saveDeletePages(job, remaining);
+    customConfirm("确认删除 " + marked.length + " 张图片？删除后页面将重新编号。", "保存删除").then(ok => {
+      if (!ok) return;
+      const remaining = Array.from(wall.querySelectorAll("figure:not(.del-selected)"))
+        .filter(f => !f.classList.contains("converting"))
+        .map(f => f.dataset.name);
+      saveDeletePages(job, remaining);
+    });
   }
 }
 
 function addDeleteMark(fig) {
   const mark = document.createElement("div");
   mark.className = "del-mark del-btn";
-  mark.textContent = "\u2715";
+  mark.textContent = "\u2715 删除";
   mark.title = "删除此页";
-  mark.addEventListener("click", function(ev) {
+  mark.addEventListener("click", async function(ev) {
     ev.stopPropagation();
     ev.preventDefault();
-    if (confirm("确认将此页标记为删除？")) {
+    const ok = await customConfirm("确认将此页标记为删除？", "删除图片");
+    if (ok) {
       fig.classList.add("del-selected");
       mark.className = "del-mark del-cancel";
-      mark.textContent = "\u21BA";
-      mark.title = "取消删除";
+      mark.textContent = "\u21BA 取消删除";
+      mark.title = "点击取消删除";
     }
   });
   fig.appendChild(mark);
 }
 
-/* 点击取消删除图标：直接恢复，不需要确认 */
+/* 点击取消删除：直接恢复，不需要确认 */
 document.addEventListener("click", function(ev) {
   const mark = ev.target.closest(".del-mark.del-cancel");
   if (!mark) return;
@@ -462,7 +485,7 @@ document.addEventListener("click", function(ev) {
   const fig = mark.closest("figure");
   fig.classList.remove("del-selected");
   mark.className = "del-mark del-btn";
-  mark.textContent = "\u2715";
+  mark.textContent = "\u2715 删除";
   mark.title = "删除此页";
 });
 
@@ -647,20 +670,19 @@ async function saveReorder(job) {
   if (d.ok) {
     location.reload();
   } else {
-    alert(d.msg || "保存失败");
+    setStatus(d.msg || "保存失败", true);
   }
 }
 
 /* ---------- 自定义下拉框逻辑 ---------- */
 function initDropdowns() {
-  // 点击 toggle 展开/收起菜单
+  // mousedown 展开/收起菜单（不等到 mouseup，防止和 document click 冲突）
   document.querySelectorAll(".dd-toggle").forEach(toggle => {
-    toggle.addEventListener("click", e => {
-      e.stopPropagation();
+    toggle.addEventListener("mousedown", e => {
       e.preventDefault();
+      e.stopPropagation();
       const menu = toggle.nextElementSibling;
       const isOpen = menu.classList.contains("open");
-      // 先关闭所有菜单
       document.querySelectorAll(".dd-menu.open").forEach(m => {
         if (m !== menu) m.classList.remove("open");
       });
@@ -668,7 +690,7 @@ function initDropdowns() {
     });
   });
 
-  // 点击选项：选中并关闭
+  // click 选项：选中并关闭
   document.querySelectorAll(".dd-menu").forEach(menu => {
     menu.addEventListener("click", e => {
       const item = e.target.closest(".dd-item");
@@ -676,24 +698,22 @@ function initDropdowns() {
       const dd = menu.closest(".dropdown");
       const toggle = dd.querySelector(".dd-toggle");
       const hidden = dd.querySelector("input[type=hidden]");
-      // 更新显示文本（保留 caret）
       toggle.firstChild.textContent = item.textContent;
       hidden.value = item.dataset.value;
-      // 标记选中
       menu.querySelectorAll(".dd-item").forEach(i => i.classList.remove("selected"));
       item.classList.add("selected");
-      // 关闭菜单
       menu.classList.remove("open");
-      // 设备切换时触发能力探测
       if (hidden.name === "device") {
         updateDeviceOptions(hidden.value);
       }
     });
   });
 
-  // 点击页面其他地方关闭所有菜单
-  document.addEventListener("click", () => {
-    document.querySelectorAll(".dd-menu.open").forEach(m => m.classList.remove("open"));
+  // mousedown 在页面其他地方时关闭所有菜单
+  document.addEventListener("mousedown", e => {
+    if (!e.target.closest(".dropdown")) {
+      document.querySelectorAll(".dd-menu.open").forEach(m => m.classList.remove("open"));
+    }
   });
 }
 
