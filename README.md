@@ -3,10 +3,10 @@ AIGC:
   ContentProducer: '001191110102MAD55U9H0F10002'
   ContentPropagator: '001191110102MAD55U9H0F10002'
   Label: '1'
-  ProduceID: '6ddb3186-0271-44ac-8509-d759751a812a'
-  PropagateID: '6ddb3186-0271-44ac-8509-d759751a812a'
-  ReservedCode1: 'ed78884f-4c18-4f82-ae37-aa6d129c9463'
-  ReservedCode2: 'ed78884f-4c18-4f82-ae37-aa6d129c9463'
+  ProduceID: 'ca154f89-41b9-48bc-9c4b-f4afd2ac521c'
+  PropagateID: 'ca154f89-41b9-48bc-9c4b-f4afd2ac521c'
+  ReservedCode1: '3e1c8bd9-0b42-479d-9b28-62dffd60665c'
+  ReservedCode2: '3e1c8bd9-0b42-479d-9b28-62dffd60665c'
 ---
 
 # ScanWeb — 局域网扫描仪网页端（HP M1005 适配）
@@ -173,7 +173,7 @@ sudo -u scanops scanimage -L       # 验证扫描仪权限
 
 - 看不到设备：`sudo -u scanops scanimage -L` 验证权限，检查 lp/scanner 组
 - ADF 报错：M1005 无 ADF，保持平板模式
-- Pillow 编译失败：已通过 `pillow<9` 锁定预编译版本避免编译，如仍异常用手动 pip 方案
+- Pillow 编译失败：需先装 `libjpeg-turbo8-dev` 再编译，详见第三步；如 uv sync 卡住用 pip 方案
 - 删除任务提示"扫描进行中"：等待扫描完成后再删除
 
 > AI生成

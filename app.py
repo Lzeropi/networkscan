@@ -2,6 +2,7 @@ import io
 import os
 import queue as q
 import re
+import shutil
 import subprocess
 import threading
 import zipfile
@@ -119,6 +120,56 @@ def api_delete(job):
         return jsonify(ok=False, msg="扫描进行中，请等待完成后再删除"), 409
     scanner.state.pop(job, None)
     jobs.delete(job)
+    return jsonify(ok=True)
+
+
+@app.post("/api/jobs/<job>/reorder")
+def api_reorder(job):
+    """按指定顺序物理重命名页面文件（两步重命名防冲突）。"""
+    base = jobs.path(job)
+    thumb_dir = os.path.join(base, ".thumbs")
+    new_order = request.get_json().get("order", [])
+    if not new_order:
+        return jsonify(ok=False, msg="顺序列表为空"), 400
+    # 校验：new_order 必须是当前页面文件的排列
+    current = jobs.pages(job)
+    if sorted(new_order) != sorted(current):
+        return jsonify(ok=False, msg="顺序列表与实际页面不匹配"), 400
+    if new_order == current:
+        return jsonify(ok=True, msg="顺序未变化")
+    # 防御：清理可能残留的临时文件（上次异常中断遗留）
+    for f in os.listdir(base):
+        if f.startswith("_tmp_") and f.endswith(".png"):
+            try:
+                os.remove(os.path.join(base, f))
+            except OSError:
+                pass
+    try:
+        for f in os.listdir(thumb_dir):
+            if f.startswith("_tmp_") and f.endswith(".jpg"):
+                os.remove(os.path.join(thumb_dir, f))
+    except OSError:
+        pass
+    # 第一步：全部重命名为临时名
+    tmp_map = {}
+    for i, old_name in enumerate(current):
+        tmp_name = f"_tmp_{i:03d}.png"
+        os.rename(os.path.join(base, old_name), os.path.join(base, tmp_name))
+        tmp_map[tmp_name] = old_name
+        # 缩略图同步
+        old_thumb = os.path.join(thumb_dir, old_name[:-4] + ".jpg")
+        if os.path.exists(old_thumb):
+            os.rename(old_thumb, os.path.join(thumb_dir, f"_tmp_{i:03d}.jpg"))
+    # 第二步：临时名 → 目标名（目标文件名 = 新位置编号，内容跟随新顺序）
+    for i, new_name in enumerate(new_order):
+        old_idx = current.index(new_name)          # 该页面在旧顺序中的位置
+        tmp_key = f"_tmp_{old_idx:03d}.png"
+        dst_name = f"p{i + 1:03d}.png"             # 新顺序第 i 位 → 文件名编号
+        os.rename(os.path.join(base, tmp_key), os.path.join(base, dst_name))
+        # 缩略图同步
+        tmp_thumb = os.path.join(thumb_dir, f"_tmp_{old_idx:03d}.jpg")
+        if os.path.exists(tmp_thumb):
+            os.rename(tmp_thumb, os.path.join(thumb_dir, dst_name[:-4] + ".jpg"))
     return jsonify(ok=True)
 
 

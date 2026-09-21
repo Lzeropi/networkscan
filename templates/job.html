@@ -20,10 +20,19 @@
   <p id="status" class="status"></p>
 </section>
 <section>
-  <h2>扫描图像</h2>
+  <div class="section-title">
+    <h2>扫描图像</h2>
+    {% if pairs|length > 1 %}
+    <div class="reorder-controls">
+      <button class="btn" id="btnReorder" onclick="toggleReorderMode('{{ job }}')">调整顺序</button>
+      <button class="btn primary" id="btnSaveOrder" style="display:none" onclick="saveReorder('{{ job }}')">保存顺序</button>
+      <button class="btn" id="btnCancelOrder" style="display:none" onclick="cancelReorder()">取消</button>
+    </div>
+    {% endif %}
+  </div>
   <div class="grid" id="wall">
     {% for png, jpg in pairs %}
-    <figure>
+    <figure data-name="{{ png }}" draggable="false">
       <a href="/job/{{ job }}/raw/{{ png }}" target="_blank">
         {% if jpg %}<img src="/job/{{ job }}/thumb/{{ jpg }}" alt="{{ png }}">
         {% else %}<img src="/job/{{ job }}/raw/{{ png }}" alt="{{ png }}">{% endif %}
@@ -36,5 +45,5 @@
   </div>
 </section>
 <div id="lightbox" onclick="this.style.display='none'"><img src="" alt=""></div>
-<script>initJobPage();</script>
+<script>initJobPage(); initReorderDrag();</script>
 {% endblock %}
