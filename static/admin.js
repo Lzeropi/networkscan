@@ -62,6 +62,7 @@
     panel.style.display = "";
     loadOverview();
     loadDevices(false);
+    loadConfigs();
     loadJobs();
     startAutoRefresh();
   }
@@ -238,13 +239,12 @@
   /* ---------------- 配置 ---------------- */
   async function loadConfigs() {
     const cfg = await api("/api/admin/config");
-    if (cfg._status === 401) { location.reload(); return; }
+    if (cfg._status === 401) { return; }
     if ($("scanRootInput")) $("scanRootInput").value = cfg.scan_root || "";
     if ($("cfgJobs")) $("cfgJobs").value = (cfg.cleanup || {}).max_jobs || 0;
     if ($("cfgDays")) $("cfgDays").value = (cfg.cleanup || {}).max_age_days || 0;
     if ($("cfgMB")) $("cfgMB").value = (cfg.cleanup || {}).max_total_mb || 0;
   }
-  loadConfigs();
   $("btnSaveRoot").addEventListener("click", async () => {
     const msg = $("rootMsg");
     const path = $("scanRootInput").value.trim();
