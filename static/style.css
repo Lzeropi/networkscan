@@ -226,14 +226,17 @@ figure.converting .convert-placeholder::after{
 .delete-mode figure{cursor:default}
 .delete-mode figure img{cursor:default}
 .delete-mode .mv-btns{display:none !important}
-/* 预删除状态：半透明灰色 */
-figure.del-selected{opacity:.35;position:relative}
+/* 预删除状态：图片变灰，但按钮保持正常显示 */
+figure.del-selected img{opacity:.25}
+figure.del-selected figcaption{opacity:.4}
 figure.del-selected::after{
   content:"\2715 已标记删除";position:absolute;inset:0;
   display:flex;align-items:center;justify-content:center;
   font-size:13px;color:#e74c3c;font-weight:600;
-  background:rgba(255,255,255,.5);z-index:6
+  background:rgba(255,255,255,.5);z-index:6;pointer-events:none
 }
+/* 删除按钮不受 figure 透明度影响 */
+figure.del-selected .del-mark{opacity:1 !important;z-index:10}
 .controls-disabled{opacity:.4;pointer-events:none}
 figcaption{font-size:12px;color:var(--mut);padding:6px 10px;display:flex;justify-content:space-between;align-items:center}
 figcaption a{padding:2px 8px;font-size:13px}
