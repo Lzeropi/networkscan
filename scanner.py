@@ -102,7 +102,7 @@ def scan_adf(job):
             st = state.setdefault(job, {})
             st.update(state="scanning", msg="ADF 连续扫描中…")
             start = len(jobs.pages(job)) + 1
-            pat = os.path.join(SCAN_ROOT, job, "p%d.pnm")
+            pat = os.path.join(SCAN_ROOT, job, "p%03d.pnm")
             source = p.get("source_name") or SCAN_SOURCE  # 优先用探测到的源名，其次配置回退
             cmd = _base_cmd(p)
             if source:                      # 有值才传 --source（无 ADF 设备不传）

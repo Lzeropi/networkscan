@@ -54,13 +54,17 @@ function updateDeviceOptions(selectedDev) {
     return;
   }
 
-  // ADF：设备有非 Flatbed 的 source 才显示 ADF 选项
+  // ADF：设备有非 Flatbed 的 source 才显示"扫描方式"区块
   const adfSources = (dev.sources || []).filter(s =>
     /adf|feeder/i.test(s) && !/flatbed/i.test(s)
   );
+  const sourceFieldset = document.getElementById("sourceFieldset");
+  if (sourceFieldset) {
+    // 无 ADF 时隐藏整个"扫描方式"区块（只有一个选项的 radio 无意义）
+    sourceFieldset.style.display = adfSources.length > 0 ? "" : "none";
+  }
   if (adfLabel) {
     adfLabel.style.display = adfSources.length > 0 ? "" : "none";
-    // 如果 ADF 被隐藏，强制切回平板
     if (adfSources.length === 0) {
       const flatbedRadio = document.querySelector('input[name="source"][value="flatbed"]');
       if (flatbedRadio) flatbedRadio.checked = true;

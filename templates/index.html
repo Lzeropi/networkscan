@@ -12,6 +12,15 @@
   <form method="post" action="/api/jobs" class="newjob">
     <div class="form-row">
       <input type="text" name="remark" placeholder="备注（选填，如：验收单）" maxlength="30">
+      <div class="dd-group">
+        <div class="dropdown" data-name="device" id="devDropdown">
+          <button type="button" class="dd-toggle">默认设备 (hpljm1005)<span class="dd-caret"></span></button>
+          <div class="dd-menu" id="devMenu">
+            <div class="dd-item selected" data-value="">默认设备 (hpljm1005)</div>
+          </div>
+          <input type="hidden" name="device" value="">
+        </div>
+      </div>
       <label class="crop-label"><input type="checkbox" name="crop"> 按 A4 尺寸裁边</label>
       <button type="submit" class="primary">创建并开始</button>
     </div>
@@ -47,16 +56,6 @@
               <div class="dd-item" data-value="Lineart">黑白</div>
             </div>
             <input type="hidden" name="mode" value="Gray">
-          </div>
-        </div>
-        <div class="dd-group">
-          <span class="dd-label">设备</span>
-          <div class="dropdown" data-name="device" id="devDropdown">
-            <button type="button" class="dd-toggle">默认设备 (hpljm1005)<span class="dd-caret"></span></button>
-            <div class="dd-menu" id="devMenu">
-              <div class="dd-item selected" data-value="">默认设备 (hpljm1005)</div>
-            </div>
-            <input type="hidden" name="device" value="">
           </div>
         </div>
       </div>
