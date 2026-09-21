@@ -1,0 +1,59 @@
+{% extends "base.html" %}
+{% block content %}
+{% if not scanimage_ok or not convert_ok %}
+<div class="card warn">
+  ⚠️ 依赖检查：scanimage {{ "✓" if scanimage_ok else "✗ 未找到" }} ｜
+  convert {{ "✓" if convert_ok else "✗ 未找到（sudo apt install imagemagick）" }}
+</div>
+{% endif %}
+<section class="card">
+  <h2>新建扫描任务</h2>
+  <form method="post" action="/api/jobs" class="newjob">
+    <input type="text" name="remark" placeholder="备注（选填，如：验收单）" maxlength="30">
+    <button type="submit" class="primary">创建并开始</button>
+    <details class="adv">
+      <summary>高级选项</summary>
+      <fieldset>
+        <legend>扫描方式</legend>
+        <label><input type="radio" name="source" value="flatbed" checked> 平板式 · 单张扫描（默认）</label>
+        <label><input type="radio" name="source" value="adf"> 连续进纸 · 多张自动扫描（ADF）</label>
+      </fieldset>
+      <div class="row">
+        <label>分辨率
+          <select name="dpi">
+            <option selected>150</option><option>300</option><option>600</option>
+          </select> dpi
+        </label>
+        <label>色彩
+          <select name="mode">
+            <option>Color</option><option selected>Gray</option><option>Lineart</option>
+          </select>
+        </label>
+        <label>设备
+          <select name="device" id="devsel"><option value="">默认设备 (hpljm1005)</option></select>
+        </label>
+        <label><input type="checkbox" name="crop"> 按 A4 尺寸裁边（210×297mm）</label>
+      </div>
+      <p class="hint">提示：ADF 模式要求扫描仪带自动进纸器；任务页点“开始连续扫描”会把整叠纸一次扫完。普通平板扫描仪保持默认即可。</p>
+    </details>
+  </form>
+</section>
+
+<section>
+  <h2>历史任务</h2>
+  <div class="grid">
+  {% for j in jobs %}
+    <a class="jobcard" href="/job/{{ j.name }}">
+      <div class="thumb"><img src="/job/{{ j.name }}/thumb/p001.jpg" alt="" onerror="this.remove()"></div>
+      <div class="info">
+        <b>{{ j.name }}</b>
+        <span>{{ j.created }} · {{ j.pages }} 页</span>
+      </div>
+    </a>
+  {% else %}
+    <p>还没有扫描任务。</p>
+  {% endfor %}
+  </div>
+</section>
+<script>loadDevices();</script>
+{% endblock %}

@@ -1,0 +1,13 @@
+[project]
+name = "scanweb"
+version = "0.1.0"
+description = "LAN scanner web UI (scanimage + Flask + waitress)"
+requires-python = ">=3.10"
+dependencies = [
+    "flask>=3.0",
+    "waitress>=3.0",
+    "pillow>=10.0",
+]
+
+[tool.uv]
+package = false

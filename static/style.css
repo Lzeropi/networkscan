@@ -1,0 +1,55 @@
+:root{--bg:#10141a;--card:#1a2230;--fg:#e8edf5;--mut:#8a97ad;--acc:#4f8cff;--danger:#ff5d5d}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font:15px/1.6 "PingFang SC","Microsoft YaHei",sans-serif}
+header{display:flex;justify-content:space-between;align-items:center;padding:14px 22px;border-bottom:1px solid #263048}
+h1{font-size:19px;margin:0}
+h2{font-size:16px;margin:0 0 12px}
+main{max-width:1100px;margin:0 auto;padding:22px}
+a{color:var(--acc);text-decoration:none}
+.card{background:var(--card);border-radius:12px;padding:18px 20px;margin-bottom:22px}
+.card.warn{border-color:#8a6d1a;background:#2a2214;color:#e8c547}
+.newjob input[type=text]{width:min(420px,100%);padding:10px 12px;border-radius:8px;border:1px solid #2c3a55;background:#0e131c;color:var(--fg);margin-right:8px}
+button,.btn{display:inline-block;padding:9px 16px;border-radius:8px;border:1px solid #33415e;background:#232f47;color:var(--fg);cursor:pointer;font-size:14px}
+button.primary{background:var(--acc);border-color:var(--acc);color:#fff}
+button.danger{border-color:#5e3333;color:var(--danger)}
+button:disabled{opacity:.5;cursor:not-allowed}
+.adv{margin-top:14px;background:#141b28;border-radius:8px;padding:10px 14px}
+.adv summary{cursor:pointer;color:var(--mut)}
+.adv fieldset{border:0;padding:10px 0 4px;margin:0;display:flex;gap:18px;flex-wrap:wrap}
+.adv legend{color:var(--mut);font-size:13px;padding:0}
+.adv .row{display:flex;gap:22px;flex-wrap:wrap;padding:6px 0;align-items:center}
+.adv select{padding:6px 8px;background:#0e131c;color:var(--fg);border:1px solid #2c3a55;border-radius:6px}
+.hint{color:var(--mut);font-size:13px;margin:6px 0 0}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:14px}
+figure{margin:0;background:var(--card);border-radius:10px;overflow:hidden}
+figure img{width:100%;height:130px;object-fit:cover;display:block;cursor:zoom-in}
+figcaption{font-size:12px;color:var(--mut);padding:6px 8px;display:flex;justify-content:space-between}
+figcaption a{padding:4px 8px}
+.status{min-height:1.4em;color:var(--mut)}
+.status.err{color:var(--danger)}
+.jobcard{background:var(--card);border-radius:10px;overflow:hidden;display:block;color:var(--fg)}
+.jobcard .thumb{height:120px;display:flex;align-items:center;justify-content:center;background:#0e131c}
+.jobcard .thumb img{width:100%;height:120px;object-fit:cover}
+.jobcard .info{padding:8px 10px;font-size:12px;color:var(--mut);display:flex;flex-direction:column}
+.jobcard b{color:var(--fg);font-size:13px;word-break:break-all}
+.meta{color:var(--mut);font-size:13px}
+.actions{display:flex;gap:10px;flex-wrap:wrap;margin:10px 0}
+#lightbox{display:none;position:fixed;inset:0;background:rgba(0,0,0,.85);align-items:center;justify-content:center;z-index:99;cursor:zoom-out}
+#lightbox img{max-width:92vw;max-height:92vh}
+
+/* ---------- 移动端适配 ---------- */
+@media (max-width: 640px) {
+  main{padding:14px}
+  header{padding:12px 16px}
+  .newjob input[type=text]{width:100%;margin:0 0 10px}
+  .newjob > button{width:100%;padding:12px}
+  .adv fieldset{flex-direction:column;gap:8px}
+  .adv .row{flex-direction:column;align-items:stretch;gap:10px}
+  .grid{grid-template-columns:repeat(2,1fr);gap:10px}
+  figure img{height:110px}
+  .actions{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+  .actions button,.actions .btn{width:100%;padding:12px 8px;text-align:center;font-size:14px}
+  button,.btn{min-height:44px}         /* 手指友好触控目标 */
+  .jobcard .thumb{height:100px}
+  .jobcard .thumb img{height:100px}
+}
