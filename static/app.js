@@ -178,6 +178,18 @@ async function delJob(job) {
   }
 }
 
+/* 任务页：扫码取件（手机扫码直达本任务页） */
+function showQr(job) {
+  const layer = document.getElementById("qrLayer");
+  const img = document.getElementById("qrImg");
+  img.onerror = () => {
+    layer.style.display = "none";
+    alert("二维码功能未启用：请在服务端安装 qrcode（pip install qrcode）");
+  };
+  img.src = "/job/" + encodeURIComponent(job) + "/qrcode?" + Date.now();
+  layer.style.display = "flex";
+}
+
 /* 任务页初始化：灯箱 */
 function initJobPage() {
   const lb = document.getElementById("lightbox");
@@ -213,7 +225,7 @@ function toggleReorderMode(job) {
     btnReorder.style.display = "none";
     btnSaveOrder.style.display = "";
     btnCancelOrder.style.display = "";
-    // 给每个 figure 加拖拽手柄和序号
+    // 给每个 figure 加序号标签与左移/右移按钮（按钮让手机/平板触屏也能排序）
     wall.querySelectorAll("figure").forEach((fig, i) => {
       fig.draggable = true;
       fig.classList.add("reorder-item");
@@ -225,7 +237,24 @@ function toggleReorderMode(job) {
         fig.appendChild(badge);
       }
       badge.textContent = i + 1;
+      // 加左移/右移按钮（幂等：已存在则不重复加）
+      if (!fig.querySelector(".mv-btns")) {
+        const wrap = document.createElement("div");
+        wrap.className = "mv-btns";
+        const left = document.createElement("button");
+        left.className = "mv-btn"; left.type = "button";
+        left.textContent = "←"; left.title = "前移一位";
+        left.addEventListener("click", ev => { ev.stopPropagation(); moveFig(fig, -1); });
+        const right = document.createElement("button");
+        right.className = "mv-btn"; right.type = "button";
+        right.textContent = "→"; right.title = "后移一位";
+        right.addEventListener("click", ev => { ev.stopPropagation(); moveFig(fig, 1); });
+        wrap.appendChild(left);
+        wrap.appendChild(right);
+        fig.appendChild(wrap);
+      }
     });
+    refreshMoveButtons();
   } else {
     cancelReorder();
   }
@@ -241,9 +270,36 @@ function cancelReorder() {
     fig.classList.remove("reorder-item", "drag-over", "drop-before", "drop-after", "drop-h", "drop-v", "dragging");
     const badge = fig.querySelector(".reorder-badge");
     if (badge) badge.remove();
+    const mv = fig.querySelector(".mv-btns");
+    if (mv) mv.remove();
   });
   // 恢复原始 DOM 顺序
   location.reload();
+}
+
+/* 左移/右移按钮：与相邻图交换位置（触屏/鼠标均可用的排序方式） */
+function moveFig(fig, dir) {
+  if (!_reorderMode) return;
+  const prev = fig.previousElementSibling;
+  const next = fig.nextElementSibling;
+  if (dir < 0 && prev) {
+    prev.before(fig);
+  } else if (dir > 0 && next) {
+    next.after(fig);
+  }
+  updateBadges();
+  refreshMoveButtons();
+}
+
+function refreshMoveButtons() {
+  const figs = document.querySelectorAll("#wall figure");
+  figs.forEach((fig, i) => {
+    const btns = fig.querySelectorAll(".mv-btn");
+    if (btns.length === 2) {
+      btns[0].disabled = i === 0;
+      btns[1].disabled = i === figs.length - 1;
+    }
+  });
 }
 
 function initReorderDrag() {

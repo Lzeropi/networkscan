@@ -242,3 +242,13 @@ figcaption a{padding:2px 8px;font-size:13px}
 .btn.danger{color:#c0392b;border-color:#e0b4b0}
 .btn.danger:hover{background:#fbecea}
 .btn:disabled{opacity:.45;cursor:not-allowed}
+
+/* ---------- v1.11 排序移动按钮 + 扫码取件 ---------- */
+.mv-btns{position:absolute;top:4px;right:4px;display:flex;gap:4px;z-index:6}
+.mv-btn{width:24px;height:24px;border-radius:50%;border:1px solid var(--acc);background:#fff;color:var(--acc);font-size:14px;line-height:1;cursor:pointer;padding:0;display:flex;align-items:center;justify-content:center}
+.mv-btn:hover:not(:disabled){background:var(--acc);color:#fff}
+.mv-btn:disabled{opacity:.3;cursor:not-allowed}
+.qr-layer{position:fixed;inset:0;background:rgba(30,60,120,.35);display:flex;align-items:center;justify-content:center;z-index:98}
+.qr-layer .qr-card{background:#fff;border-radius:12px;padding:22px;text-align:center;box-shadow:var(--shadow)}
+.qr-layer img{width:220px;height:220px;image-rendering:pixelated}
+.qr-layer p{margin:10px 0 0;font-size:13px;color:var(--mut);max-width:260px}

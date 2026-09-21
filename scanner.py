@@ -42,6 +42,22 @@ def _rm(path):
         pass
 
 
+def cleanup_tmp_pnms():
+    """服务启动时清理 /tmp 中残留的 scanweb PNM 临时文件（上次异常中断遗留）。"""
+    import glob
+    removed = 0
+    try:
+        for f in glob.glob("/tmp/scanweb_*.pnm"):
+            try:
+                os.remove(f)
+                removed += 1
+            except OSError:
+                pass
+    except Exception:
+        pass
+    return removed
+
+
 def _convert_pnms(job, start):
     """把 ADF batch 产出的 .pnm 全部转成 .png 并删除原文件。"""
     p = jobs.validate(job)

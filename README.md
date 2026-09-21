@@ -15,7 +15,7 @@ AIGC:
 
 | 项目信息 | 说明 |
 |---|---|
-| 当前版本 | v1.10 |
+| 当前版本 | v1.11 |
 | 适配硬件 | hi3798mv100 机顶盒（ARM32/armhf）或其他 Linux 小主机 |
 | 适配系统 | Ubuntu 20.04 (focal) / Python 3.8+ |
 | 主要设备 | HP LaserJet M1005（其他 SANE 兼容扫描仪亦可） |
@@ -58,9 +58,10 @@ hpljm1005 后端不支持 `--format=png`，扫描输出为 PNM 格式，需 conv
 ### 成果处理
 
 - 缩略图墙预览、点击灯箱看大图、单页原图下载
+- **扫码取件**（可选）：任务页生成二维码，手机扫码直达，无需输入地址
 - **ZIP 打包下载**（流式传输，不受内存限制）
 - **PDF 一键合成**（超 20 页自动拒绝，防 ARM32 内存 OOM）
-- **页面顺序拖拽调整**：任务页拖动图片，蓝框亮在哪张图上松手后就放到哪张图的位置，其余页面自动顺延；保存后系统物理重排文件，PDF/ZIP 均按新顺序合并，无需重扫
+- **页面顺序调整**：拖动图片，蓝框亮在哪张图上松手后就放到哪张图的位置，其余页面自动顺延；每张图另有「←/→」按钮，手机平板触屏同样可排序；保存后系统物理重排文件，PDF/ZIP 均按新顺序合并，无需重扫
 
 ### 内置操作手册
 
@@ -133,7 +134,10 @@ apt update
 apt install -y libjpeg-turbo8-dev
 # 2. 创建 venv 并安装依赖
 uv venv .venv
-uv pip install flask waitress "pillow>=7.0,<9"     # 如 uv sync 卡住，改用：.venv/bin/pip install --no-cache-dir flask waitress "pillow>=7.0,<9"
+uv pip install flask waitress "pillow>=7.0,<9"
+# 可选：安装 qrcode 启用任务页「扫码取件」功能（纯 Python 无编译，约 100KB）
+uv pip install qrcode
+# 如 uv 卡住，改用：.venv/bin/pip install --no-cache-dir flask waitress qrcode "pillow>=7.0,<9"
 # 3. 清理缓存
 rm -rf /root/.cache/uv
 # 4. 编译完成后可卸载开发库（不影响已编译的 Pillow 运行）
@@ -172,6 +176,13 @@ curl -s http://127.0.0.1:9230/ | head -5
 # 局域网任意设备浏览器打开 http://192.168.1.203:9230 即可使用
 # 管理页：http://192.168.1.203:9230/admin（首次访问设置 PIN）
 ```
+
+## 稳定性设计
+
+- systemd `Restart=always`：服务异常退出 3 秒后自动拉起
+- 启动时自动清理 `/tmp` 中上次中断残留的 PNM 临时文件，防止小存储被占满
+- 扫描仪全局独占锁（线程锁），平板与 ADF 不会同时抢设备
+- PDF 页数上限（默认 20 页）防 ARM32 内存 OOM；ZIP 为流式生成不占内存
 
 ## 四、运维命令
 

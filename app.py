@@ -280,7 +280,24 @@ def dl_pdf(job):
                      download_name=f"{job}.pdf")
 
 
+@app.route("/job/<job>/qrcode")
+def job_qrcode(job):
+    """扫码取件：生成指向本任务页的二维码（可选依赖 qrcode，未安装则返回 404，前端自动隐藏入口）。"""
+    try:
+        import qrcode
+    except ImportError:
+        abort(404)
+    jobs.load(job)   # 校验任务存在
+    url = request.url_root + "job/" + job
+    img = qrcode.make(url)
+    buf = io.BytesIO()
+    img.save(buf, "PNG")
+    buf.seek(0)
+    return send_file(buf, mimetype="image/png")
+
+
 if __name__ == "__main__":
-    jobs.cleanup()                      # 启动时执行一次清理（锁定任务永不动）
-    admin.start_cleanup_scheduler()     # 后台每小时检查一次
+    scanner.cleanup_tmp_pnms()           # 清理上次异常中断残留的 PNM 临时文件
+    jobs.cleanup()                       # 启动时执行一次清理（锁定任务永不动）
+    admin.start_cleanup_scheduler()      # 后台每小时检查一次
     serve(app, host=BIND, port=PORT, threads=8)

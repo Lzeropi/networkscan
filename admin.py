@@ -17,6 +17,15 @@ from config import (CONVERT, SCANIMAGE, VERSION, get_cleanup_cfg, get_scan_root,
 
 bp = Blueprint("admin", __name__)
 
+# ---------------- PIN 防暴力尝试 ----------------
+_pin_fails = {"count": 0, "lock_until": 0.0}   # 全局计数（单人局域网工具，全局锁足够）
+_PIN_MAX_FAILS = 5
+_PIN_LOCK_SEC = 60
+
+
+def _pin_locked():
+    return time.time() < _pin_fails["lock_until"]
+
 
 # ---------------- PIN 认证 ----------------
 def _hash(pin):
@@ -54,6 +63,10 @@ def api_login():
     cfg = load_admin_cfg()
     if len(pin) < 4:
         return jsonify(ok=False, msg="PIN 至少 4 位"), 400
+    # 防暴力：锁定期间直接拒绝（不校验、不提示剩余时间之外的信息）
+    if _pin_locked():
+        left = int(_pin_fails["lock_until"] - time.time()) + 1
+        return jsonify(ok=False, msg="尝试过于频繁，请 %d 秒后再试" % left), 429
     if not cfg["pin_hash"]:
         # 首次使用：设置 PIN（需两次输入一致）
         if pin != str(d.get("confirm", "")).strip():
@@ -63,9 +76,17 @@ def api_login():
         session["admin_ok"] = True
         return jsonify(ok=True, first=True)
     if _hash(pin) == cfg["pin_hash"]:
+        _pin_fails["count"] = 0
+        _pin_fails["lock_until"] = 0.0
         session["admin_ok"] = True
         return jsonify(ok=True)
-    return jsonify(ok=False, msg="PIN 错误"), 403
+    # PIN 错误：计数并按阈值锁定
+    _pin_fails["count"] += 1
+    if _pin_fails["count"] >= _PIN_MAX_FAILS:
+        _pin_fails["lock_until"] = time.time() + _PIN_LOCK_SEC
+        _pin_fails["count"] = 0
+        return jsonify(ok=False, msg="连续错误次数过多，已锁定 1 分钟"), 429
+    return jsonify(ok=False, msg="PIN 错误（已连续错 %d 次）" % _pin_fails["count"]), 403
 
 
 @bp.post("/api/admin/logout")
