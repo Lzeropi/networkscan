@@ -263,6 +263,7 @@ let _reorderMode = false;
 let _draggedFig = null;
 let _dropTarget = null;   // 当前蓝框目标（几何最近的那张图）= 松手后的落位图
 let _btnSortMode = false;  // 按钮排序模式开关（默认拖拽，开启后显示箭头按钮）
+let _deleteMode = false;    // 删除图片模式
 
 function toggleReorderMode(job) {
   const wall = document.getElementById("wall");
@@ -277,6 +278,7 @@ function toggleReorderMode(job) {
     wall.classList.add("reorder-mode");
     btnReorder.style.display = "none";
     btnSaveOrder.style.display = "";
+    document.getElementById("btnDeletePages").style.display = "";
     btnCancelOrder.style.display = "";
     _btnSortMode = false;   // 默认拖拽模式，不显示箭头按钮
     // 控制栏插入「按钮排序」开关按钮
@@ -330,18 +332,25 @@ function cancelReorder() {
   const wall = document.getElementById("wall");
   if (!wall) return;
   _reorderMode = false;
-  wall.classList.remove("reorder-mode");
+  _deleteMode = false;
+  wall.classList.remove("reorder-mode", "delete-mode");
   wall.querySelectorAll("figure").forEach((fig, i) => {
     fig.draggable = false;
-    fig.classList.remove("reorder-item", "drag-over", "drop-before", "drop-after", "drop-h", "drop-v", "dragging");
+    fig.classList.remove("reorder-item", "drag-over", "drop-before", "drop-after", "drop-h", "drop-v", "dragging", "del-selected");
     const badge = fig.querySelector(".reorder-badge");
     if (badge) badge.remove();
     const mv = fig.querySelector(".mv-btns");
     if (mv) mv.remove();
+    const dm = fig.querySelector(".del-mark");
+    if (dm) dm.remove();
   });
   const btnToggle = document.getElementById("btnToggleBtnSort");
   if (btnToggle) btnToggle.remove();
+  const btnDel = document.getElementById("btnDeletePages");
+  if (btnDel) { btnDel.textContent = "删除图片"; btnDel.classList.remove("danger-fill"); btnDel.classList.add("btn"); }
   _btnSortMode = false;
+  // 恢复按钮栏可用状态
+  document.querySelectorAll(".actions button, .actions a, .reorder-controls button").forEach(b => b.classList.remove("controls-disabled"));
   // 恢复原始 DOM 顺序
   location.reload();
 }
@@ -356,6 +365,107 @@ function toggleBtnSortMode() {
     wrap.style.display = _btnSortMode ? "flex" : "none";
   });
   if (_btnSortMode) refreshMoveButtons();
+}
+
+/* ---------- 删除图片模式 ---------- */
+function toggleDeleteMode(job) {
+  const wall = document.getElementById("wall");
+  const btnDel = document.getElementById("btnDeletePages");
+  const btnSave = document.getElementById("btnSaveOrder");
+  const btnCancel = document.getElementById("btnCancelOrder");
+  const btnToggle = document.getElementById("btnToggleBtnSort");
+  if (!wall) return;
+
+  if (!_deleteMode) {
+    // 进入删除模式
+    _deleteMode = true;
+    wall.classList.add("delete-mode");
+    // 按钮切换：删除图片 → 保存删除（红色）
+    btnDel.textContent = "保存删除";
+    // 其他按钮变灰
+    btnSave.classList.add("controls-disabled");
+    btnCancel.classList.add("controls-disabled");
+    if (btnToggle) btnToggle.classList.add("controls-disabled");
+    // 隐藏拖拽箭头按钮
+    document.querySelectorAll("#wall figure .mv-btns").forEach(w => w.style.display = "none");
+    // 给每张图添加删除图标
+    wall.querySelectorAll("figure").forEach(fig => {
+      if (fig.classList.contains("converting")) return;  // 转换中的不标记
+      let mark = fig.querySelector(".del-mark");
+      if (!mark) {
+        mark = document.createElement("div");
+        mark.className = "del-mark";
+        mark.textContent = "\u2715";
+        mark.title = "删除此页";
+        mark.addEventListener("click", function(ev) {
+          ev.stopPropagation();
+          ev.preventDefault();
+          toggleDeleteMark(fig);
+        });
+        fig.appendChild(mark);
+      }
+      mark.style.display = "flex";
+      fig.draggable = false;
+    });
+  } else {
+    // 保存删除
+    const marked = Array.from(wall.querySelectorAll("figure.del-selected")).map(f => f.dataset.name);
+    if (marked.length === 0) {
+      // 没有选中删除的，直接退出删除模式
+      exitDeleteMode();
+      return;
+    }
+    if (!confirm("确认删除 " + marked.length + " 张图片？删除后页面将重新编号。")) return;
+    // 收集剩余文件名（按当前顺序）
+    const remaining = Array.from(wall.querySelectorAll("figure:not(.del-selected)"))
+      .filter(f => !f.classList.contains("converting"))
+      .map(f => f.dataset.name);
+    saveDeletePages(job, remaining);
+  }
+}
+
+function toggleDeleteMark(fig) {
+  fig.classList.toggle("del-selected");
+}
+
+function exitDeleteMode() {
+  const wall = document.getElementById("wall");
+  const btnDel = document.getElementById("btnDeletePages");
+  const btnSave = document.getElementById("btnSaveOrder");
+  const btnCancel = document.getElementById("btnCancelOrder");
+  const btnToggle = document.getElementById("btnToggleBtnSort");
+  _deleteMode = false;
+  wall.classList.remove("delete-mode");
+  btnDel.textContent = "删除图片";
+  btnSave.classList.remove("controls-disabled");
+  btnCancel.classList.remove("controls-disabled");
+  if (btnToggle) btnToggle.classList.remove("controls-disabled");
+  // 移除删除图标和标记
+  wall.querySelectorAll("figure").forEach(fig => {
+    fig.classList.remove("del-selected");
+    const mark = fig.querySelector(".del-mark");
+    if (mark) mark.style.display = "none";
+    // 恢复箭头按钮显隐
+    const mv = fig.querySelector(".mv-btns");
+    if (mv) mv.style.display = _btnSortMode ? "flex" : "none";
+    fig.draggable = true;
+  });
+}
+
+async function saveDeletePages(job, remaining) {
+  // 调用 reorder 接口，只传剩余文件——后端会删除不在此列表的文件并重新编号
+  const r = await fetch("/api/jobs/" + job + "/reorder", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ order: remaining, delete: true })
+  });
+  const d = await r.json();
+  if (d.ok) {
+    location.reload();
+  } else {
+    alert(d.msg || "删除失败");
+    exitDeleteMode();
+  }
 }
 
 /* 左移/右移按钮：与相邻图交换位置（触屏/鼠标均可用的排序方式） */

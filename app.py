@@ -135,21 +135,54 @@ def api_delete(job):
 
 @app.post("/api/jobs/<job>/reorder")
 def api_reorder(job):
-    """按指定顺序物理重命名页面文件（两步重命名防冲突）。"""
+    """按指定顺序物理重命名页面文件（两步重命名防冲突）。
+    支持 delete=true：从 order 中省略的页面将被删除，剩余页面重新连续编号。"""
     # 排序互斥：扫描进行中禁止排序，防止文件被同时操作
     if scanner.get_state(job)["state"] == "scanning":
         return jsonify(ok=False, msg="扫描进行中，请等待完成后再排序"), 409
-    base = jobs.path(job)
-    thumb_dir = os.path.join(base, ".thumbs")
-    new_order = request.get_json().get("order", [])
+    body = request.get_json() or {}
+    new_order = body.get("order", [])
+    is_delete = body.get("delete", False)
     if not new_order:
         return jsonify(ok=False, msg="顺序列表为空"), 400
-    # 校验：new_order 必须是当前页面文件的排列
+    base = jobs.path(job)
+    thumb_dir = os.path.join(base, ".thumbs")
     current = jobs.pages(job)
-    if sorted(new_order) != sorted(current):
-        return jsonify(ok=False, msg="顺序列表与实际页面不匹配"), 400
-    if new_order == current:
-        return jsonify(ok=True, msg="顺序未变化")
+    if is_delete:
+        # 删除模式：new_order 是剩余文件（不需要等于 current 的排列）
+        # 校验：new_order 中的文件必须都在 current 中
+        for f in new_order:
+            if f not in current:
+                return jsonify(ok=False, msg="页面 %s 不存在" % f), 400
+        # 删除不在 new_order 中的文件
+        to_delete = [f for f in current if f not in new_order]
+        for f in to_delete:
+            try:
+                os.remove(os.path.join(base, f))
+            except OSError:
+                pass
+            old_thumb = os.path.join(thumb_dir, f[:-4] + ".jpg")
+            if os.path.exists(old_thumb):
+                try:
+                    os.remove(old_thumb)
+                except OSError:
+                    pass
+        # 更新 meta
+        meta = jobs.load(job)
+        meta["pages"] = len(new_order)
+        jobs.save(job, meta)
+        if len(new_order) < 2:
+            # 只剩 0 或 1 页，无需重编号
+            return jsonify(ok=True, deleted=len(to_delete))
+        # 继续走重编号流程，target = new_order
+        current = new_order[:]
+        new_order = new_order[:]  # 保持不变，两步重命名为连续编号
+    else:
+        # 普通排序：new_order 必须是 current 的排列
+        if sorted(new_order) != sorted(current):
+            return jsonify(ok=False, msg="顺序列表与实际页面不匹配"), 400
+        if new_order == current:
+            return jsonify(ok=True, msg="顺序未变化")
     # 防御：清理可能残留的临时文件（上次异常中断遗留）
     for f in os.listdir(base):
         if f.startswith("_tmp_") and f.endswith(".png"):
@@ -164,11 +197,9 @@ def api_reorder(job):
     except OSError:
         pass
     # 第一步：全部重命名为临时名
-    tmp_map = {}
     for i, old_name in enumerate(current):
         tmp_name = f"_tmp_{i:03d}.png"
         os.rename(os.path.join(base, old_name), os.path.join(base, tmp_name))
-        tmp_map[tmp_name] = old_name
         # 缩略图同步
         old_thumb = os.path.join(thumb_dir, old_name[:-4] + ".jpg")
         if os.path.exists(old_thumb):
