@@ -210,6 +210,7 @@ function initJobPage() {
 let _reorderMode = false;
 let _draggedFig = null;
 let _dropTarget = null;   // 当前蓝框目标（几何最近的那张图）= 松手后的落位图
+let _btnSortMode = false;  // 按钮排序模式开关（默认拖拽，开启后显示箭头按钮）
 
 function toggleReorderMode(job) {
   const wall = document.getElementById("wall");
@@ -225,11 +226,22 @@ function toggleReorderMode(job) {
     btnReorder.style.display = "none";
     btnSaveOrder.style.display = "";
     btnCancelOrder.style.display = "";
-    // 给每个 figure 加序号标签与左移/右移按钮（按钮让手机/平板触屏也能排序）
+    _btnSortMode = false;   // 默认拖拽模式，不显示箭头按钮
+    // 控制栏插入「按钮排序」开关按钮
+    let btnToggle = document.getElementById("btnToggleBtnSort");
+    if (!btnToggle) {
+      btnToggle = document.createElement("button");
+      btnToggle.id = "btnToggleBtnSort";
+      btnToggle.className = "btn";
+      btnToggle.textContent = "按钮排序";
+      btnToggle.addEventListener("click", toggleBtnSortMode);
+      btnCancelOrder.parentNode.insertBefore(btnToggle, btnSaveOrder);
+    }
+    btnToggle.style.display = "";
+    // 给每个 figure 加序号标签与左移/右移按钮（按钮默认隐藏，开关控制显隐）
     wall.querySelectorAll("figure").forEach((fig, i) => {
       fig.draggable = true;
       fig.classList.add("reorder-item");
-      // 加序号标签
       let badge = fig.querySelector(".reorder-badge");
       if (!badge) {
         badge = document.createElement("span");
@@ -237,10 +249,10 @@ function toggleReorderMode(job) {
         fig.appendChild(badge);
       }
       badge.textContent = i + 1;
-      // 加左移/右移按钮（幂等：已存在则不重复加）
       if (!fig.querySelector(".mv-btns")) {
         const wrap = document.createElement("div");
         wrap.className = "mv-btns";
+        wrap.style.display = "none";   // 默认隐藏
         const left = document.createElement("button");
         left.className = "mv-btn"; left.type = "button";
         left.textContent = "←"; left.title = "前移一位";
@@ -253,8 +265,10 @@ function toggleReorderMode(job) {
         wrap.appendChild(right);
         fig.appendChild(wrap);
       }
+      // 同步显隐
+      fig.querySelector(".mv-btns").style.display = _btnSortMode ? "flex" : "none";
     });
-    refreshMoveButtons();
+    if (_btnSortMode) refreshMoveButtons();
   } else {
     cancelReorder();
   }
@@ -273,8 +287,23 @@ function cancelReorder() {
     const mv = fig.querySelector(".mv-btns");
     if (mv) mv.remove();
   });
+  const btnToggle = document.getElementById("btnToggleBtnSort");
+  if (btnToggle) btnToggle.remove();
+  _btnSortMode = false;
   // 恢复原始 DOM 顺序
   location.reload();
+}
+
+/* 「按钮排序」开关：开启时各图显示 ←/→ 箭头，关闭时纯拖拽（默认） */
+function toggleBtnSortMode() {
+  _btnSortMode = !_btnSortMode;
+  const btnToggle = document.getElementById("btnToggleBtnSort");
+  btnToggle.classList.toggle("primary", _btnSortMode);
+  btnToggle.textContent = _btnSortMode ? "✓ 按钮排序" : "按钮排序";
+  document.querySelectorAll("#wall figure .mv-btns").forEach(wrap => {
+    wrap.style.display = _btnSortMode ? "flex" : "none";
+  });
+  if (_btnSortMode) refreshMoveButtons();
 }
 
 /* 左移/右移按钮：与相邻图交换位置（触屏/鼠标均可用的排序方式） */
@@ -469,4 +498,20 @@ function initDropdowns() {
   document.addEventListener("click", () => {
     document.querySelectorAll(".dd-menu.open").forEach(m => m.classList.remove("open"));
   });
+}
+
+/* 全局扫描占用状态：首页/任务页展示当前是否有人在扫描，防止并发冲突困惑 */
+async function checkScanStatus() {
+  try {
+    const r = await fetch("/api/scan-status");
+    const d = await r.json();
+    const bar = document.getElementById("scanBusyBar");
+    if (!bar) return;
+    if (d.busy) {
+      bar.style.display = "";
+      bar.textContent = "📊 " + d.job + " 正在扫描（已用 " + d.elapsed + " 秒），其他任务需等待完成";
+    } else {
+      bar.style.display = "none";
+    }
+  } catch (e) { /* 忽略 */ }
 }

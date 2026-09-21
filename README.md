@@ -3,10 +3,10 @@ AIGC:
   ContentProducer: '001191110102MAD55U9H0F10002'
   ContentPropagator: '001191110102MAD55U9H0F10002'
   Label: '1'
-  ProduceID: '340868d9-8892-48b0-aa00-78bab224bc09'
-  PropagateID: '340868d9-8892-48b0-aa00-78bab224bc09'
-  ReservedCode1: 'd564ec76-d11d-4004-b32e-64c5630410c7'
-  ReservedCode2: 'd564ec76-d11d-4004-b32e-64c5630410c7'
+  ProduceID: '8f341227-a2d4-4f43-855c-ed7457a097e1'
+  PropagateID: '8f341227-a2d4-4f43-855c-ed7457a097e1'
+  ReservedCode1: '119bec7f-786a-4469-8a64-4061386c501a'
+  ReservedCode2: '119bec7f-786a-4469-8a64-4061386c501a'
 ---
 
 # ScanWeb — 局域网网页扫描系统
@@ -15,13 +15,15 @@ AIGC:
 
 | 项目信息 | 说明 |
 |---|---|
-| 当前版本 | v1.11 |
+| 当前版本 | v1.12 |
 | 适配硬件 | hi3798mv100 机顶盒（ARM32/armhf）或其他 Linux 小主机 |
 | 适配系统 | Ubuntu 20.04 (focal) / Python 3.8+ |
 | 主要设备 | HP LaserJet M1005（其他 SANE 兼容扫描仪亦可） |
 | 技术栈 | Flask + Waitress ｜ SANE scanimage ｜ ImageMagick convert ｜ Pillow |
 | 前端形态 | 单页原生 HTML/CSS/JS，零外部依赖、零数据库、无 CDN 引用 |
 | 默认端口 | 9230 |
+
+> v1.12 测试版修复记录：① 中文任务名 ZIP 下载报错（Content-Disposition 改为 RFC 5987 编码）；② 缩略图/原图缺失时返回 404 而非 500；③ 非法任务名/任务不存在统一返回 404。共 79 项端到端测试全部通过（排序 19 + 管理页 28 + 开关模式 10 + 功能 22）。
 
 ## 一、项目介绍
 
@@ -61,7 +63,7 @@ hpljm1005 后端不支持 `--format=png`，扫描输出为 PNM 格式，需 conv
 - **扫码取件**（可选）：任务页生成二维码，手机扫码直达，无需输入地址
 - **ZIP 打包下载**（流式传输，不受内存限制）
 - **PDF 一键合成**（超 20 页自动拒绝，防 ARM32 内存 OOM）
-- **页面顺序调整**：拖动图片，蓝框亮在哪张图上松手后就放到哪张图的位置，其余页面自动顺延；每张图另有「←/→」按钮，手机平板触屏同样可排序；保存后系统物理重排文件，PDF/ZIP 均按新顺序合并，无需重扫
+- **页面顺序调整**：拖动图片，蓝框亮在哪张图上松手后就放到哪张图的位置，其余页面自动顺延；控制栏有「按钮排序」开关，开启后显示箭头按钮供触屏设备使用；保存后系统物理重排文件，PDF/ZIP 均按新顺序合并，无需重扫
 
 ### 内置操作手册
 
@@ -117,11 +119,11 @@ df -h /
 
 ```bash
 # 本机执行（传压缩包到盒子）
-scp scanweb-v1.10.tar.gz root@192.168.1.203:/opt/network_scan_service/
+scp scanweb-v1.12.tar.gz root@192.168.1.203:/opt/network_scan_service/
 # 盒子上执行
 cd /opt/network_scan_service
-tar xzf scanweb-v1.10.tar.gz --strip-components=1
-rm -f scanweb-v1.10.tar.gz .python-version
+tar xzf scanweb-v1.12.tar.gz --strip-components=1
+rm -f scanweb-v1.12.tar.gz .python-version
 ```
 
 ### 第三步：安装编译依赖并安装 Python 包
@@ -132,17 +134,93 @@ rm -f scanweb-v1.10.tar.gz .python-version
 # 1. 安装 Pillow 编译所需的 JPEG 开发库（仅 450KB，编译完可卸载）
 apt update
 apt install -y libjpeg-turbo8-dev
-# 2. 创建 venv 并安装依赖
+# 2. 安装 python3.8-venv（Ubuntu 20.04 默认不带，python3 -m venv 会报错）
+apt install -y python3.8-venv
+# 3. 创建 venv 并安装依赖
 uv venv .venv
-uv pip install flask waitress "pillow>=7.0,<9"
+uv pip install --index-url https://pypi.tuna.tsinghua.edu.cn/simple flask waitress "pillow>=7.0,<9"
 # 可选：安装 qrcode 启用任务页「扫码取件」功能（纯 Python 无编译，约 100KB）
-uv pip install qrcode
-# 如 uv 卡住，改用：.venv/bin/pip install --no-cache-dir flask waitress qrcode "pillow>=7.0,<9"
-# 3. 清理缓存
+uv pip install --index-url https://pypi.tuna.tsinghua.edu.cn/simple qrcode
+# 4. 清理缓存
 rm -rf /root/.cache/uv
-# 4. 编译完成后可卸载开发库（不影响已编译的 Pillow 运行）
+# 5. 编译完成后可卸载开发库（不影响已编译的 Pillow 运行）
 apt remove -y libjpeg-turbo8-dev && apt autoremove -y
 ```
+
+<details>
+<summary><b>遇到问题？点击展开排障记录（实测踩坑）</b></summary>
+
+以下问题在 hi3798mv100 机顶盒（ARM32 / Ubuntu 20.04）实际部署时遇到过，记录于此供参考：
+
+#### 问题 1：uv pip install 卡住不动（PyPI IPv6 连接超时）
+
+**现象**：`uv pip install flask waitress "pillow>=7.0,<9"` 运行 12 分钟以上，只下载了 markupsafe 一个包，缓存不增长，CPU 几乎空闲。`ps` 显示 uv 进程在跑但没有进展。`ss -tnp` 显示 uv 连接的是 PyPI 的 IPv6 地址。
+
+**原因**：uv 默认从 PyPI 官方源（pypi.org）下载，走 IPv6。盒子网络环境对 IPv6 长连接不稳定，导致下载卡死。
+
+**解决**：加 `--index-url` 指定国内镜像源，强制走 IPv4：
+
+```bash
+uv pip install --index-url https://pypi.tuna.tsinghua.edu.cn/simple flask waitress "pillow>=7.0,<9"
+```
+
+> 清华镜像对 ARM32 设备速度快几十倍，Pillow 源码编译约 3-4 分钟即可完成。
+
+#### 问题 2：uv 创建的 venv 里没有 pip
+
+**现象**：`uv venv .venv` 创建的虚拟环境中没有 `pip` 命令，`.venv/bin/pip` 不存在，`.venv/bin/python -m pip` 也报 `No module named pip`。
+
+**原因**：uv 的设计理念是自带包管理（`uv pip install`），默认不在 venv 中安装 pip。这导致想用 pip 作为备用方案时无法使用。
+
+**解决**：改用系统 Python 的 `venv` 模块创建虚拟环境（自带 pip），或用 uv 直接安装（推荐）：
+
+```bash
+# 方案 A：用系统 venv（需要先装 python3.8-venv，见下一条）
+rm -rf .venv
+python3 -m venv .venv
+.venv/bin/pip install --no-cache-dir flask waitress "pillow>=7.0,<9"
+
+# 方案 B：继续用 uv（推荐，更快）
+uv venv .venv
+uv pip install --index-url https://pypi.tuna.tsinghua.edu.cn/simple flask waitress "pillow>=7.0,<9"
+```
+
+#### 问题 3：python3 -m venv 报 ensurepip 不可用
+
+**现象**：`python3 -m venv .venv` 报错：
+```
+The virtual environment was not created successfully because ensurepip is not available.
+On Debian/Ubuntu systems, you need to install the python3-venv package.
+```
+
+**原因**：Ubuntu 20.04 默认不安装 `python3.8-venv` 包，`venv` 模块依赖它才能创建带 pip 的虚拟环境。
+
+**解决**：先装 venv 包再建环境：
+
+```bash
+apt install -y python3.8-venv
+python3 -m venv .venv
+.venv/bin/pip --version    # 确认 pip 可用
+```
+
+> 如果直接用 `uv pip install` 安装则不需要这一步（uv 自带包管理），但建议装上以备排障时用 pip。
+
+#### 问题 4：Pillow 源码编译耗时较长
+
+**现象**：Pillow 在 ARM32 上没有预编译 wheel，`uv pip install "pillow>=7.0,<9"` 会下载源码并本地编译，耗时 3-5 分钟，期间 CPU 满载。
+
+**原因**：ARM32 架构 PyPI 不提供 Pillow 的二进制 wheel，必须从 C 源码编译，J4125 级别的 CPU 需要几分钟。
+
+**解决**：这是正常现象，耐心等待即可。确保已装 `libjpeg-turbo8-dev`（提供 JPEG 头文件），否则编译会失败。编译完成后可卸载该开发库。
+
+```bash
+# 编译前装
+apt install -y libjpeg-turbo8-dev
+# 编译后卸载（不影响已编译好的 Pillow）
+apt remove -y libjpeg-turbo8-dev && apt autoremove -y
+```
+
+</details>
 
 ### 第四步：创建服务用户
 
@@ -247,7 +325,8 @@ ss -tlnp | grep 9230              # 确认端口监听
 
 - **看不到设备**：`sudo -u scanops scanimage -L` 验证权限，检查 lp/scanner 组
 - **ADF 报错**：M1005 无 ADF，保持平板模式
-- **Pillow 编译失败**：需先装 `libjpeg-turbo8-dev` 再编译，详见第三步；如 uv 卡住用 pip 备用方案
+- **Pillow 编译失败**：需先装 `libjpeg-turbo8-dev` 再编译，详见第三步
+- **uv 安装卡住不动**：PyPI IPv6 连接问题，加 `--index-url https://pypi.tuna.tsinghua.edu.cn/simple` 换清华镜像源，详见第三步排障记录
 - **删除任务提示"扫描进行中"**：等待扫描完成后再删除
 - **管理页忘记 PIN**：删除服务目录下 `admin_config.json` 后重启服务，重新设置
 - **自动清理误删担心**：给重要任务上 🔒 锁定，锁定任务永不参与清理

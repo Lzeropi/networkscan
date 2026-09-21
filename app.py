@@ -6,6 +6,7 @@ import shutil
 import subprocess
 import threading
 import zipfile
+from urllib.parse import quote
 
 from flask import (Flask, Response, abort, jsonify, redirect,
                    render_template, request, send_file, session,
@@ -57,7 +58,7 @@ def inject():
 
 @app.errorhandler(jobs.JobError)
 def job_error(e):
-    abort(404)
+    return "任务不存在或任务名非法", 404
 
 
 # ---------------- 页面 ----------------
@@ -116,6 +117,12 @@ def api_status(job):
     return jsonify(scanner.get_state(job))
 
 
+@app.get("/api/scan-status")
+def api_scan_status():
+    """全局扫描状态：当前是否有任务在扫描、扫了多久。供首页/任务页展示并发占用。"""
+    return jsonify(scanner.get_scan_status())
+
+
 @app.delete("/api/jobs/<job>")
 def api_delete(job):
     if scanner.get_state(job)["state"] == "scanning":
@@ -128,6 +135,9 @@ def api_delete(job):
 @app.post("/api/jobs/<job>/reorder")
 def api_reorder(job):
     """按指定顺序物理重命名页面文件（两步重命名防冲突）。"""
+    # 排序互斥：扫描进行中禁止排序，防止文件被同时操作
+    if scanner.get_state(job)["state"] == "scanning":
+        return jsonify(ok=False, msg="扫描进行中，请等待完成后再排序"), 409
     base = jobs.path(job)
     thumb_dir = os.path.join(base, ".thumbs")
     new_order = request.get_json().get("order", [])
@@ -210,14 +220,20 @@ def api_devices():
 def raw(job, fname):
     if not FNAME_RE.fullmatch(fname) or not fname.endswith(".png"):
         abort(404)
-    return send_file(os.path.join(jobs.path(job), fname))
+    p = os.path.join(jobs.path(job), fname)
+    if not os.path.exists(p):
+        abort(404)
+    return send_file(p)
 
 
 @app.route("/job/<job>/thumb/<fname>")
 def thumb(job, fname):
     if not FNAME_RE.fullmatch(fname) or not fname.endswith(".jpg"):
         abort(404)
-    return send_file(os.path.join(jobs.path(job), ".thumbs", fname))
+    p = os.path.join(jobs.path(job), ".thumbs", fname)
+    if not os.path.exists(p):
+        abort(404)
+    return send_file(p)
 
 
 @app.route("/job/<job>/download.zip")
@@ -260,7 +276,8 @@ def dl_zip(job):
             yield chunk
 
     return Response(stream_with_context(gen()), mimetype="application/zip",
-                    headers={"Content-Disposition": f'attachment; filename="{job}.zip"'})
+                    headers={"Content-Disposition":
+                             f"attachment; filename=\"scan.zip\"; filename*=UTF-8''{quote(job + '.zip')}"})
 
 
 @app.route("/job/<job>/download.pdf")

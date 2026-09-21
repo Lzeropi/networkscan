@@ -83,5 +83,6 @@
   {% endfor %}
   </div>
 </section>
-<script>loadDevices(); initDropdowns();</script>
+<div id="scanBusyBar" class="card warn" style="display:none;margin-bottom:14px"></div>
+<script>loadDevices(); initDropdowns(); checkScanStatus();</script>
 {% endblock %}
