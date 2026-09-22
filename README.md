@@ -3,10 +3,10 @@ AIGC:
   ContentProducer: '001191110102MAD55U9H0F10002'
   ContentPropagator: '001191110102MAD55U9H0F10002'
   Label: '1'
-  ProduceID: '599680b1-94fa-4826-98ed-c8ac16ee7036'
-  PropagateID: '599680b1-94fa-4826-98ed-c8ac16ee7036'
-  ReservedCode1: 'a22a396a-27b2-46f2-b88e-1f489943a23e'
-  ReservedCode2: 'a22a396a-27b2-46f2-b88e-1f489943a23e'
+  ProduceID: '16a2d65f-629f-4e05-9359-4dc6cd357b63'
+  PropagateID: '16a2d65f-629f-4e05-9359-4dc6cd357b63'
+  ReservedCode1: '18d3d0b0-22eb-4e5c-b252-910329cb5c99'
+  ReservedCode2: '18d3d0b0-22eb-4e5c-b252-910329cb5c99'
 ---
 
 # ScanWeb — 局域网网页扫描系统
@@ -15,7 +15,7 @@ AIGC:
 
 | 项目信息 | 说明 |
 |---|---|
-| 当前版本 | v1.13 |
+| 当前版本 | v1.14 |
 | 适配硬件 | hi3798mv100 机顶盒（ARM32/armhf）或其他 Linux 小主机 |
 | 适配系统 | Ubuntu 20.04 (focal) / Python 3.8+ |
 | 主要设备 | HP LaserJet M1005（其他 SANE 兼容扫描仪亦可） |
@@ -23,6 +23,8 @@ AIGC:
 | 前端形态 | 单页原生 HTML/CSS/JS，零外部依赖、零数据库、无 CDN 引用 |
 | 默认端口 | 9203 |
 
+> v1.14 更新：**锁定保护与安全加固版**。新功能：① 管理页锁定的任务在任务页隐藏「删除任务/删除图片」按钮，普通 API 删除返回 403 三层防护（解锁后恢复）；② 管理页任务名可点击直达任务页，返回按钮自动回到管理页历史任务锚点。修复与加固：③ 平板扫描补写状态（扫描+转换全程可拦截删除/排序/清理）；④ 自动清理排除扫描中任务；⑤ 0 字节转换中占位不再被计入页面数；⑥ 任务 ID 加随机后缀防同秒并发；⑦ Session cookie SameSite=Lax+HttpOnly；⑧ PIN 改 PBKDF2 慢哈希（旧格式登录自动迁移），防暴力锁改按 IP；⑨ 前端 XSS 加固（admin.js 动态值全量转义）；⑩ scan_root 系统目录黑名单；⑪ PDF 合成增加内存估算上限（默认 512MB，SCANWEB_MAX_PDF_MEM 可调）；⑫ 设备探测合并为公共模块（普通页与管理页共用）；⑬ 设备解析缓存按后端分键；⑭ 扫描默认值与 ADF 进纸源白名单校验；⑮ webscan update 原子化（先校验再切换，失败自动回滚）；⑯ 版本号统一（pyproject 同步 1.14.0）。新增 tests/ 目录（24 项 pytest 回归），见「测试」章节。
+>
 > v1.13 更新：① 内置示例任务（输出目录为空时启动自动部署，带 🔒 锁定防清理）；② 默认端口改为 9203；③ CPU 温度优先读海思 /proc/msp/pm_cpu；④ 修复扫描报错——设备短名自动解析为完整名（hpljm1005: → hpljm1005:libusb:xxx:xxx，缓存 60 秒）+ 显式 --format=pnm 消除警告。⑤ 新增交互式系统架构图（/architecture），管理员手册第 12 章。
 >
 > v1.12 测试版修复记录：① 中文任务名 ZIP 下载报错（Content-Disposition 改为 RFC 5987 编码）；② 缩略图/原图缺失时返回 404 而非 500；③ 非法任务名/任务不存在统一返回 404。共 79 项端到端测试全部通过（排序 19 + 管理页 28 + 开关模式 10 + 功能 22）。
@@ -264,7 +266,18 @@ curl -s http://127.0.0.1:9203/ | head -5
 - systemd `Restart=always`：服务异常退出 3 秒后自动拉起
 - 启动时自动清理 `/tmp` 中上次中断残留的 PNM 临时文件，防止小存储被占满
 - 扫描仪全局独占锁（线程锁），平板与 ADF 不会同时抢设备
-- PDF 页数上限（默认 20 页）防 ARM32 内存 OOM；ZIP 为流式生成不占内存
+- PDF 页数上限（默认 20 页）+ 合成内存估算上限（默认 512MB，`SCANWEB_MAX_PDF_MEM`）双重防 ARM32 OOM；ZIP 为流式生成不占内存
+- v1.14：扫描/转换中的任务对删除、排序、自动清理全程可见并拦截；锁定任务三层防护（模板隐藏 + API 403 + 底层兜底）；webscan update 先校验再原子切换，启动失败自动回滚旧版本
+
+## 测试（v1.14 起）
+
+`tests/` 目录含 24 项 pytest 回归，无需真实扫描仪，覆盖：任务 ID 唯一性、占位页过滤与编号、锁定删除保护、清理排除扫描中任务、设备缓存分键、scan_root 黑名单、PIN PBKDF2 与旧格式迁移、ADF source 白名单、版本一致性、锁定三层防护 API、管理页跳转锚点、SameSite cookie、扫描中删除/排序 409 等。
+
+```bash
+# 在项目根目录（部署机或开发机均可）
+python3 -m venv .venv && .venv/bin/pip install flask waitress pillow pytest
+.venv/bin/python -m pytest tests/ -v
+```
 
 ## 四、运维命令
 
