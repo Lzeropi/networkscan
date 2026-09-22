@@ -1,13 +1,13 @@
 {% extends "base.html" %}
 {% block title %}{{ job }} - 网络扫描仪{% endblock %}
 {% block content %}
-<p><a href="/">← 返回首页</a></p>
+<p><a href="{% if from_admin %}/admin#jobs-manage{% else %}/{% endif %}">{% if from_admin %}← 返回管理页（历史任务）{% else %}← 返回首页{% endif %}</a></p>
 <section class="card">
   <h2>{{ job }}</h2>
   <p class="meta">创建：{{ meta.created }} ｜ {{ meta.params.get('dpi', '150') }}dpi ·
      {% set mode_cn = {'Color':'彩色','Gray':'灰度','Lineart':'黑白'}.get(meta.params.get('mode', 'Gray'), meta.params.get('mode', 'Gray')) %}{{ mode_cn }}{% if meta.params.get('crop') %} · A4裁边{% endif %} ｜
      {% if meta.params.get('source') == 'adf' %}连续进纸{% else %}平板{% endif %}
-     ｜ 共 <span id="pgcount">{{ pairs|length }}</span> 页</p>
+     ｜ 共 <span id="pgcount">{{ pairs|length }}</span> 页{% if meta.locked %} ｜ 🔒 已锁定保护{% endif %}</p>
   <div class="actions">
     <button class="primary" id="btnScan" onclick="scanPage('{{ job }}')">扫描单页</button>
     {% if meta.params.get('source') == 'adf' %}
@@ -16,7 +16,7 @@
     <a class="btn" href="/job/{{ job }}/download.zip">⬇ 打包 ZIP</a>
     <a class="btn" href="/job/{{ job }}/download.pdf">⬇ 合成 PDF</a>
     <button class="btn" id="btnQr" onclick="showQr('{{ job }}')" title="手机扫码直达本任务页">📱 扫码取件</button>
-    <button class="danger" onclick="delJob('{{ job }}')">删除任务</button>
+    {% if not meta.locked %}<button class="danger" onclick="delJob('{{ job }}')">删除任务</button>{% endif %}
   </div>
   <p id="status" class="status"></p>
 </section>
@@ -27,7 +27,7 @@
     <div class="reorder-controls">
       <button class="btn" id="btnReorder" onclick="toggleReorderMode('{{ job }}')">调整图片</button>
       <button class="btn primary" id="btnSaveOrder" style="display:none" onclick="saveReorder('{{ job }}')">保存排序</button>
-      <button class="btn danger-fill" id="btnDeletePages" style="display:none" onclick="toggleDeleteMode('{{ job }}')">删除图片</button>
+      {% if not meta.locked %}<button class="btn danger-fill" id="btnDeletePages" style="display:none" onclick="toggleDeleteMode('{{ job }}')">删除图片</button>{% endif %}
       <button class="btn" id="btnCancelOrder" style="display:none" onclick="cancelReorder()">取消</button>
     </div>
     {% endif %}

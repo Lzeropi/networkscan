@@ -38,16 +38,16 @@ def _resolve_device(name):
     backend, _, suffix = name.partition(":")
     if suffix.strip():                    # 已带完整路径（libusb:xxx），直接用
         return name
-    cache = globals().get("_dev_cache")
+    cache = globals().get("_dev_cache")   # v1.14：按后端前缀分键缓存，多台同后端设备不串号（#15）
     now = time.time()
-    if cache and cache[0] > now and cache[1].startswith(backend + ":"):
-        return cache[1]                   # 缓存有效且同后端
+    if cache and backend in cache and cache[backend][0] > now:
+        return cache[backend][1]
     try:
         out = subprocess.run([SCANIMAGE, "-L"], capture_output=True, timeout=15)
         for line in out.stdout.decode(errors="ignore").splitlines():
             m = re.match(r"device [`']([^`']+)[`']", line.strip())
             if m and m.group(1).startswith(backend + ":"):
-                globals()["_dev_cache"] = (now + 60, m.group(1))
+                globals().setdefault("_dev_cache", {})[backend] = (now + 60, m.group(1))
                 return m.group(1)
     except (OSError, subprocess.SubprocessError):
         pass

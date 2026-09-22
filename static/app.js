@@ -423,7 +423,7 @@ function toggleBtnSortMode() {
 function toggleDeleteMode(job) {
   const wall = document.getElementById("wall");
   const btnDel = document.getElementById("btnDeletePages");
-  if (!wall) return;
+  if (!wall || !btnDel) return;   // v1.14：锁定任务无删除图片按钮
 
   if (!_deleteMode) {
     _deleteMode = true;
@@ -498,7 +498,7 @@ function exitDeleteMode() {
   const btnToggle = document.getElementById("btnToggleBtnSort");
   _deleteMode = false;
   wall.classList.remove("delete-mode");
-  btnDel.textContent = "删除图片";
+  if (btnDel) btnDel.textContent = "删除图片";   // v1.14：锁定任务无此按钮，判空
   if (btnSave) btnSave.classList.remove("controls-disabled");
   if (btnToggle) btnToggle.classList.remove("controls-disabled");
   // 移除删除图标和标记

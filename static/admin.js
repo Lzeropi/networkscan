@@ -5,6 +5,10 @@
   const gate = $("pinGate"), panel = $("adminPanel");
   let pinFirst = false;   // 是否处于"首次设置 PIN"流程
 
+  // v1.14：HTML 转义（#12，所有动态拼接 insertAdjacentHTML 的值必须包 esc()）
+  const esc = s => String(s).replace(/[&<>"']/g, c =>
+    ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+
   async function api(url, opts) {
     const r = await fetch(url, Object.assign({ headers: { "Content-Type": "application/json" } }, opts));
     let d = {};
@@ -65,6 +69,11 @@
     loadConfigs();
     loadJobs();
     startAutoRefresh();
+    // v1.14：从任务页返回（/admin#jobs-manage）时自动滚到锚点（PIN 重登后 hash 不丢）
+    if (location.hash) {
+      const t = document.querySelector(location.hash);
+      if (t) t.scrollIntoView();
+    }
   }
 
   $("pinBtn").addEventListener("click", tryLogin);
@@ -156,7 +165,7 @@
     d.devs.forEach((x, i) => {
       const modes = (x.modes || []).map(m => MODE_CN[m] || m).join(" / ") || "未知";
       const alias = (_devAliases[x.name] || "").trim();
-      const devTitle = alias ? alias + ' <span class="hint">(' + x.name + ')</span>' : x.name;
+      const devTitle = alias ? esc(alias) + ' <span class="hint">(' + esc(x.name) + ')</span>' : esc(x.name);
       const eid = btoa(x.name).replace(/=/g, "");
       const dv = _devDefaults[x.name] || {};
       const curDpi = dv.dpi || "150";
@@ -164,31 +173,31 @@
       const curCrop = dv.crop ? "checked" : "";
       // DPI 选项从设备探测结果生成
       const dpis = x.dpi_raw || ["75","100","150","200","300","600","1200"];
-      const dpiOpts = dpis.map(d => '<option value="'+d+'"'+(d===curDpi?' selected':'')+'>'+d+'</option>').join("");
+      const dpiOpts = dpis.map(d => '<option value="'+esc(d)+'"'+(d===curDpi?' selected':'')+'>'+esc(d)+'</option>').join("");
       const modeOpts = (x.modes || ["Gray","Color"]).map(m =>
-        '<option value="'+m+'"'+(m===curMode?' selected':'')+'>'+(MODE_CN[m]||m)+'</option>').join("");
+        '<option value="'+esc(m)+'"'+(m===curMode?' selected':'')+'>'+esc(MODE_CN[m]||m)+'</option>').join("");
 
       box.insertAdjacentHTML("beforeend",
         '<div class="dev-card">' +
         (d.devs.length > 1 ? '<span class="dev-num">' + (i + 1) + '</span> ' : '') +
         '<b>' + devTitle + "</b>" +
-        '<p class="hint">' + (x.desc || "") + "</p>" +
+        '<p class="hint">' + esc(x.desc || "") + "</p>" +
         '<table class="dev-table">' +
-        "<tr><td>扫描能力</td><td>" + x.scan_type + "</td></tr>" +
-        "<tr><td>分辨率</td><td>" + ((x.dpi_raw && x.dpi_raw.length) ? x.dpi_raw.join("|") + "dpi [" + (x.dpi_raw[0]) + "]" : (x.dpi || "未知")) + "</td></tr>" +
-        "<tr><td>色彩模式</td><td>" + modes + "</td></tr>" +
-        (x.error ? '<tr><td>探测异常</td><td class="err">' + x.error + "</td></tr>" : "") +
+        "<tr><td>扫描能力</td><td>" + esc(x.scan_type) + "</td></tr>" +
+        "<tr><td>分辨率</td><td>" + ((x.dpi_raw && x.dpi_raw.length) ? esc(x.dpi_raw.join("|") + "dpi [" + (x.dpi_raw[0]) + "]") : esc(x.dpi || "未知")) + "</td></tr>" +
+        "<tr><td>色彩模式</td><td>" + esc(modes) + "</td></tr>" +
+        (x.error ? '<tr><td>探测异常</td><td class="err">' + esc(x.error) + "</td></tr>" : "") +
         "</table>" +
         '<div style="margin-top:10px;border-top:1px solid var(--border);padding-top:10px">' +
         '<div class="cfg-row" style="margin-bottom:6px">' +
         '<label class="hint" style="white-space:nowrap">别名</label>' +
-        '<input type="text" id="alias_'+eid+'" placeholder="'+x.name+'" value="'+alias+'" style="flex:1;min-width:80px">' +
+        '<input type="text" id="alias_'+eid+'" placeholder="'+esc(x.name)+'" value="'+esc(alias)+'" style="flex:1;min-width:80px">' +
         '</div>' +
         '<div class="cfg-grid" style="grid-template-columns:auto auto auto 1fr;gap:6px;align-items:center">' +
         '<span class="hint" style="display:flex;align-items:center;gap:4px">默认DPI <select id="dpi_'+eid+'" style="padding:4px;border-radius:6px;border:1px solid var(--border)">'+dpiOpts+'</select></span>' +
         '<span class="hint" style="display:flex;align-items:center;gap:4px">默认色彩 <select id="mode_'+eid+'" style="padding:4px;border-radius:6px;border:1px solid var(--border)">'+modeOpts+'</select></span>' +
         '<span class="hint" style="display:flex;align-items:center;gap:4px"><input type="checkbox" id="crop_'+eid+'" '+curCrop+'> 裁边</span>' +
-        '<button class="primary" data-dev-save="'+x.name+'" style="white-space:nowrap">保存</button>' +
+        '<button class="primary" data-dev-save="'+esc(x.name)+'" style="white-space:nowrap">保存</button>' +
         '</div></div></div>');
     });
     $("devCacheNote").textContent = d.cached ? "（5 分钟内使用缓存，点「重新探测」强制刷新）" : "（刚完成实时探测）";
@@ -291,15 +300,18 @@
       return;
     }
     d.jobs.forEach(j => {
+      // v1.14：任务名可点击直达任务页（新2），动态值全部 esc() 转义（#12）
       tb.insertAdjacentHTML("beforeend",
         "<tr" + (j.locked ? ' class="locked-row"' : "") + ">" +
-        "<td>" + (j.locked ? "🔒 " : "") + (j.remark || j.name) + "<br><span class='hint'>" + j.name + "</span></td>" +
-        "<td>" + j.created + "</td>" +
+        "<td>" + (j.locked ? "🔒 " : "") +
+        '<a href="/job/' + encodeURIComponent(j.name) + '?from=admin">' + esc(j.remark || j.name) + "</a>" +
+        "<br><span class='hint'>" + esc(j.name) + "</span></td>" +
+        "<td>" + esc(j.created) + "</td>" +
         "<td>" + j.pages + "</td>" +
         "<td>" + fmtSize(j.size) + "</td>" +
         "<td>" +
-        '<button class="btn sm" data-lock="' + j.name + '" data-v="' + (j.locked ? 0 : 1) + '">' + (j.locked ? "解锁" : "锁定") + "</button> " +
-        '<button class="btn sm danger" data-del="' + j.name + '"' + (j.locked ? " disabled" : "") + ">删除</button>" +
+        '<button class="btn sm" data-lock="' + esc(j.name) + '" data-v="' + (j.locked ? 0 : 1) + '">' + (j.locked ? "解锁" : "锁定") + "</button> " +
+        '<button class="btn sm danger" data-del="' + esc(j.name) + '"' + (j.locked ? " disabled" : "") + ">删除</button>" +
         "</td></tr>");
     });
     tb.querySelectorAll("button[data-lock]").forEach(b => b.addEventListener("click", async () => {

@@ -17,6 +17,19 @@ from config import (CONVERT, SCANIMAGE, VERSION, get_cleanup_cfg, get_scan_root,
 
 bp = Blueprint("admin", __name__)
 
+# v1.14：scan_root 系统目录黑名单（防误填系统路径，#13）
+_ROOT_BLACKLIST = ("/", "/bin", "/boot", "/dev", "/etc", "/lib", "/lib64",
+                   "/proc", "/root", "/run", "/sbin", "/sys", "/usr",
+                   "/var/lib", "/var/log", "/var/cache", "/var/spool")
+
+
+def _root_blocked(path):
+    np = os.path.normpath(path)
+    for b in _ROOT_BLACKLIST:
+        if np == b or np.startswith(b.rstrip("/") + "/"):
+            return True
+    return False
+
 # ---------------- PIN 防暴力尝试 ----------------
 _pin_fails = {"count": 0, "lock_until": 0.0}   # 全局计数（单人局域网工具，全局锁足够）
 _PIN_MAX_FAILS = 5
@@ -344,6 +357,8 @@ def api_save_config():
     if new_root:
         if not os.path.isabs(new_root):
             return jsonify(ok=False, msg="请输入绝对路径（以 / 开头）"), 400
+        if _root_blocked(new_root):   # v1.14：拒绝系统目录（#13）
+            return jsonify(ok=False, msg="不允许使用系统目录，请选择数据目录（如 /opt、/mnt、/home 下）"), 400
         current = get_scan_root()
         if os.path.normpath(new_root) != os.path.normpath(current):
             if not os.path.isdir(new_root):
@@ -373,7 +388,9 @@ def api_save_config():
         if alias is None:
             cfg["device_alias"] = {}
         elif isinstance(alias, dict):
-            cfg["device_alias"] = {k: str(v)[:50] for k, v in alias.items() if v}
+            # v1.14：别名滤除尖括号（前端 XSS 后端双保险，#12）
+            cfg["device_alias"] = {k: re.sub(r"[<>]", "", str(v))[:50]
+                                   for k, v in alias.items() if v}
     # 4) 扫描默认值（按设备存储：{ "设备名": {"dpi":"150","mode":"Gray","crop":false} }）
     if "scan_defaults" in d:
         sd = d["scan_defaults"]

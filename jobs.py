@@ -1,6 +1,7 @@
 import json
 import os
 import re
+import secrets
 import shutil
 import time
 
@@ -30,7 +31,8 @@ def validate(job):
 
 
 def create(remark="", params=None):
-    name = time.strftime("%Y%m%d-%H%M%S")
+    # v1.14：秒级时间戳 + 4 位随机后缀，防同秒并发创建同名任务互相覆盖
+    name = time.strftime("%Y%m%d-%H%M%S") + "_" + secrets.token_hex(2)
     slug = safe_slug(remark)
     if slug:
         name += "_" + slug

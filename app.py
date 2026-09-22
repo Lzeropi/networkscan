@@ -22,6 +22,7 @@ from config import get_scan_root
 
 app = Flask(__name__)
 app.secret_key = SECRET
+app.config.update(SESSION_COOKIE_SAMESITE="Lax", SESSION_COOKIE_HTTPONLY=True)  # v1.14：基础 CSRF 防护（#7）
 app.register_blueprint(admin.bp)
 FNAME_RE = re.compile(r"p\d{3}\.(png|jpg)")
 
@@ -76,7 +77,8 @@ def index():
 def job_page(job):
     meta = jobs.load(job)
     return render_template("job.html", job=job, meta=meta,
-                           pairs=jobs.page_pairs(job))
+                           pairs=jobs.page_pairs(job),
+                           from_admin=request.args.get("from") == "admin")
 
 
 @app.route("/manual")
@@ -139,6 +141,8 @@ def api_scan_status():
 def api_delete(job):
     if scanner.get_state(job)["state"] == "scanning":
         return jsonify(ok=False, msg="扫描进行中，请等待完成后再删除"), 409
+    if jobs.is_locked(job):   # v1.14：锁定任务双重防护（模板隐藏按钮 + 此处显式 403）
+        return jsonify(ok=False, msg="任务已锁定（管理员保护），不能删除"), 403
     scanner.state.pop(job, None)
     jobs.delete(job)
     return jsonify(ok=True)
@@ -154,6 +158,8 @@ def api_reorder(job):
     body = request.get_json() or {}
     new_order = body.get("order", [])
     is_delete = body.get("delete", False)
+    if is_delete and jobs.is_locked(job):   # v1.14：锁定任务禁删页，排序保留
+        return jsonify(ok=False, msg="任务已锁定，不能删除页面"), 403
     if not new_order:
         return jsonify(ok=False, msg="顺序列表为空"), 400
     base = jobs.path(job)
