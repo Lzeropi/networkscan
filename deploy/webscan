@@ -77,78 +77,42 @@ cmd_update() {
     if [ -f "${INSTALL_DIR}/config.py" ]; then
         old_ver=$(grep -oP 'VERSION\s*=\s*"\K[^"]+' "${INSTALL_DIR}/config.py" 2>/dev/null || echo "unknown")
     fi
+
+    # v1.14：先解压到临时目录并校验，再原子切换（#14，原「先删后解」存在断电残缺窗口）
+    local tmp_extract=""
+    tmp_extract=$(mktemp -d)
+    if ! tar xzf "$pkg" -C "$tmp_extract" 2>/dev/null; then
+        red "错误：更新包解压失败，已取消更新（服务未受影响）"
+        rm -rf "$tmp_extract"
+        return 1
+    fi
+    if [ ! -f "${tmp_extract}/scanweb/app.py" ]; then
+        red "错误：更新包结构异常（缺少 scanweb/app.py），已取消更新（服务未受影响）"
+        rm -rf "$tmp_extract"
+        return 1
+    fi
     local new_ver
-    new_ver=$(grep -oP 'VERSION\s*=\s*"\K[^"]+' <(tar xzf "$pkg" -O "scanweb/config.py" 2>/dev/null) 2>/dev/null || echo "unknown")
+    new_ver=$(grep -oP 'VERSION\s*=\s*"\K[^"]+' "${tmp_extract}/scanweb/config.py" 2>/dev/null || echo "unknown")
 
     echo "  旧版本：v${old_ver}"
     echo "  新版本：v${new_ver}"
     echo ""
 
-    # 4. 解压前先备份保留项
-    yellow "保留 .venv 和 admin_config.json..."
-    local backup_dir=""
-    backup_dir=$(mktemp -d)
+    # 4. 原子切换：旧目录整体让位，保留项 mv 移植（同分区秒级），新代码落位
+    yellow "切换版本（原子）..."
+    rm -rf "${INSTALL_DIR}.old"
+    mv "${INSTALL_DIR}" "${INSTALL_DIR}.old"
+    mkdir -p "${INSTALL_DIR}"
     for item in "${PRESERVE[@]}"; do
-        if [ -e "${INSTALL_DIR}/${item}" ]; then
-            cp -a "${INSTALL_DIR}/${item}" "${backup_dir}/" 2>/dev/null || true
+        if [ -e "${INSTALL_DIR}.old/${item}" ]; then
+            mv "${INSTALL_DIR}.old/${item}" "${INSTALL_DIR}/${item}"
         fi
     done
-
-    # 5. 先把更新包复制到临时位置（清理时不会误删）
-    local pkg_basename
-    pkg_basename=$(basename "$pkg")
-    local pkg_tmp="/tmp/${pkg_basename}"
-    cp "$pkg" "$pkg_tmp"
-
-    # 6. 清理旧代码（保留 .venv 和 admin_config.json）
-    yellow "清理旧代码..."
-    # 删除除保留项以外的所有文件
-    local find_expr=""
-    for item in "${PRESERVE[@]}"; do
-        find_expr="${find_expr} ! -name '${item}'"
-    done
-
-    # 逐个删除，跳过保留项
-    for f in "${INSTALL_DIR}"/*; do
-        [ -e "$f" ] || continue
-        local base
-        base=$(basename "$f")
-        local skip=false
-        for item in "${PRESERVE[@]}"; do
-            if [ "$base" = "$item" ]; then
-                skip=true
-                break
-            fi
-        done
-        if [ "$skip" = false ]; then
-            rm -rf "$f"
-        fi
-    done
-    # 清理隐藏文件（.git, .gitignore 等），但保留 .venv
-    for f in "${INSTALL_DIR}"/.*; do
-        [ -e "$f" ] || continue
-        local base
-        base=$(basename "$f")
-        [ "$base" = "." ] && continue
-        [ "$base" = ".." ] && continue
-        [ "$base" = ".venv" ] && continue
-        rm -rf "$f"
-    done
-
-    # 6. 解压新代码
-    yellow "解压新版本..."
-    tar xzf "$pkg_tmp" --strip-components=1 -C "${INSTALL_DIR}"
-    rm -f "$pkg_tmp"
+    cp -a "${tmp_extract}/scanweb/." "${INSTALL_DIR}/"
+    rm -rf "$tmp_extract"
     rm -f "${INSTALL_DIR}/.python-version" 2>/dev/null || true
 
-    # 7. 恢复保留项（如果新包没有，用备份的）
-    for item in "${PRESERVE[@]}"; do
-        if [ ! -e "${INSTALL_DIR}/${item}" ] && [ -e "${backup_dir}/${item}" ]; then
-            cp -a "${backup_dir}/${item}" "${INSTALL_DIR}/"
-        fi
-    done
-
-    # 8. 清理更新包
+    # 5. 清理更新包
     if [ -f "${INSTALL_DIR}/$(basename "$pkg")" ]; then
         rm -f "${INSTALL_DIR}/$(basename "$pkg")"
     fi
@@ -178,12 +142,10 @@ cmd_update() {
         sleep 2
     fi
 
-    # 13. 清理备份
-    rm -rf "$backup_dir"
-
-    # 14. 验证
+    # 14. 验证（v1.14：启动失败自动回滚到旧版本，#14）
     echo ""
     if systemctl is-active --quiet "$SERVICE_NAME" 2>/dev/null; then
+        rm -rf "${INSTALL_DIR}.old"      # 启动成功才清理旧版本
         local port
         port=$(grep -oP 'SCANWEB_PORT=\K\d+' "$SERVICE_FILE" 2>/dev/null || echo "9203")
         green "更新成功！"
@@ -192,9 +154,20 @@ cmd_update() {
         echo "  访问地址：http://$(hostname -I 2>/dev/null | awk '{print $1}' || echo '<盒子IP>'):${port}"
         echo "  管理页：http://$(hostname -I 2>/dev/null | awk '{print $1}' || echo '<盒子IP>'):${port}/admin"
     else
-        red "服务启动失败！请检查："
+        red "服务启动失败！自动回滚到 v${old_ver} ..."
+        systemctl stop "$SERVICE_NAME" 2>/dev/null || true
+        rm -rf "${INSTALL_DIR}"
+        mv "${INSTALL_DIR}.old" "${INSTALL_DIR}"
+        systemctl start "$SERVICE_NAME" 2>/dev/null || true
+        sleep 2
+        if systemctl is-active --quiet "$SERVICE_NAME" 2>/dev/null; then
+            yellow "已回滚到旧版本 v${old_ver}，服务运行中。新版本失败原因请检查："
+        else
+            red "回滚后服务仍未运行！请手动检查："
+        fi
         echo "  systemctl status ${SERVICE_NAME} --no-pager"
         echo "  journalctl -u ${SERVICE_NAME} -n 20"
+        return 1
     fi
 }
 

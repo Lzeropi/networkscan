@@ -16,7 +16,7 @@ import admin
 import device_probe
 import jobs
 import scanner
-from config import BIND, CONVERT, MAX_PDF_PAGES, PORT, SCANIMAGE, SECRET, TOKEN
+from config import BIND, CONVERT, MAX_PDF_MEM, MAX_PDF_PAGES, PORT, SCANIMAGE, SECRET, TOKEN
 from config import get_scan_root
 
 app = Flask(__name__)
@@ -325,6 +325,13 @@ def dl_pdf(job):
     if not files:
         abort(404)
     if len(files) > MAX_PDF_PAGES:
+        abort(413)
+    # v1.14：按像素估算合成内存（Pillow 惰性读头不载位图），超限拒绝防 ARM 盒子 OOM（#5）
+    approx = 0
+    for f in files:
+        with Image.open(os.path.join(base, f)) as im:
+            approx += im.width * im.height * 3
+    if approx > MAX_PDF_MEM:
         abort(413)
     imgs = [Image.open(os.path.join(base, f)).convert("RGB") for f in files]
     buf = io.BytesIO()

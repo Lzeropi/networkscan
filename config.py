@@ -16,6 +16,7 @@ SECRET = os.environ.get("SCANWEB_SECRET") or secrets.token_hex(32)
 MAX_TOTAL_BYTES = int(os.environ.get("SCAN_MAX_TOTAL_BYTES", "0"))
 MAX_AGE_DAYS = int(os.environ.get("SCAN_MAX_AGE_DAYS", "0"))
 MAX_PDF_PAGES = int(os.environ.get("SCANWEB_MAX_PDF_PAGES", "20"))  # PDF 合成页数上限，超限拒绝（防 OOM）
+MAX_PDF_MEM = int(os.environ.get("SCANWEB_MAX_PDF_MEM", str(512 * 1024 * 1024)))  # v1.14：PDF 合成预估内存上限（字节，#5）
 
 THUMB_SIZE = (300, 300)
 

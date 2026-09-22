@@ -3,6 +3,7 @@ import functools
 import hashlib
 import os
 import re
+import secrets
 import subprocess
 import sys
 import threading
@@ -27,23 +28,42 @@ _ROOT_BLACKLIST = ("/", "/bin", "/boot", "/dev", "/etc", "/lib", "/lib64",
 def _root_blocked(path):
     np = os.path.normpath(path)
     for b in _ROOT_BLACKLIST:
-        if np == b or np.startswith(b.rstrip("/") + "/"):
+        if np == b or (b != "/" and np.startswith(b + "/")):
             return True
     return False
 
-# ---------------- PIN 防暴力尝试 ----------------
-_pin_fails = {"count": 0, "lock_until": 0.0}   # 全局计数（单人局域网工具，全局锁足够）
+# ---------------- PIN 防暴力尝试（v1.14：按 IP 分键，#8） ----------------
+_pin_fails = {}   # ip -> {"count": n, "lock_until": ts}；局域网 IP 数有限，不做淘汰
 _PIN_MAX_FAILS = 5
 _PIN_LOCK_SEC = 60
 
 
+def _pin_rec():
+    return _pin_fails.setdefault(request.remote_addr, {"count": 0, "lock_until": 0.0})
+
+
 def _pin_locked():
-    return time.time() < _pin_fails["lock_until"]
+    return time.time() < _pin_rec()["lock_until"]
 
 
-# ---------------- PIN 认证 ----------------
-def _hash(pin):
-    return hashlib.sha256(pin.encode("utf-8")).hexdigest()
+# ---------------- PIN 认证（v1.14：PBKDF2 慢哈希 + 旧格式自动迁移，#8） ----------------
+def _hash(pin, salt=None):
+    """新格式：pbkdf2$salt$hash。"""
+    salt = salt or secrets.token_hex(8)
+    h = hashlib.pbkdf2_hmac("sha256", pin.encode("utf-8"), salt.encode(), 200000).hex()
+    return salt + "$" + h
+
+
+def _verify(pin, stored):
+    """兼容两种格式：pbkdf2$...（新）/ 纯 64 位 hex（旧 sha256）。"""
+    if "$" in stored:
+        try:
+            salt, h = stored.split("$", 1)
+            calc = hashlib.pbkdf2_hmac("sha256", pin.encode("utf-8"), salt.encode(), 200000).hex()
+            return secrets.compare_digest(calc, h)
+        except ValueError:
+            return False
+    return secrets.compare_digest(hashlib.sha256(pin.encode("utf-8")).hexdigest(), stored)
 
 
 def admin_ok():
@@ -79,7 +99,7 @@ def api_login():
         return jsonify(ok=False, msg="PIN 至少 4 位"), 400
     # 防暴力：锁定期间直接拒绝（不校验、不提示剩余时间之外的信息）
     if _pin_locked():
-        left = int(_pin_fails["lock_until"] - time.time()) + 1
+        left = int(_pin_rec()["lock_until"] - time.time()) + 1
         return jsonify(ok=False, msg="尝试过于频繁，请 %d 秒后再试" % left), 429
     if not cfg["pin_hash"]:
         # 首次使用：设置 PIN（需两次输入一致）
@@ -89,18 +109,21 @@ def api_login():
         save_admin_cfg(cfg)
         session["admin_ok"] = True
         return jsonify(ok=True, first=True)
-    if _hash(pin) == cfg["pin_hash"]:
-        _pin_fails["count"] = 0
-        _pin_fails["lock_until"] = 0.0
+    if _verify(pin, cfg["pin_hash"]):
+        if "$" not in cfg["pin_hash"]:   # v1.14：旧 sha256 格式登录成功后自动升级为 PBKDF2
+            cfg["pin_hash"] = _hash(pin)
+            save_admin_cfg(cfg)
+        _pin_fails.pop(request.remote_addr, None)
         session["admin_ok"] = True
         return jsonify(ok=True)
-    # PIN 错误：计数并按阈值锁定
-    _pin_fails["count"] += 1
-    if _pin_fails["count"] >= _PIN_MAX_FAILS:
-        _pin_fails["lock_until"] = time.time() + _PIN_LOCK_SEC
-        _pin_fails["count"] = 0
+    # PIN 错误：计数并按阈值锁定（按 IP，不影响其他管理员）
+    rec = _pin_rec()
+    rec["count"] += 1
+    if rec["count"] >= _PIN_MAX_FAILS:
+        rec["lock_until"] = time.time() + _PIN_LOCK_SEC
+        rec["count"] = 0
         return jsonify(ok=False, msg="连续错误次数过多，已锁定 1 分钟"), 429
-    return jsonify(ok=False, msg="PIN 错误（已连续错 %d 次）" % _pin_fails["count"]), 403
+    return jsonify(ok=False, msg="PIN 错误（已连续错 %d 次）" % rec["count"]), 403
 
 
 @bp.post("/api/admin/logout")
