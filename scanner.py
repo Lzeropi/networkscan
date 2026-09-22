@@ -7,6 +7,7 @@ import time
 from PIL import Image
 
 import jobs
+import device_probe
 from config import (CONVERT, DEVICE, SCAN_SOURCE,
                     SCANIMAGE, THUMB_SIZE, get_scan_root)
 
@@ -197,6 +198,13 @@ def scan_adf(job):
             start = len(jobs.raw_pages(job)) + 1   # v1.14：含 0 字节占位的裸计数（#3）
             pat = os.path.join(get_scan_root(), job, "p%03d.pnm")
             source = p.get("source_name") or SCAN_SOURCE  # 优先用探测到的源名，其次配置回退
+            # v1.14：进纸源白名单校验，非法值明确报错不执行（#17）
+            if source:
+                cap = next((x for x in device_probe.probe()[0]
+                            if x["name"] == p["device"] or x["name"].startswith(p["device"])), None)
+                if cap and cap["sources"] and source not in cap["sources"]:
+                    st.update(state="error", msg="进纸源不受设备支持：%s" % source)
+                    return
             cmd = _base_cmd(p)
             if source:                      # 有值才传 --source（无 ADF 设备不传）
                 cmd += ["--source", source]

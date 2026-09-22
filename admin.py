@@ -10,6 +10,7 @@ import time
 
 from flask import Blueprint, jsonify, render_template, request, session
 
+import device_probe
 import jobs
 import scanner
 from config import (CONVERT, SCANIMAGE, VERSION, get_cleanup_cfg, get_scan_root,
@@ -257,54 +258,11 @@ def env_report():
             "scan_root_writable": sr_writable}
 
 
-# ---------------- 设备探测（5 分钟缓存，刷新按钮强制重探） ----------------
-_dev_cache = {"ts": 0.0, "data": None}
-_DEV_CACHE_SEC = 300
-
+# ---------------- 设备探测（v1.14：合并到 device_probe.py，与普通页共用，#11） ----------------
 
 def probe_devices(force=False):
-    now = time.time()
-    if not force and _dev_cache["data"] is not None and now - _dev_cache["ts"] < _DEV_CACHE_SEC:
-        return _dev_cache["data"], True
-    devs = []
-    cached = False
-    if os.path.exists(SCANIMAGE):
-        try:
-            r = subprocess.run([SCANIMAGE, "-L"], capture_output=True, text=True, timeout=25)
-            for m in re.finditer(r"device `([^']+)' is a (.+)", r.stdout + r.stderr):
-                dev, desc = m.group(1), m.group(2).strip()
-                info = {"name": dev, "desc": desc, "modes": [], "sources": [],
-                        "dpi": "", "dpi_raw": [], "scan_type": "未知", "error": ""}
-                try:
-                    a = subprocess.run([SCANIMAGE, "-A", "-d", dev],
-                                        capture_output=True, text=True, timeout=25)
-                    ao = a.stdout + a.stderr
-                    mm = re.search(r"--mode\s+([^\[]+)\[", ao)
-                    if mm:
-                        info["modes"] = [s.strip() for s in mm.group(1).split("|")]
-                    ms = re.search(r"--source\s+([^\[]+)\[", ao)
-                    if ms:
-                        info["sources"] = [s.strip() for s in ms.group(1).split("|")]
-                    has_adf = any("adf" in s.lower() for s in info["sources"])
-                    info["scan_type"] = "平板 + ADF 连续" if has_adf else "仅平板单张"
-                    # 完整 DPI 列表（如 --resolution 75|100|150|200|300|600|1200dpi [75]）
-                    mr = re.search(r"--resolution\s+([^\[]+)\[", ao)
-                    if mr:
-                        info["dpi_raw"] = [d.strip().replace("dpi", "")
-                                           for d in mr.group(1).split("|")]
-                        info["dpi"] = info["dpi_raw"][0] + "–" + info["dpi_raw"][-1] + " dpi" if info["dpi_raw"] else ""
-                    else:
-                        md = re.search(r"--resolution\s+(\d+)\.\.(\d+)", ao)
-                        if md:
-                            info["dpi"] = "%s–%s dpi" % (md.group(1), md.group(2))
-                except Exception as e:
-                    info["error"] = str(e)[:120]
-                devs.append(info)
-            cached = True
-        except Exception:
-            pass
-    _dev_cache["data"], _dev_cache["ts"] = devs, now
-    return devs, cached
+    return device_probe.probe(force=force)
+
 
 
 @bp.get("/api/admin/devices")
@@ -397,15 +355,23 @@ def api_save_config():
         if sd is None:
             cfg["scan_defaults"] = {}
         elif isinstance(sd, dict):
+            # v1.14：按设备探测能力白名单校验 dpi/mode，非法值回退探测列表首项（#16）
+            caps = {x["name"]: x for x in device_probe.probe()[0]}
             cleaned = {}
             for dev_name, dv in sd.items():
                 if not isinstance(dv, dict):
                     continue
-                cleaned[dev_name] = {
-                    "dpi": str(dv.get("dpi", "150")),
-                    "mode": str(dv.get("mode", "Gray")),
-                    "crop": bool(dv.get("crop", False))
-                }
+                cap = caps.get(dev_name, {})
+                dpi_ok = cap.get("dpi_raw") or []
+                mode_ok = cap.get("modes") or []
+                dpi = str(dv.get("dpi", "150"))
+                mode = str(dv.get("mode", "Gray"))
+                if dpi_ok and dpi not in dpi_ok:
+                    dpi = dpi_ok[0]
+                if mode_ok and mode not in mode_ok:
+                    mode = mode_ok[0]
+                cleaned[dev_name] = {"dpi": dpi, "mode": mode,
+                                     "crop": bool(dv.get("crop", False))}
             cfg["scan_defaults"] = cleaned
     save_admin_cfg(cfg)
     deleted = jobs.cleanup()

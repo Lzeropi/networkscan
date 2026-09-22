@@ -3,7 +3,6 @@ import os
 import queue as q
 import re
 import shutil
-import subprocess
 import threading
 import zipfile
 from urllib.parse import quote
@@ -14,9 +13,9 @@ from flask import (Flask, Response, abort, jsonify, redirect,
 from waitress import serve
 
 import admin
+import device_probe
 import jobs
 import scanner
-import time as _time
 from config import BIND, CONVERT, MAX_PDF_PAGES, PORT, SCANIMAGE, SECRET, TOKEN
 from config import get_scan_root
 
@@ -234,48 +233,11 @@ def api_reorder(job):
     return jsonify(ok=True)
 
 
-# 设备探测缓存（5 分钟 TTL，与 admin 页共享）
-_DEV_CACHE = {"data": None, "ts": 0}
-_DEV_CACHE_SEC = 300
-
 @app.get("/api/devices")
 def api_devices():
     """列出设备并探测每台设备支持的扫描模式和进纸源（scanimage -A）。
-    5 分钟服务端缓存，避免每次刷新页面都重新探测。"""
-    now = _time.time()
-    cached = False
-    if _DEV_CACHE["data"] is not None and now - _DEV_CACHE["ts"] < _DEV_CACHE_SEC:
-        cached = True
-    else:
-        try:
-            r = subprocess.run([SCANIMAGE, "-L"], capture_output=True, text=True, timeout=15)
-            dev_names = re.findall(r"device `([^']+)'", r.stdout)
-        except Exception:
-            dev_names = []
-
-        devs = []
-        for dev in dev_names:
-            info = {"name": dev, "modes": ["Color", "Gray"], "sources": [], "dpis": ["150", "300", "600"]}
-            try:
-                a = subprocess.run([SCANIMAGE, "-A", "--format", "pnm", "-d", dev],
-                                   capture_output=True, text=True, timeout=15)
-                out = a.stdout + a.stderr
-                m = re.search(r'--mode\s+([^\[]+)\[', out)
-                if m:
-                    info["modes"] = [s.strip() for s in m.group(1).split("|")]
-                s = re.search(r'--source\s+([^\[]+)\[', out)
-                if s:
-                    info["sources"] = [src.strip() for src in s.group(1).split("|")]
-                r2 = re.search(r'--resolution\s+([^\[]+)\[', out)
-                if r2:
-                    info["dpis"] = [d.strip().replace("dpi", "") for d in r2.group(1).split("|")]
-            except Exception:
-                pass
-            devs.append(info)
-        _DEV_CACHE["data"] = devs
-        _DEV_CACHE["ts"] = now
-
-    devs = _DEV_CACHE["data"] or []
+    v1.14：探测逻辑合并到 device_probe.py，与管理页共用同一实现与缓存（#11）。"""
+    devs, _cached = device_probe.probe()
     # 附加设备别名和按设备的扫描默认值（每次都读，可能随时改）
     try:
         from config import load_admin_cfg

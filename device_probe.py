@@ -1,0 +1,63 @@
+# device_probe.py — v1.14 设备探测公共模块（app.py 与 admin.py 共用，单一缓存）
+# 背景（#11）：此前普通页与管理页各有一套 scanimage -L/-A 解析实现，字段与超时不一致。
+# 合并为超集字段：name/desc/modes/sources/dpis/dpi_raw/dpi/scan_type/error，
+# app.js 依赖 dpis/modes/sources，admin.js 依赖 dpi_raw/desc/scan_type/error，此超集全覆盖。
+import os
+import re
+import subprocess
+import time
+
+from config import SCANIMAGE
+
+_cache = {"ts": 0.0, "data": None}
+_CACHE_SEC = 300          # 5 分钟缓存，与 v1.13 行为一致
+
+
+def probe(force=False):
+    """探测全部扫描设备及其能力。返回 (devs, cached)。
+    force=True 时强制重新探测（管理页「重新探测」按钮）。
+    探测失败记入单设备 error 字段（沿用管理页行为）；DPI 列表失败给空，
+    前端 app.js/admin.js 各有 fallback 默认值。超时取 ARM 慢值 25s。"""
+    now = time.time()
+    if not force and _cache["data"] is not None and now - _cache["ts"] < _CACHE_SEC:
+        return _cache["data"], True
+    devs = []
+    if os.path.exists(SCANIMAGE):
+        try:
+            r = subprocess.run([SCANIMAGE, "-L"], capture_output=True, text=True, timeout=25)
+            for m in re.finditer(r"device `([^']+)' is a (.+)", r.stdout + r.stderr):
+                dev, desc = m.group(1), m.group(2).strip()
+                info = {"name": dev, "desc": desc, "modes": [], "sources": [],
+                        "dpis": [], "dpi": "", "dpi_raw": [], "scan_type": "未知", "error": ""}
+                try:
+                    a = subprocess.run([SCANIMAGE, "-A", "-d", dev],
+                                        capture_output=True, text=True, timeout=25)
+                    ao = a.stdout + a.stderr
+                    mm = re.search(r"--mode\s+([^\[]+)\[", ao)
+                    if mm:
+                        info["modes"] = [s.strip() for s in mm.group(1).split("|")]
+                    ms = re.search(r"--source\s+([^\[]+)\[", ao)
+                    if ms:
+                        info["sources"] = [s.strip() for s in ms.group(1).split("|")]
+                    info["scan_type"] = ("平板 + ADF 连续"
+                                         if any("adf" in s.lower() for s in info["sources"])
+                                         else "仅平板单张")
+                    # 完整 DPI 列表（如 --resolution 75|100|150|200|300|600|1200dpi [75]）
+                    mr = re.search(r"--resolution\s+([^\[]+)\[", ao)
+                    if mr:
+                        info["dpi_raw"] = [d.strip().replace("dpi", "")
+                                           for d in mr.group(1).split("|")]
+                        info["dpis"] = list(info["dpi_raw"])
+                        info["dpi"] = (info["dpi_raw"][0] + "–" + info["dpi_raw"][-1] + " dpi"
+                                      if info["dpi_raw"] else "")
+                    else:
+                        md = re.search(r"--resolution\s+(\d+)\.\.(\d+)", ao)
+                        if md:
+                            info["dpi"] = "%s–%s dpi" % (md.group(1), md.group(2))
+                except Exception as e:
+                    info["error"] = str(e)[:120]
+                devs.append(info)
+        except Exception:
+            pass
+    _cache["data"], _cache["ts"] = devs, now
+    return devs, False
