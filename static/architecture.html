@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>ScanWeb v1.13 系统架构图</title>
+<title>ScanWeb v1.14 系统架构</title>
 <style>
 /* ===== CSS 变量：深色主题（默认） ===== */
 :root[data-theme="dark"] {
@@ -17,8 +17,8 @@
   --border: #2a2a4a;
   --grid-line: #1a1a3a;
   --connection: #4a4a6a;
-  --highlight: #4080ff;
-  --hover-glow: rgba(64,128,255,0.3);
+  --highlight: #e94560;
+  --hover-glow: rgba(233,69,96,0.3);
   --dim-opacity: 0.2;
   --kind-frontend-bg: #1a1a2e; --kind-frontend-border: #e94560;
   --kind-backend-bg: #16213e;  --kind-backend-border: #06d6a0;
@@ -34,7 +34,6 @@
   --toolbar-border: #2a2a4a;
   --btn-bg: #1a1a2e;
   --btn-hover: #2a2a4a;
-  --label-bg: #141428;
 }
 /* ===== CSS 变量：浅色主题 ===== */
 :root[data-theme="light"] {
@@ -48,8 +47,8 @@
   --border: #e0e0e8;
   --grid-line: #f0f0f4;
   --connection: #9ca3af;
-  --highlight: #4080ff;
-  --hover-glow: rgba(64,128,255,0.15);
+  --highlight: #3b82f6;
+  --hover-glow: rgba(59,130,246,0.15);
   --dim-opacity: 0.3;
   --kind-frontend-bg: #f0f4ff; --kind-frontend-border: #3b82f6;
   --kind-backend-bg: #f0fdf4;  --kind-backend-border: #22c55e;
@@ -57,15 +56,14 @@
   --kind-cache-bg: #fff7ed;    --kind-cache-border: #f97316;
   --kind-queue-bg: #faf5ff;    --kind-queue-border: #8b5cf6;
   --kind-external-bg: #fdf2f8; --kind-external-border: #ec4899;
-  --kind-service-bg: #f0fdf4;  --kind-service-border: #14b8a6;
-  --kind-gateway-bg: #fef2f2;  --kind-gateway-border: #ef4444;
+  --kind-service-bg: #f0fdf4; --kind-service-border: #14b8a6;
+  --kind-gateway-bg: #fef2f2; --kind-gateway-border: #ef4444;
   --boundary-border: #cbd5e1;
   --boundary-bg: rgba(203,213,225,0.1);
   --toolbar-bg: #ffffff;
   --toolbar-border: #e0e0e8;
   --btn-bg: #f8f9fa;
   --btn-hover: #e8e8f0;
-  --label-bg: #ffffff;
 }
 /* ===== 全局 ===== */
 * { margin:0; padding:0; box-sizing:border-box; }
@@ -103,7 +101,7 @@ body {
   background-size: 40px 40px;
 }
 #canvas-inner {
-  position: relative; width:820px; height:1230px;
+  position: relative; min-width:100%; min-height:100%; padding:48px;
   transform-origin: 0 0;
 }
 /* ===== 边界容器 ===== */
@@ -112,11 +110,10 @@ body {
   border-radius: 12px; background: var(--boundary-bg); padding: 24px 16px 16px;
   pointer-events: none;
 }
-.boundary.solid { border-style: solid; }
 .boundary-label {
   position: absolute; top: -10px; left: 16px; padding: 2px 12px;
   background: var(--bg-canvas); font-size: 12px; color: var(--text-dim);
-  border-radius: 4px; pointer-events: none; white-space: nowrap;
+  border-radius: 4px; pointer-events: none;
 }
 /* ===== 节点 ===== */
 .node {
@@ -155,7 +152,6 @@ body {
 .conn-path.dimmed { opacity: var(--dim-opacity); }
 .conn-label {
   fill: var(--text-dim); font-size: 11px; text-anchor: middle;
-  paint-order: stroke; stroke: var(--label-bg); stroke-width: 4px; stroke-linejoin: round;
   transition: opacity .2s;
 }
 .conn-label.dimmed { opacity: var(--dim-opacity); }
@@ -186,15 +182,13 @@ body {
 #legend .lg-title { font-weight:600; margin-bottom:6px; color:var(--text-dim); }
 #legend .lg-item { display:inline-flex; align-items:center; gap:4px; margin-right:12px; }
 #legend .lg-dot { width:10px; height:10px; border-radius:3px; border:2px solid; }
-#legend .lg-flow { margin-top:8px; color: var(--text-dim); }
-#legend .lg-flow-line { display:inline-block; width:24px; height:0; border-top:3px solid var(--highlight); vertical-align:middle; margin-right:4px; }
 </style>
 </head>
 <body>
 <div id="toolbar">
-  <h1 id="diagram-title">ScanWeb v1.13 系统架构</h1>
+  <h1 id="diagram-title">架构图</h1>
   <div class="spacer"></div>
-  <input type="text" id="search-box" placeholder="搜索组件..." />
+  <input type="text" id="search-box" placeholder="搜索节点..." />
   <button class="tb-btn" id="btn-theme" onclick="toggleTheme()">☀ 浅色</button>
   <button class="tb-btn" id="btn-export-svg" onclick="exportSVG()">导出 SVG</button>
   <button class="tb-btn" id="btn-export-png" onclick="exportPNG()">导出 PNG</button>
@@ -220,87 +214,233 @@ body {
 <div id="legend">
   <div class="lg-title">组件类型</div>
   <span class="lg-item"><span class="lg-dot" style="border-color:var(--kind-frontend-border)"></span>前端</span>
+  <span class="lg-item"><span class="lg-dot" style="border-color:var(--kind-gateway-border)"></span>网关</span>
   <span class="lg-item"><span class="lg-dot" style="border-color:var(--kind-backend-border)"></span>后端</span>
-  <span class="lg-item"><span class="lg-dot" style="border-color:var(--kind-service-border)"></span>服务模块</span>
-  <span class="lg-item"><span class="lg-dot" style="border-color:var(--kind-gateway-border)"></span>系统网关</span>
-  <span class="lg-item"><span class="lg-dot" style="border-color:var(--kind-database-border)"></span>数据/存储</span>
-  <span class="lg-item"><span class="lg-dot" style="border-color:var(--kind-external-border)"></span>外设</span>
-  <div class="lg-flow"><span class="lg-flow-line"></span>扫描主数据流（可悬停/点击查看详情）</div>
+  <span class="lg-item"><span class="lg-dot" style="border-color:var(--kind-cache-border)"></span>缓存</span>
+  <span class="lg-item"><span class="lg-dot" style="border-color:var(--kind-database-border)"></span>数据库</span>
+  <span class="lg-item"><span class="lg-dot" style="border-color:var(--kind-external-border)"></span>外部</span>
 </div>
 
 <script>
-/* ===== JSON IR 数据：ScanWeb v1.13 架构 ===== */
+/* ===== JSON IR 数据（ScanWeb v1.14，archify 生成） ===== */
 const IR = {
   "diagram_type": "architecture",
-  "meta": { "title": "ScanWeb v1.13 系统架构", "locale": "zh-CN", "theme": "dark", "preset": "signal-flow" },
+  "meta": {
+    "title": "ScanWeb v1.14 系统架构",
+    "locale": "zh-CN",
+    "theme": "dark",
+    "preset": "signal-flow"
+  },
   "components": [
-    { "id": "browser", "label": "局域网浏览器", "kind": "frontend",
-      "description": "局域网内 PC / 手机浏览器，访问 http://192.168.1.203:9203 即可使用，无需安装任何客户端。页面为原生 HTML/CSS/JS 单页，无外部依赖。",
-      "metadata": { "协议": "HTTP", "端口": "9203", "页面": "首页 / 任务页 / 用户手册" } },
-    { "id": "app", "label": "Flask 主服务", "kind": "backend",
-      "description": "app.py + Waitress WSGI，监听 :9203。提供页面路由与全部 JSON API；启动时自动部署示例任务；/api/devices 带 5 分钟服务端缓存（冷启动 7.4s，命中 0.07s）；提供缩略图、ZIP/PDF 打包下载、二维码分享。",
-      "metadata": { "框架": "Flask + Waitress", "端口": "9203", "核心文件": "app.py" } },
-    { "id": "admin", "label": "管理模块", "kind": "service",
-      "description": "admin.py：PIN 认证（连续错 5 次锁定 60 秒）、资源监控（CPU/内存/磁盘/温度，30 秒自动刷新且只刷资源数据）、依赖检测、SANE 设备探测（含 dpi_raw 完整分辨率列表）、按设备的扫描默认值配置、存储超限自动清理策略。",
-      "metadata": { "核心文件": "admin.py", "页面": "/admin + /admin/manual", "配置": "admin_config.json" } },
-    { "id": "jobs", "label": "任务管理", "kind": "service",
-      "description": "jobs.py：扫描任务的创建与列表；任务页拖拽排序（占位语义）；删除标记 / 取消删除 / 保存删除；保存删除后文件删除并对剩余页连续重编号。",
-      "metadata": { "核心文件": "jobs.py", "API": "/api/new /api/reorder /api/delete" } },
-    { "id": "scanner", "label": "扫描模块", "kind": "service",
-      "description": "scanner.py：_resolve_device() 自动解析完整设备名（hpljm1005:libusb:001:003，缓存 60 秒）；scan_flatbed() 平板扫描完成后立即释放设备锁，PNM→PNG 转换交由后台线程执行，不阻塞下一次扫描。",
-      "metadata": { "核心文件": "scanner.py", "扫描耗时": "约 7 秒/页", "转换": "后台线程约 9 秒" } },
-    { "id": "convert", "label": "图像转换", "kind": "service",
-      "description": "ImageMagick convert + Pillow：把 scanimage 输出的 PNM 原图转为 PNG/JPEG 成品，并生成缩略图。转换在后台线程进行，前端通过占位图动画 + 轮询就绪后替换缩略图。",
-      "metadata": { "工具": "convert / Pillow", "格式": "PNM → PNG/JPEG" } },
-    { "id": "systemd", "label": "systemd + webscan", "kind": "service",
-      "description": "networkscan.service 负责开机自启与守护；/usr/local/bin/webscan 管理脚本提供 start / stop / restart / status / logs / update / version / uninstall 八条命令，一键更新安装包。",
-      "metadata": { "服务": "networkscan.service", "脚本": "/usr/local/bin/webscan" } },
-    { "id": "sane", "label": "SANE 扫描栈", "kind": "gateway",
-      "description": "scanimage 命令行 + hpaio 后端 + libsane。探测命令 scanimage -L 的输出为左反引号右单引号格式；扫描必须携带 --format=pnm 参数。",
-      "metadata": { "设备": "hpljm1005:libusb:001:003", "命令": "scanimage" } },
-    { "id": "cfg", "label": "admin_config.json", "kind": "database",
-      "description": "运行时配置文件：PIN 哈希、设备别名、按设备独立存储的扫描默认值（DPI / 色彩 / 裁边）、清理策略（max_total_mb=300）。管理页每次实时读取。",
-      "metadata": { "路径": "部署目录下 admin_config.json", "内容": "PIN / 别名 / 默认值 / 清理" } },
-    { "id": "store", "label": "扫描输出目录", "kind": "database",
-      "description": "任务文件存储（盒子为 /opt/smb_share/scans）：每个任务一个目录，含 PNM 原图、PNG 成品、缩略图；示例任务在服务首次启动时自动部署。",
-      "metadata": { "路径": "/opt/smb_share/scans", "内容": "PNM / PNG / 缩略图" } },
-    { "id": "m1005", "label": "HP LaserJet M1005", "kind": "external",
-      "description": "USB 平板扫描仪。支持 Gray / Color 两种色彩模式（无 Lineart）、75~1200dpi 七档分辨率、无自动进纸器（ADF）。单页扫描约 7 秒。",
-      "metadata": { "接口": "USB · libusb", "色彩": "Gray / Color", "DPI": "75 ~ 1200" } }
+    {
+      "id": "browser",
+      "label": "浏览器 Web UI",
+      "kind": "frontend",
+      "description": "局域网内手机/平板/电脑直接访问，零安装。index（新建任务）/ job（扫描·排序·下载）/ admin（管理）三页；app.js 扫描轮询与拖拽排序，admin.js 设备卡与任务表（v1.14：动态值全量转义防 XSS，任务名可直达任务页）"
+    },
+    {
+      "id": "waitress",
+      "label": "Waitress :9203",
+      "kind": "gateway",
+      "description": "生产级 WSGI 服务器，8 线程并发。Session cookie SameSite=Lax + HttpOnly（v1.14 基础 CSRF 防护）"
+    },
+    {
+      "id": "app",
+      "label": "app.py 主路由",
+      "kind": "backend",
+      "description": "页面渲染 + 任务 API（创建/扫描/删除/排序）+ ZIP 流式下载 + PDF 合成（v1.14：内存估算上限 512MB）+ 扫码取件。锁定任务删除返回 403；任务 ID 秒级时间戳+随机后缀防并发覆盖"
+    },
+    {
+      "id": "admin_bp",
+      "label": "admin.py 管理蓝图",
+      "kind": "backend",
+      "description": "PIN 认证（v1.14：PBKDF2 200k 慢哈希 + 旧格式自动迁移 + 按 IP 防暴力锁）、资源监控、环境检测、配置读写、任务锁定管理。scan_root 系统目录黑名单；scan_defaults 按设备能力白名单校验"
+    },
+    {
+      "id": "scanner",
+      "label": "scanner.py 扫描核心",
+      "kind": "backend",
+      "description": "scan_lock 全局独占锁（平板/ADF 互斥）；state 状态机（v1.14：平板扫描+后台转换全程可见，扫描期间删除/排序/清理全部拦截）；PNM→PNG 后台转换不阻塞下次扫描；设备名解析缓存按后端分键（v1.14）；ADF 进纸源白名单校验"
+    },
+    {
+      "id": "jobsm",
+      "label": "jobs.py 任务管理",
+      "kind": "backend",
+      "description": "任务创建/元数据/页列表/物理排序重编号。v1.14：pages() 过滤 0 字节转换中占位、raw_pages() 裸计数防编号冲突；cleanup 排除扫描中任务；锁定任务三层防护兜底"
+    },
+    {
+      "id": "dp",
+      "label": "device_probe.py 设备探测",
+      "kind": "service",
+      "description": "v1.14 新增公共模块：scanimage -L/-A 解析设备能力（模式/进纸源/DPI 列表），普通页与管理页共用同一实现与 300s 缓存，统一 25s 超时"
+    },
+    {
+      "id": "config",
+      "label": "config.py 配置中心",
+      "kind": "service",
+      "description": "环境变量（端口/存储路径/页数与内存上限）+ admin_config.json 运行配置（PIN/别名/默认值/清理策略），原子写入"
+    },
+    {
+      "id": "fs",
+      "label": "文件存储 scan_root",
+      "kind": "database",
+      "description": "每任务一个目录：meta.json + pNNN.png 页面 + .thumbs 缩略图。零数据库，Samba 可直接共享给局域网"
+    },
+    {
+      "id": "scanimage",
+      "label": "SANE scanimage",
+      "kind": "external",
+      "description": "扫描命令行工具，持锁执行（平板单页 300s 超时 / ADF 批量 3600s），短设备名自动解析完整名"
+    },
+    {
+      "id": "convert",
+      "label": "ImageMagick convert",
+      "kind": "external",
+      "description": "PNM→PNG 转换（hpljm1005 后端不支持直接输出 PNG），后台线程执行不阻塞扫描仪"
+    },
+    {
+      "id": "scanner_dev",
+      "label": "USB 扫描仪",
+      "kind": "external",
+      "description": "HP LaserJet M1005（或其他 SANE 兼容设备），即插即用，前端下拉自动发现新设备"
+    },
+    {
+      "id": "systemd",
+      "label": "systemd + webscan CLI",
+      "kind": "service",
+      "description": "Restart=always 自动拉起；webscan update 一键更新（v1.14 原子化：先解压校验→mv 切换→启动验证→失败自动回滚）"
+    }
   ],
   "boundaries": [
-    { "id": "lan", "label": "局域网（客户端）", "members": ["browser"] },
-    { "id": "box", "label": "机顶盒 hi3798mv100（Ubuntu 20.04 · ARM32）", "members": ["app","admin","jobs","scanner","convert","systemd","sane","cfg","store"], "style": "solid" },
-    { "id": "usb", "label": "USB 外设", "members": ["m1005"] }
+    {
+      "id": "lan",
+      "label": "局域网客户端",
+      "members": [
+        "browser"
+      ]
+    },
+    {
+      "id": "box",
+      "label": "盒子主机（hi3798mv100 / Ubuntu 20.04）",
+      "members": [
+        "waitress",
+        "app",
+        "admin_bp",
+        "scanner",
+        "jobsm",
+        "dp",
+        "config",
+        "fs",
+        "scanimage",
+        "convert",
+        "scanner_dev",
+        "systemd"
+      ]
+    }
   ],
   "connections": [
-    { "from": "browser", "to": "app", "label": "HTTP :9203", "highlight": true },
-    { "from": "systemd", "to": "app", "label": "守护启动", "style": "dashed" },
-    { "from": "app", "to": "scanner", "label": "/api/scan 发起扫描", "highlight": true },
-    { "from": "app", "to": "jobs", "label": "任务 API 排序/删除" },
-    { "from": "app", "to": "admin", "label": "管理路由 PIN 保护" },
-    { "from": "scanner", "to": "sane", "label": "scanimage --format=pnm", "highlight": true },
-    { "from": "sane", "to": "m1005", "label": "USB · libusb", "highlight": true },
-    { "from": "scanner", "to": "convert", "label": "PNM→PNG 后台线程", "highlight": true },
-    { "from": "scanner", "to": "store", "label": "写 PNM + 占位图" },
-    { "from": "convert", "to": "store", "label": "写 PNG + 缩略图" },
-    { "from": "jobs", "to": "store", "label": "排序 · 删除 · 重编号" },
-    { "from": "admin", "to": "sane", "label": "scanimage -L 探测设备" },
-    { "from": "admin", "to": "cfg", "label": "别名 / 默认值 / 清理" },
-    { "from": "scanner", "to": "cfg", "label": "读按设备默认值" }
+    {
+      "from": "browser",
+      "to": "waitress",
+      "label": "HTTP :9203",
+      "highlight": true
+    },
+    {
+      "from": "waitress",
+      "to": "app",
+      "label": "WSGI",
+      "highlight": true
+    },
+    {
+      "from": "waitress",
+      "to": "admin_bp",
+      "label": "Blueprint"
+    },
+    {
+      "from": "app",
+      "to": "scanner",
+      "label": "scan / status",
+      "highlight": true
+    },
+    {
+      "from": "app",
+      "to": "jobsm",
+      "label": "任务 CRUD"
+    },
+    {
+      "from": "app",
+      "to": "dp",
+      "label": "probe()"
+    },
+    {
+      "from": "admin_bp",
+      "to": "scanner",
+      "label": "testscan / state"
+    },
+    {
+      "from": "admin_bp",
+      "to": "jobsm",
+      "label": "列表 / 锁定"
+    },
+    {
+      "from": "admin_bp",
+      "to": "dp",
+      "label": "probe(refresh)"
+    },
+    {
+      "from": "admin_bp",
+      "to": "config",
+      "label": "配置读写",
+      "highlight": true
+    },
+    {
+      "from": "scanner",
+      "to": "jobsm",
+      "label": "pages / save"
+    },
+    {
+      "from": "scanner",
+      "to": "scanimage",
+      "label": "subprocess 持锁",
+      "highlight": true
+    },
+    {
+      "from": "scanner",
+      "to": "convert",
+      "label": "PNM→PNG"
+    },
+    {
+      "from": "jobsm",
+      "to": "fs",
+      "label": "meta / 页面"
+    },
+    {
+      "from": "scanimage",
+      "to": "scanner_dev",
+      "label": "USB SANE",
+      "highlight": true
+    },
+    {
+      "from": "convert",
+      "to": "fs",
+      "label": "写 PNG"
+    },
+    {
+      "from": "config",
+      "to": "fs",
+      "label": "admin_config.json"
+    },
+    {
+      "from": "systemd",
+      "to": "waitress",
+      "label": "启停 / 自愈"
+    }
   ]
 };
 
-/* ===== 显式分层布局 ===== */
-const LAYERS = [
-  ["browser"],
-  ["app"],
-  ["admin", "jobs", "scanner"],
-  ["systemd", "convert", "sane"],
-  ["cfg", "store"],
-  ["m1005"]
-];
-const NODE_W = 180, NODE_H = 64, GAP_X = 80, GAP_Y = 140, MARGIN = 48;
+/* ===== 布局配置 ===== */
+const LAYER_ORDER = ['frontend','gateway','service','backend','cache','queue','database','external'];
+const NODE_W = 160, NODE_H = 64, GAP_X = 60, GAP_Y = 120, MARGIN = 48;
 
 /* ===== 状态 ===== */
 let nodePositions = {};
@@ -309,18 +449,14 @@ let isPanning = false, panStart = { x:0, y:0, px:0, py:0 };
 
 /* ===== 图标映射 ===== */
 const KIND_ICONS = {
-  frontend:"🖥️", backend:"⚙️", database:"🗄️", cache:"⚡",
-  queue:"📨", external:"🖨️", service:"🔧", gateway:"🔌"
-};
-const KIND_NAMES = {
-  frontend:"前端", backend:"后端", database:"数据/存储", cache:"缓存",
-  queue:"队列", external:"外设", service:"服务模块", gateway:"系统网关"
+  frontend:'🖥️', backend:'⚙️', database:'🗄️', cache:'⚡',
+  queue:'📨', external:'🔗', service:'🔧', gateway:'🚪'
 };
 
 /* ===== 渲染入口 ===== */
 function render() {
-  document.getElementById("diagram-title").textContent = IR.meta.title;
-  document.documentElement.setAttribute("data-theme", IR.meta.theme || "dark");
+  document.getElementById('diagram-title').textContent = IR.meta.title;
+  document.documentElement.setAttribute('data-theme', IR.meta.theme || 'dark');
   layoutNodes();
   renderBoundaries();
   renderNodes();
@@ -328,73 +464,81 @@ function render() {
   updateTransform();
 }
 
-/* ===== 布局：按 LAYERS 分层并逐层水平居中 ===== */
+/* ===== 自动布局：按 kind 分层 ===== */
 function layoutNodes() {
   nodePositions = {};
-  const totalW = Math.max(...LAYERS.map(l => l.length * NODE_W + (l.length - 1) * GAP_X));
-  let y = MARGIN;
-  LAYERS.forEach(layer => {
-    const layerW = layer.length * NODE_W + (layer.length - 1) * GAP_X;
-    const startX = MARGIN + (totalW - layerW) / 2;
-    layer.forEach((id, i) => {
-      nodePositions[id] = { x: startX + i * (NODE_W + GAP_X), y: y, w: NODE_W, h: NODE_H };
+  const layers = {};
+  IR.components.forEach(c => {
+    const layerIdx = LAYER_ORDER.indexOf(c.kind);
+    const key = layerIdx >= 0 ? layerIdx : 99;
+    if (!layers[key]) layers[key] = [];
+    layers[key].push(c);
+  });
+  const sortedKeys = Object.keys(layers).sort((a,b)=>a-b);
+  sortedKeys.forEach((key, rowIdx) => {
+    const layer = layers[key];
+    layer.forEach((comp, colIdx) => {
+      nodePositions[comp.id] = {
+        x: MARGIN + colIdx * (NODE_W + GAP_X),
+        y: MARGIN + rowIdx * (NODE_H + GAP_Y),
+        w: NODE_W,
+        h: NODE_H
+      };
     });
-    y += NODE_H + GAP_Y;
   });
 }
 
 /* ===== 渲染边界 ===== */
 function renderBoundaries() {
-  const canvas = document.getElementById("canvas-inner");
+  const canvas = document.getElementById('canvas-inner');
   if (!IR.boundaries) return;
   IR.boundaries.forEach(b => {
     const members = b.members.map(id => nodePositions[id]).filter(Boolean);
     if (members.length === 0) return;
-    const minX = Math.min(...members.map(m=>m.x)) - 24;
-    const minY = Math.min(...members.map(m=>m.y)) - 24;
-    const maxX = Math.max(...members.map(m=>m.x+m.w)) + 24;
-    const maxY = Math.max(...members.map(m=>m.y+m.h)) + 24;
-    const div = document.createElement("div");
-    div.className = "boundary" + (b.style === "solid" ? " solid" : "");
-    div.style.cssText = "left:"+minX+"px;top:"+minY+"px;width:"+(maxX-minX)+"px;height:"+(maxY-minY)+"px;";
-    div.innerHTML = "<span class='boundary-label'>" + b.label + "</span>";
-    canvas.insertBefore(div, document.getElementById("svg-layer"));
+    const minX = Math.min(...members.map(m=>m.x)) - 20;
+    const minY = Math.min(...members.map(m=>m.y)) - 20;
+    const maxX = Math.max(...members.map(m=>m.x+m.w)) + 20;
+    const maxY = Math.max(...members.map(m=>m.y+m.h)) + 20;
+    const div = document.createElement('div');
+    div.className = 'boundary';
+    div.style.cssText = `left:${minX}px;top:${minY}px;width:${maxX-minX}px;height:${maxY-minY}px;`;
+    div.innerHTML = `<span class="boundary-label">${b.label}</span>`;
+    canvas.insertBefore(div, document.getElementById('svg-layer'));
   });
 }
 
 /* ===== 渲染节点 ===== */
 function renderNodes() {
-  const canvas = document.getElementById("canvas-inner");
+  const canvas = document.getElementById('canvas-inner');
   IR.components.forEach(c => {
     const pos = nodePositions[c.id];
     if (!pos) return;
-    const div = document.createElement("div");
-    div.className = "node";
-    div.id = "node-" + c.id;
+    const div = document.createElement('div');
+    div.className = 'node';
+    div.id = 'node-' + c.id;
     div.dataset.kind = c.kind;
     div.dataset.id = c.id;
-    div.style.cssText = "left:"+pos.x+"px;top:"+pos.y+"px;width:"+pos.w+"px;";
-    div.innerHTML =
-      "<div class='node-icon'>" + (KIND_ICONS[c.kind] || "📦") + "</div>" +
-      "<div class='node-label'>" + c.label + "</div>" +
-      "<div class='node-kind'>" + (KIND_NAMES[c.kind] || c.kind) + "</div>";
-    div.addEventListener("mouseenter", () => highlightNode(c.id));
-    div.addEventListener("mouseleave", () => clearHighlight());
-    div.addEventListener("click", () => showDetail(c.id));
+    div.style.cssText = `left:${pos.x}px;top:${pos.y}px;width:${pos.w}px;`;
+    div.innerHTML = `
+      <div class="node-icon">${KIND_ICONS[c.kind]||'📦'}</div>
+      <div class="node-label">${c.label}</div>
+      <div class="node-kind">${c.kind}</div>`;
+    div.addEventListener('mouseenter', () => highlightNode(c.id));
+    div.addEventListener('mouseleave', () => clearHighlight());
+    div.addEventListener('click', () => showDetail(c.id));
     canvas.appendChild(div);
   });
 }
 
 /* ===== 渲染连线 ===== */
 function renderConnections() {
-  const svg = document.getElementById("svg-layer");
-  svg.innerHTML = "";
-  const defs = document.createElementNS("http://www.w3.org/2000/svg","defs");
-  defs.innerHTML =
-    "<marker id='arrow' markerWidth='10' markerHeight='7' refX='9' refY='3.5' orient='auto'>" +
-    "<polygon points='0 0, 10 3.5, 0 7' fill='var(--connection)' /></marker>" +
-    "<marker id='arrow-hl' markerWidth='10' markerHeight='7' refX='9' refY='3.5' orient='auto'>" +
-    "<polygon points='0 0, 10 3.5, 0 7' fill='var(--highlight)' /></marker>";
+  const svg = document.getElementById('svg-layer');
+  svg.innerHTML = '';
+  const defs = document.createElementNS('http://www.w3.org/2000/svg','defs');
+  defs.innerHTML = `<marker id="arrow" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+    <polygon points="0 0, 10 3.5, 0 7" fill="var(--connection)" /></marker>
+    <marker id="arrow-hl" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+    <polygon points="0 0, 10 3.5, 0 7" fill="var(--highlight)" /></marker>`;
   svg.appendChild(defs);
 
   IR.connections.forEach((conn, idx) => {
@@ -404,22 +548,21 @@ function renderConnections() {
     const x1 = from.x + from.w/2, y1 = from.y + from.h;
     const x2 = to.x + to.w/2, y2 = to.y;
     const midY = (y1 + y2) / 2;
-    const d = "M " + x1 + " " + y1 + " C " + x1 + " " + midY + ", " + x2 + " " + midY + ", " + x2 + " " + y2;
+    const d = `M ${x1} ${y1} C ${x1} ${midY}, ${x2} ${midY}, ${x2} ${y2}`;
 
-    const path = document.createElementNS("http://www.w3.org/2000/svg","path");
-    path.setAttribute("d", d);
-    path.setAttribute("class", "conn-path" + (conn.highlight ? " highlight" : ""));
-    path.setAttribute("marker-end", conn.highlight ? "url(#arrow-hl)" : "url(#arrow)");
-    path.id = "conn-" + idx;
-    if (conn.style === "dashed") path.setAttribute("stroke-dasharray", "6,4");
+    const path = document.createElementNS('http://www.w3.org/2000/svg','path');
+    path.setAttribute('d', d);
+    path.setAttribute('class', 'conn-path' + (conn.highlight ? ' highlight' : ''));
+    path.setAttribute('marker-end', conn.highlight ? 'url(#arrow-hl)' : 'url(#arrow)');
+    path.id = 'conn-' + idx;
+    if (conn.style === 'dashed') path.setAttribute('stroke-dasharray', '6,4');
     svg.appendChild(path);
 
     if (conn.label) {
-      const text = document.createElementNS("http://www.w3.org/2000/svg","text");
-      text.setAttribute("x", (x1+x2)/2);
-      text.setAttribute("y", midY - 4);
-      text.setAttribute("class", "conn-label" + (conn.highlight ? " highlight" : ""));
-      text.id = "connlabel-" + idx;
+      const text = document.createElementNS('http://www.w3.org/2000/svg','text');
+      text.setAttribute('x', (x1+x2)/2);
+      text.setAttribute('y', midY - 4);
+      text.setAttribute('class', 'conn-label' + (conn.highlight ? ' highlight' : ''));
       text.textContent = conn.label;
       svg.appendChild(text);
     }
@@ -433,79 +576,71 @@ function highlightNode(id) {
     if (c.from === id) related.add(c.to);
     if (c.to === id) related.add(c.from);
   });
-  document.querySelectorAll(".node").forEach(n => {
-    if (related.has(n.dataset.id)) n.classList.add("highlighted");
-    else n.classList.add("dimmed");
+  document.querySelectorAll('.node').forEach(n => {
+    if (related.has(n.dataset.id)) n.classList.add('highlighted');
+    else n.classList.add('dimmed');
+  });
+  document.querySelectorAll('.conn-path, .conn-label').forEach((el, i) => {
+    const conn = IR.connections[Math.floor(i/1)];
+    // 简化：高亮与该节点相关的连线
   });
   IR.connections.forEach((c, i) => {
-    const path = document.getElementById("conn-" + i);
-    const label = document.getElementById("connlabel-" + i);
-    if (c.from === id || c.to === id) {
-      if (path) { path.classList.remove("dimmed"); path.classList.add("highlight"); }
-      if (label) { label.classList.remove("dimmed"); label.classList.add("highlight"); }
-    } else {
-      if (path) path.classList.add("dimmed");
-      if (label) label.classList.add("dimmed");
-    }
+    const path = document.getElementById('conn-' + i);
+    if (!path) return;
+    if (c.from === id || c.to === id) { path.classList.remove('dimmed'); path.classList.add('highlight'); }
+    else { path.classList.add('dimmed'); }
   });
 }
 function clearHighlight() {
-  document.querySelectorAll(".node").forEach(n => { n.classList.remove("highlighted","dimmed"); });
-  IR.connections.forEach((c, i) => {
-    const path = document.getElementById("conn-" + i);
-    const label = document.getElementById("connlabel-" + i);
-    if (path) {
-      path.classList.remove("dimmed");
-      if (!c.highlight) path.classList.remove("highlight");
-    }
-    if (label) {
-      label.classList.remove("dimmed");
-      if (!c.highlight) label.classList.remove("highlight");
-    }
+  document.querySelectorAll('.node').forEach(n => { n.classList.remove('highlighted','dimmed'); });
+  document.querySelectorAll('.conn-path').forEach(p => {
+    p.classList.remove('dimmed');
+    if (!IR.connections[parseInt(p.id.replace('conn-',''))]?.highlight) p.classList.remove('highlight');
   });
+  document.querySelectorAll('.conn-label').forEach(l => { l.classList.remove('dimmed'); });
 }
 
 /* ===== 交互：详情面板 ===== */
 function showDetail(id) {
   const comp = IR.components.find(c => c.id === id);
   if (!comp) return;
-  document.getElementById("dp-title").textContent = comp.label;
-  document.getElementById("dp-kind").textContent = KIND_NAMES[comp.kind] + " · " + comp.kind;
-  document.getElementById("dp-desc").textContent = comp.description || "无描述";
+  document.getElementById('dp-title').textContent = comp.label;
+  document.getElementById('dp-kind').textContent = comp.kind;
+  document.getElementById('dp-desc').textContent = comp.description || '无描述';
 
   const upstream = IR.connections.filter(c => c.to === id).map(c => {
     const src = IR.components.find(x => x.id === c.from);
-    return "<div class='dp-rel'><span style='color:var(--highlight)'>" + (src ? src.label : c.from) + "</span><span class='arrow'>→</span><span>" + (c.label || "") + "</span></div>";
-  }).join("");
+    return `<div class="dp-rel"><span>←</span><span style="color:var(--highlight)">${src?.label||c.from}</span><span class="arrow">→</span><span>${c.label||''}</span></div>`;
+  }).join('');
   const downstream = IR.connections.filter(c => c.from === id).map(c => {
     const tgt = IR.components.find(x => x.id === c.to);
-    return "<div class='dp-rel'><span>" + (c.label || "") + "</span><span class='arrow'>→</span><span style='color:var(--highlight)'>" + (tgt ? tgt.label : c.to) + "</span></div>";
-  }).join("");
-  document.getElementById("dp-connections").innerHTML =
-    "<h3>上游依赖</h3>" + (upstream || "<div style='color:var(--text-dim)'>无</div>") +
-    "<h3 style='margin-top:12px'>下游调用</h3>" + (downstream || "<div style='color:var(--text-dim)'>无</div>");
+    return `<div class="dp-rel"><span>${c.label||''}</span><span class="arrow">→</span><span style="color:var(--highlight)">${tgt?.label||c.to}</span></div>`;
+  }).join('');
+  document.getElementById('dp-connections').innerHTML = `
+    <h3>上游依赖</h3>${upstream||'<div style="color:var(--text-dim)">无</div>'}
+    <h3 style="margin-top:12px">下游调用</h3>${downstream||'<div style="color:var(--text-dim)">无</div>'}`;
 
   if (comp.metadata) {
-    const meta = Object.entries(comp.metadata).map(([k,v]) => "<div style='font-size:13px'><strong>" + k + ":</strong> " + v + "</div>").join("");
-    document.getElementById("dp-metadata").innerHTML = "<h3>元数据</h3>" + meta;
+    const meta = Object.entries(comp.metadata).map(([k,v]) => `<div style="font-size:13px"><strong>${k}:</strong> ${v}</div>`).join('');
+    document.getElementById('dp-metadata').innerHTML = `<h3>元数据</h3>${meta}`;
   } else {
-    document.getElementById("dp-metadata").innerHTML = "";
+    document.getElementById('dp-metadata').innerHTML = '';
   }
-  document.getElementById("detail-panel").classList.add("open");
+  document.getElementById('detail-panel').classList.add('open');
 }
-function closeDetail() { document.getElementById("detail-panel").classList.remove("open"); }
+function closeDetail() { document.getElementById('detail-panel').classList.remove('open'); }
 
 /* ===== 交互：搜索 ===== */
-document.getElementById("search-box").addEventListener("input", function(e) {
+document.getElementById('search-box').addEventListener('input', function(e) {
   const q = e.target.value.toLowerCase().trim();
-  if (!q) { document.querySelectorAll(".node").forEach(n => n.classList.remove("matched")); return; }
+  if (!q) { document.querySelectorAll('.node').forEach(n => n.classList.remove('matched')); return; }
   IR.components.forEach(c => {
-    const el = document.getElementById("node-" + c.id);
+    const el = document.getElementById('node-' + c.id);
     if (!el) return;
-    if (c.label.toLowerCase().includes(q) || c.kind.toLowerCase().includes(q) || c.id.toLowerCase().includes(q) || (c.description || "").toLowerCase().includes(q)) {
-      el.classList.add("matched");
+    if (c.label.toLowerCase().includes(q) || c.kind.toLowerCase().includes(q) || c.id.toLowerCase().includes(q)) {
+      el.classList.add('matched');
     } else {
-      el.classList.remove("matched");
+      el.classList.remove('matched');
     }
   });
 });
@@ -518,11 +653,11 @@ function handleWheel(e) {
   updateTransform();
 }
 function startPan(e) {
-  if (e.target.closest(".node") || e.target.closest(".boundary")) return;
+  if (e.target.closest('.node') || e.target.closest('.boundary')) return;
   isPanning = true;
   panStart = { x: e.clientX, y: e.clientY, px: panX, py: panY };
-  document.addEventListener("mousemove", doPan);
-  document.addEventListener("mouseup", endPan);
+  document.addEventListener('mousemove', doPan);
+  document.addEventListener('mouseup', endPan);
 }
 function doPan(e) {
   if (!isPanning) return;
@@ -530,91 +665,78 @@ function doPan(e) {
   panY = panStart.py + (e.clientY - panStart.y);
   updateTransform();
 }
-function endPan() { isPanning = false; document.removeEventListener("mousemove", doPan); document.removeEventListener("mouseup", endPan); }
+function endPan() { isPanning = false; document.removeEventListener('mousemove', doPan); document.removeEventListener('mouseup', endPan); }
 function updateTransform() {
-  document.getElementById("canvas-inner").style.transform = "translate(" + panX + "px," + panY + "px) scale(" + scale + ")";
+  document.getElementById('canvas-inner').style.transform = `translate(${panX}px,${panY}px) scale(${scale})`;
 }
 function resetView() { scale=1; panX=0; panY=0; updateTransform(); }
 
 /* ===== 交互：主题切换 ===== */
 function toggleTheme() {
-  const cur = document.documentElement.getAttribute("data-theme");
-  const next = cur === "dark" ? "light" : "dark";
-  document.documentElement.setAttribute("data-theme", next);
-  document.getElementById("btn-theme").textContent = next === "dark" ? "☀ 浅色" : "🌙 深色";
-  renderConnections();
+  const cur = document.documentElement.getAttribute('data-theme');
+  const next = cur === 'dark' ? 'light' : 'dark';
+  document.documentElement.setAttribute('data-theme', next);
+  document.getElementById('btn-theme').textContent = next === 'dark' ? '☀ 浅色' : '🌙 深色';
+  renderConnections(); // 重绘连线以更新箭头颜色
 }
 
-/* ===== 导出：SVG（连同节点一起导出） ===== */
+/* ===== 导出：SVG ===== */
 function exportSVG() {
-  const canvas = document.getElementById("canvas-inner");
+  const svg = document.getElementById('svg-layer');
   const serializer = new XMLSerializer();
-  const nodesSvg = [];
-  IR.components.forEach(c => {
-    const pos = nodePositions[c.id];
-    if (!pos) return;
-    const el = document.getElementById("node-" + c.id);
-    const style = el ? getComputedStyle(el) : null;
-    const bg = style ? style.backgroundColor : "#1a1a2e";
-    const bc = style ? style.borderColor : "#4a4a6a";
-    nodesSvg.push(
-      "<g><rect x='" + pos.x + "' y='" + pos.y + "' width='" + pos.w + "' height='" + NODE_H + "' rx='8' fill='" + bg + "' stroke='" + bc + "' stroke-width='2'/>" +
-      "<text x='" + (pos.x + pos.w/2) + "' y='" + (pos.y + NODE_H/2 + 5) + "' text-anchor='middle' font-size='13' font-weight='600' fill='#e0e0e0' font-family='sans-serif'>" + c.label + "</text></g>"
-    );
-  });
-  const svgStr = "<svg xmlns='http://www.w3.org/2000/svg' width='820' height='1230'>" +
-    "<rect width='820' height='1230' fill='#141428'/>" +
-    document.getElementById("svg-layer").innerHTML.replace(/var\(--connection\)/g, "#4a4a6a").replace(/var\(--highlight\)/g, "#4080ff") +
-    nodesSvg.join("") + "</svg>";
-  const blob = new Blob(["<?xml version='1.0'?>\n" + svgStr], { type: "image/svg+xml" });
-  downloadBlob(blob, (IR.meta.title || "archify") + ".svg");
+  const svgStr = serializer.serializeToString(svg);
+  const blob = new Blob(['<?xml version="1.0"?>\n', svgStr], { type: 'image/svg+xml' });
+  downloadBlob(blob, (IR.meta.title || 'archify') + '.svg');
 }
 
 /* ===== 导出：PNG ===== */
 function exportPNG() {
-  const pngCanvas = document.createElement("canvas");
-  pngCanvas.width = 1640; pngCanvas.height = 2460;
-  const ctx = pngCanvas.getContext("2d");
-  ctx.fillStyle = document.documentElement.getAttribute("data-theme") === "dark" ? "#141428" : "#ffffff";
+  const canvas = document.getElementById('canvas-inner');
+  const rect = canvas.getBoundingClientRect();
+  const w = rect.width, h = rect.height;
+  const pngCanvas = document.createElement('canvas');
+  pngCanvas.width = w * 2; pngCanvas.height = h * 2; // 2x 分辨率
+  const ctx = pngCanvas.getContext('2d');
+  ctx.fillStyle = getComputedStyle(document.body).backgroundColor;
   ctx.fillRect(0, 0, pngCanvas.width, pngCanvas.height);
-  /* 连线 */
-  IR.connections.forEach(conn => {
-    const from = nodePositions[conn.from], to = nodePositions[conn.to];
-    if (!from || !to) return;
-    const x1 = (from.x + from.w/2)*2, y1 = (from.y + from.h)*2;
-    const x2 = (to.x + to.w/2)*2, y2 = (to.y)*2;
-    const midY = (y1+y2)/2;
-    ctx.strokeStyle = conn.highlight ? "#4080ff" : "#9ca3af";
-    ctx.lineWidth = conn.highlight ? 5 : 3;
-    ctx.beginPath();
-    ctx.moveTo(x1, y1);
-    ctx.bezierCurveTo(x1, midY, x2, midY, x2, y2);
-    ctx.stroke();
-  });
-  /* 节点 */
+  // 绘制节点
   IR.components.forEach(c => {
     const pos = nodePositions[c.id]; if (!pos) return;
-    const el = document.getElementById("node-" + c.id); if (!el) return;
+    const el = document.getElementById('node-' + c.id); if (!el) return;
     const style = getComputedStyle(el);
     const x = pos.x * 2, y = pos.y * 2, w2 = pos.w * 2;
     ctx.fillStyle = style.backgroundColor;
     ctx.strokeStyle = style.borderColor;
     ctx.lineWidth = 3;
     ctx.beginPath();
-    ctx.roundRect(x, y, w2, NODE_H * 2, 16);
+    ctx.roundRect(x, y, w2, NODE_H * 2, 8);
     ctx.fill(); ctx.stroke();
     ctx.fillStyle = style.color;
-    ctx.font = "bold 26px 'PingFang SC', 'Microsoft YaHei', sans-serif";
-    ctx.textAlign = "center";
-    ctx.fillText(c.label, x + w2/2, y + NODE_H * 2 / 2 + 10);
+    ctx.font = 'bold 24px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText(c.label, x + w2/2, y + NODE_H * 2 / 2 + 8);
   });
-  pngCanvas.toBlob(blob => downloadBlob(blob, (IR.meta.title||"archify")+".png"), "image/png");
+  // 绘制连线
+  ctx.strokeStyle = '#4a4a6a';
+  ctx.lineWidth = 3;
+  IR.connections.forEach(conn => {
+    const from = nodePositions[conn.from], to = nodePositions[conn.to];
+    if (!from || !to) return;
+    const x1 = (from.x + from.w/2)*2, y1 = (from.y + from.h)*2;
+    const x2 = (to.x + to.w/2)*2, y2 = (to.y)*2;
+    const midY = (y1+y2)/2;
+    ctx.beginPath();
+    ctx.moveTo(x1, y1);
+    ctx.bezierCurveTo(x1, midY, x2, midY, x2, y2);
+    ctx.stroke();
+  });
+  pngCanvas.toBlob(blob => downloadBlob(blob, (IR.meta.title||'archify')+'.png'), 'image/png');
 }
 
 /* ===== 工具函数 ===== */
 function downloadBlob(blob, filename) {
   const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
+  const a = document.createElement('a');
   a.href = url; a.download = filename; a.click();
   URL.revokeObjectURL(url);
 }

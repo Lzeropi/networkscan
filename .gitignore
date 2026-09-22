@@ -6,3 +6,4 @@ admin_config.json
 .python-version
 *.tar.gz
 .DS_Store
+.temp/
