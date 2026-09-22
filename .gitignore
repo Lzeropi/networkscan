@@ -7,3 +7,4 @@ admin_config.json
 *.tar.gz
 .DS_Store
 .temp/
+.pytest_cache/
