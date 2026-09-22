@@ -72,6 +72,14 @@ def set_locked(job, locked):
 
 
 def pages(job):
+    """已完成页面（v1.14：过滤 0 字节占位文件，#3）。"""
+    p = validate(job)
+    return sorted(f for f in os.listdir(p)
+                  if PAGE_RE.fullmatch(f) and os.path.getsize(os.path.join(p, f)) > 0)
+
+
+def raw_pages(job):
+    """裸页面文件列表（含 0 字节转换中占位，供扫描编号防冲突，v1.14 #3）。"""
     p = validate(job)
     return sorted(f for f in os.listdir(p) if PAGE_RE.fullmatch(f))
 
@@ -136,6 +144,9 @@ def cleanup():
     def try_delete(name):
         try:
             if is_locked(name):
+                return False
+            import scanner   # v1.14：局部导入避循环；正在扫描/转换的任务不清理（#2）
+            if scanner.get_state(name)["state"] == "scanning":
                 return False
             delete(name)
             deleted.append(name)

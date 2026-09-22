@@ -122,7 +122,10 @@ def scan_flatbed(job):
         busy_job = _scan_job or ""
         elapsed = int(time.time() - _scan_start_time) if _scan_start_time else 0
         raise RuntimeError("设备忙，%s 正在扫描（已用 %d 秒），请稍后再试" % (busy_job, elapsed))
-    n = len(jobs.pages(job)) + 1          # 以磁盘实际页数为准，防编号冲突
+    # v1.14：平板扫描也写 state，扫描+转换期间 delete/reorder/cleanup 可感知（#1）
+    st = state.setdefault(job, {})
+    st.update(state="scanning", msg="平板扫描中…")
+    n = len(jobs.raw_pages(job)) + 1     # v1.14：含 0 字节占位的裸计数，防过滤后编号冲突（#3）
     fname = f"p{n:03d}.png"
     out = os.path.join(get_scan_root(), job, fname)
     tmp = os.path.join("/tmp", f"scanweb_{job}_{n:03d}.pnm")
@@ -153,6 +156,7 @@ def scan_flatbed(job):
         scan_lock.release()
 
     if scan_error:
+        st.update(state="error", msg=scan_error)
         raise RuntimeError(scan_error)
 
     # 阶段 2：后台转换 PNM → PNG + 缩略图（不持锁，不阻塞下一次扫描）
@@ -164,8 +168,9 @@ def scan_flatbed(job):
             meta = jobs.load(job)
             meta["pages"] = len(jobs.pages(job))
             jobs.save(job, meta)
+            st.update(state="done", msg="扫描完成：%s" % fname)   # v1.14：转换收尾才置 done（#1）
         except Exception:
-            pass                           # 转换失败保留 PNM，下次启动时 cleanup_tmp_pnms 清理
+            st.update(state="error", msg="后台转换失败：%s，源文件保留待重试" % fname)  # v1.14（#1）
         finally:
             _rm(tmp)
 
@@ -189,7 +194,7 @@ def scan_adf(job):
             _scan_job = job
             st = state.setdefault(job, {})
             st.update(state="scanning", msg="ADF 连续扫描中…")
-            start = len(jobs.pages(job)) + 1
+            start = len(jobs.raw_pages(job)) + 1   # v1.14：含 0 字节占位的裸计数（#3）
             pat = os.path.join(get_scan_root(), job, "p%03d.pnm")
             source = p.get("source_name") or SCAN_SOURCE  # 优先用探测到的源名，其次配置回退
             cmd = _base_cmd(p)
