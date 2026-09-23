@@ -31,6 +31,7 @@ ZIP_QUEUE_MAXSIZE = 16   # v1.14.3（P2）：提为常量供测试注入（满�
 # ---------------- 登录（仅当设置 TOKEN 时启用） ----------------
 # v1.14.1（P2-11）：TOKEN 登录防暴力，按 IP 计数（与 PIN 同策略：5 次/60 秒）
 _token_fails = {}   # ip -> {"count": n, "lock_until": ts}；局域网 IP 数有限，不做淘汰
+_token_fail_lock = threading.Lock()   # v1.14.4（P1）：并发锁——TTL 清理/计数读改写/pop 同步化
 _TK_MAX_FAILS = 5
 _TK_LOCK_SEC = 60
 
@@ -49,22 +50,28 @@ def login():
     err = ""
     if request.method == "POST":
         # v1.14.3（P2-10）：顺手清理过期超过 1 小时的失败记录——字典不再只增不减
+        # v1.14.4（P1）：整段持锁——TTL 清理/判定/计数读改写/成功 pop 原子化
         now = time.time()
-        for k in [k for k, v in _token_fails.items() if v["lock_until"] and v["lock_until"] < now - 3600]:
-            _token_fails.pop(k, None)
-        rec = _token_fails.setdefault(request.remote_addr, {"count": 0, "lock_until": 0.0})
-        if time.time() < rec["lock_until"]:
-            err = "尝试过于频繁，请稍后再试"
-        elif request.form.get("password", "") == TOKEN:
-            _token_fails.pop(request.remote_addr, None)
+        ok_login = False
+        with _token_fail_lock:
+            for k in [k for k, v in _token_fails.items() if v["lock_until"] and v["lock_until"] < now - 3600]:
+                _token_fails.pop(k, None)
+            rec = _token_fails.setdefault(request.remote_addr, {"count": 0, "lock_until": 0.0})
+            if time.time() < rec["lock_until"]:
+                err = "尝试过于频繁，请稍后再试"
+            elif request.form.get("password", "") == TOKEN:
+                _token_fails.pop(request.remote_addr, None)
+                ok_login = True
+            else:
+                ok_login = False
+                rec["count"] += 1
+                if rec["count"] >= _TK_MAX_FAILS:
+                    rec["lock_until"] = time.time() + _TK_LOCK_SEC
+                    rec["count"] = 0
+                err = "口令错误"
+        if ok_login:
             session["ok"] = True
             return redirect(url_for("index"))
-        else:
-            rec["count"] += 1
-            if rec["count"] >= _TK_MAX_FAILS:
-                rec["lock_until"] = time.time() + _TK_LOCK_SEC
-                rec["count"] = 0
-            err = "口令错误"
     return render_template("login.html", err=err)
 
 
@@ -217,19 +224,42 @@ def _reorder_body(job):
             return jsonify(ok=False, msg="顺序列表与实际页面不匹配"), 400
         if new_order == current:
             return jsonify(ok=True, msg="顺序未变化")
-    # 防御：清理可能残留的临时文件（上次异常中断遗留）
+    # 防御：清理可能残留的临时/墓也文件（上次异常中断遗留）
     for f in os.listdir(base):
-        if f.startswith("_tmp_") and f.endswith(".png"):
+        if (f.startswith("_tmp_") or f.startswith("_del_")) and f.endswith(".png"):
             try:
                 os.remove(os.path.join(base, f))
             except OSError:
                 pass
     try:
         for f in os.listdir(thumb_dir):
-            if f.startswith("_tmp_") and f.endswith(".jpg"):
+            if (f.startswith("_tmp_") or f.startswith("_del_")) and f.endswith(".jpg"):
                 os.remove(os.path.join(thumb_dir, f))
     except OSError:
         pass
+    # v1.14.4（P0）：删除模式 step0——待删页先改名墓也让出编号。此前模型里待删旧名
+    # 一直占着 p001…，step2 给保留页分配新编号会与之碰撞，收尾按旧名删除会误删
+    # 刚重命名的保留页数据（实测：A B C 删 p001 → B 被连带误删）。
+    step0 = []   # 已完成的 (旧名, 墓也名)
+    if is_delete:
+        try:
+            for i, dead_name in enumerate(to_delete):
+                grave = f"_del_{i:03d}.png"
+                os.rename(os.path.join(base, dead_name), os.path.join(base, grave))
+                step0.append((dead_name, grave))
+                dead_thumb = os.path.join(thumb_dir, dead_name[:-4] + ".jpg")
+                if os.path.exists(dead_thumb):
+                    try:
+                        os.rename(dead_thumb, os.path.join(thumb_dir, grave[:-4] + ".jpg"))
+                    except OSError:
+                        pass
+        except OSError:
+            for dead_name, grave in reversed(step0):
+                try:
+                    os.rename(os.path.join(base, grave), os.path.join(base, dead_name))
+                except OSError:
+                    pass
+            return jsonify(ok=False, msg="删除准备失败，已恢复原状"), 500
     # v1.14.2（#4）：事务化两步重命名——任一步失败反向 rename 恢复原状，不再留半完成状态
     step1 = []   # 已完成的 (旧名, 临时名)
     try:
@@ -250,6 +280,11 @@ def _reorder_body(job):
                 os.rename(os.path.join(base, tmp_name), os.path.join(base, old_name))
             except OSError:
                 pass
+        for dead_name, grave in reversed(step0):   # v1.14.4（P0）：连墓也一并撤回
+            try:
+                os.rename(os.path.join(base, grave), os.path.join(base, dead_name))
+            except OSError:
+                pass
         return jsonify(ok=False, msg="排序失败（磁盘/权限异常），已恢复原状"), 500
     step2 = []   # 已完成的 (临时名, 目标名)
     try:
@@ -267,7 +302,7 @@ def _reorder_body(job):
                 except OSError:
                     pass
     except OSError:
-        # 反向恢复：先撤第二步（dst → tmp），再撤第一步（tmp → old）
+        # 反向恢复：先撤第二步（dst → tmp），再撤第一步（tmp → old），最后撤 step0 墓也
         for tmp_key, dst_name in reversed(step2):
             try:
                 os.rename(os.path.join(base, dst_name), os.path.join(base, tmp_key))
@@ -278,16 +313,26 @@ def _reorder_body(job):
                 os.rename(os.path.join(base, tmp_name), os.path.join(base, old_name))
             except OSError:
                 pass
+        for dead_name, grave in reversed(step0):
+            try:
+                os.rename(os.path.join(base, grave), os.path.join(base, dead_name))
+            except OSError:
+                pass
         return jsonify(ok=False, msg="排序失败（磁盘/权限异常），已恢复原状"), 500
-    # v1.14.2（#4）：两步重命名全部成功后才执行物理删除收尾
+    # v1.14.4（P0）：两步重命名全部成功后执行删除收尾——names=None 走墓也前缀，
+    # 待删页在 step0 已改名让位，永不与新编号碰撞；<2 页分支（无 rename）才按原名删
     if is_delete:
-        _finish_delete(job, base, thumb_dir, to_delete, len(new_order))
+        _finish_delete(job, base, thumb_dir, None, len(new_order))
     return jsonify(ok=True)
 
 
-def _finish_delete(job, base, thumb_dir, to_delete, keep):
-    """v1.14.2（#4）：删除模式的收尾——物理删除待删页 + 更新 meta。仅在重命名成功后调用。"""
-    for f in to_delete:
+def _finish_delete(job, base, thumb_dir, names=None, keep=0):
+    """v1.14.4（P0）：删除收尾。names=None 时扫墓也前缀 _del_*（重编号流程，
+    待删页已改名让位，防新编号碰撞误删保留页）；names 显式时按原名删（<2 页分支，
+    无 rename 即无碰撞）。仅在重命名全部成功后调用。"""
+    if names is None:
+        names = [f for f in os.listdir(base) if f.startswith("_del_") and f.endswith(".png")]
+    for f in names:
         try:
             os.remove(os.path.join(base, f))
         except OSError:
@@ -327,31 +372,37 @@ def api_devices():
 def raw(job, fname):
     if not FNAME_RE.fullmatch(fname) or not fname.endswith(".png"):
         abort(404)
-    p = os.path.join(jobs.path(job), fname)
-    # v1.14.3（P2-5）：锁内读入内存后返回——消除 exists→send_file 之间任务被删的竞态；
-    # ponytail: 单页 PNG 几 MB × 8 线程并发内存可接受，升级路径=流式持锁
+    # v1.14.4（P1）：check_page_safe 拒 symlink + realpath containment，防链接页越权读
+    try:
+        base = jobs.path(job)
+    except jobs.JobError:
+        abort(404)
+    # v1.14.4（B2 fd snapshot）：锁内完成安全校验并打开文件句柄后释放锁——
+    # 已打开的 inode 不受后续 rename/删除影响（TOCTOU 消除），网络传输不占锁、
+    # 不读入内存（替代 v1.14.3 的整文件读 RAM，消除大图并发下载内存放大）
     with jobs.job_lock(job):
         try:
-            with open(p, "rb") as f:
-                data = f.read()
-        except OSError:
+            f = open(jobs.check_page_safe(base, fname), "rb")
+        except (jobs.JobError, OSError):
             abort(404)
-    return Response(data, mimetype="image/png")
+    return send_file(f, mimetype="image/png")
 
 
 @app.route("/job/<job>/thumb/<fname>")
 def thumb(job, fname):
     if not FNAME_RE.fullmatch(fname) or not fname.endswith(".jpg"):
         abort(404)
-    p = os.path.join(jobs.path(job), ".thumbs", fname)
-    # v1.14.3（P2-5）：同 raw——锁内读内存，消除 TOCTOU 窗口
+    # v1.14.4（P1）：同 raw——拒 symlink + containment；B2 fd snapshot 同 raw
+    try:
+        base = jobs.path(job)
+    except jobs.JobError:
+        abort(404)
     with jobs.job_lock(job):
         try:
-            with open(p, "rb") as f:
-                data = f.read()
-        except OSError:
+            f = open(jobs.check_page_safe(base, os.path.join(".thumbs", fname)), "rb")
+        except (jobs.JobError, OSError):
             abort(404)
-    return Response(data, mimetype="image/jpeg")
+    return send_file(f, mimetype="image/jpeg")
 
 
 @app.route("/job/<job>/download.zip")

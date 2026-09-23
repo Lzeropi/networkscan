@@ -34,16 +34,21 @@ def _root_blocked(path):
 
 # ---------------- PIN 防暴力尝试（v1.14：按 IP 分键，#8） ----------------
 _pin_fails = {}   # ip -> {"count": n, "lock_until": ts}；局域网 IP 数有限，不做淘汰
+# v1.14.4（P1）：限流字典并发锁——waitress 8 线程下 check/incr/TTL 清理/pop 若不同步，
+# 计数可丢失（读改写非原子）、TTL 遍历与修改并发可抛 dict changed size
+_pin_fail_lock = threading.Lock()
 _PIN_MAX_FAILS = 5
 _PIN_LOCK_SEC = 60
 
 
 def _pin_rec():
     # v1.14.3（P2-10）：顺手清理过期超过 1 小时的失败记录——字典不再只增不减
+    # v1.14.4（P1）：全程持锁，清-建原子化（调用方在锁内继续读改写字段）
     now = time.time()
-    for k in [k for k, v in _pin_fails.items() if v["lock_until"] and v["lock_until"] < now - 3600]:
-        _pin_fails.pop(k, None)
-    return _pin_fails.setdefault(request.remote_addr, {"count": 0, "lock_until": 0.0})
+    with _pin_fail_lock:
+        for k in [k for k, v in _pin_fails.items() if v["lock_until"] and v["lock_until"] < now - 3600]:
+            _pin_fails.pop(k, None)
+        return _pin_fails.setdefault(request.remote_addr, {"count": 0, "lock_until": 0.0})
 
 
 def _pin_locked():
@@ -126,18 +131,26 @@ def api_login():
         if "$" not in cfg["pin_hash"]:   # v1.14：旧 sha256 格式登录成功后自动升级为 PBKDF2
             # v1.14.3（P1-1）：同上，原子事务只动 pin_hash
             update_admin_cfg(lambda c: c.__setitem__("pin_hash", _hash(pin)))
-        _pin_fails.pop(request.remote_addr, None)
+        with _pin_fail_lock:                   # v1.14.4（P1）：成功清理同锁保护
+            _pin_fails.pop(request.remote_addr, None)
         session["admin_ok"] = True
         session["csrf"] = secrets.token_hex(16)   # v1.14.1（P2-12）：登录签发 CSRF token
         return jsonify(ok=True, csrf=session["csrf"])
     # PIN 错误：计数并按阈值锁定（按 IP，不影响其他管理员）
-    rec = _pin_rec()
-    rec["count"] += 1
-    if rec["count"] >= _PIN_MAX_FAILS:
-        rec["lock_until"] = time.time() + _PIN_LOCK_SEC
-        rec["count"] = 0
+    # v1.14.4（P1）：计数读改写与锁定判定在同一锁内完成，消除并发计数丢失
+    with _pin_fail_lock:
+        rec = _pin_fails.setdefault(request.remote_addr, {"count": 0, "lock_until": 0.0})
+        rec["count"] += 1
+        if rec["count"] >= _PIN_MAX_FAILS:
+            rec["lock_until"] = time.time() + _PIN_LOCK_SEC
+            rec["count"] = 0
+            locked = True
+        else:
+            locked = False
+        n = rec["count"]
+    if locked:
         return jsonify(ok=False, msg="连续错误次数过多，已锁定 1 分钟"), 429
-    return jsonify(ok=False, msg="PIN 错误（已连续错 %d 次）" % rec["count"]), 403
+    return jsonify(ok=False, msg="PIN 错误（已连续错 %d 次）" % n), 403
 
 
 @bp.post("/api/admin/logout")

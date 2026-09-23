@@ -72,8 +72,12 @@ cmd_update() {
     echo "  部署目录：${INSTALL_DIR}"
     echo ""
 
-    # 2. 检查服务是否在运行
-    local was_running="no"
+    # 2. 检查服务状态（v1.14.4：双状态——原 active/enabled 各自保持，
+    # 原本 stopped 的更新后不得被误判失败回滚，也不得被擅自拉起）
+    local was_running="no" was_enabled="no"
+    if systemctl is-enabled --quiet "$SERVICE_NAME" 2>/dev/null; then
+        was_enabled="yes"
+    fi
     if systemctl is-active --quiet "$SERVICE_NAME" 2>/dev/null; then
         was_running="yes"
         yellow "停止服务..."
@@ -196,7 +200,9 @@ cmd_update() {
     fi
 
     # 10. 启动服务
-    if [ "$was_running" = "yes" ] || systemctl is-enabled --quiet "$SERVICE_NAME" 2>/dev/null; then
+    # v1.14.4（B4）：仅原运行中才拉起——「enabled 但手动停」保持停，「disabled」不拉起；
+    # 验证也按原状态判断，stopped 状态的更新不得被误判失败而回滚
+    if [ "$was_running" = "yes" ]; then
         yellow "启动服务..."
         systemctl start "$SERVICE_NAME"
         sleep 2
@@ -205,13 +211,23 @@ cmd_update() {
 
     # 11. 验证（v1.14.1：失败走统一 rollback——保留项/service 全量恢复）
     echo ""
-    if systemctl is-active --quiet "$SERVICE_NAME" 2>/dev/null; then
+    if [ "$was_running" = "yes" ]; then
+        update_ok="no"
+        systemctl is-active --quiet "$SERVICE_NAME" 2>/dev/null && update_ok="yes"
+    else
+        update_ok="yes"   # 原本 stopped：文件就绪即成功，不要求 active
+    fi
+    if [ "$update_ok" = "yes" ]; then
         rm -rf "${INSTALL_DIR}.old" "$preserve_dir" "$service_bak"   # 成功才清理旧版本与备份
         local port
         port=$(grep -oP 'SCANWEB_PORT=\K\d+' "$SERVICE_FILE" 2>/dev/null || echo "9203")
         green "更新成功！"
         echo "  版本：v${old_ver} → v${new_ver}"
-        echo "  服务状态：active (running)"
+        if [ "$was_running" = "yes" ]; then
+            echo "  服务状态：active (running)"
+        else
+            echo "  服务状态：stopped（保持更新前状态）"
+        fi
         echo "  访问地址：http://$(hostname -I 2>/dev/null | awk '{print $1}' || echo '<盒子IP>'):${port}"
         echo "  管理页：http://$(hostname -I 2>/dev/null | awk '{print $1}' || echo '<盒子IP>'):${port}/admin"
     else

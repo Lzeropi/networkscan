@@ -64,8 +64,24 @@ def validate(job):
     if not job or not JOB_RE.fullmatch(job) or ".." in job:
         raise JobError("非法任务名")
     p = os.path.join(get_scan_root(), job)
+    # v1.14.4（P1）：拒 symlink 任务目录——scan_root 为 Samba 共享时，LAN 可写用户
+    # 可造 job -> 外部目录 链接，借 raw/thumb/PDF/ZIP 越权读服务用户可达的任意文件
+    if os.path.islink(p):
+        raise JobError("非法任务目录（符号链接）")
     if not os.path.isdir(p):
         raise JobError("任务不存在")
+    return p
+
+
+def check_page_safe(base, fname):
+    """v1.14.4（P1）：页面文件安全校验——拒绝 symlink 并验证 realpath 在任务目录内，
+    防 page -> 外部文件 链接越权读（供 raw/thumb/PDF 等文件读取入口调用）。"""
+    p = os.path.join(base, fname)
+    if os.path.islink(p):
+        raise JobError("非法页面文件（符号链接）")
+    real = os.path.realpath(p)
+    if os.path.realpath(base) + os.sep not in real + os.sep:
+        raise JobError("页面路径越界")
     return p
 
 
@@ -103,8 +119,22 @@ def load(job):
 
 
 def save(job, meta):
-    with open(os.path.join(get_scan_root(), job, "meta.json"), "w", encoding="utf-8") as f:
-        json.dump(meta, f, ensure_ascii=False, indent=2)
+    """v1.14.4（P2）：原子写——临时文件 + fsync + replace，断电/崩溃不再产半截 JSON
+    （半截 meta 会让任务从 UI 直接消失）。"""
+    p = os.path.join(get_scan_root(), job, "meta.json")
+    tmp = "%s.tmp.%d" % (p, os.getpid())
+    try:
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(meta, f, ensure_ascii=False, indent=2)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, p)
+    finally:
+        try:
+            if os.path.exists(tmp):
+                os.remove(tmp)
+        except OSError:
+            pass
 
 
 def is_locked(job):
@@ -119,10 +149,12 @@ def set_locked(job, locked):
 
 
 def pages(job):
-    """已完成页面（v1.14：过滤 0 字节占位文件，#3）。v1.14.2（#10）：数字序，不限 3 位。"""
+    """已完成页面（v1.14：过滤 0 字节占位文件，#3）。v1.14.2（#10）：数字序，不限 3 位。
+    v1.14.4（P1）：过滤 symlink 页面——列表层根除链接页，ZIP/PDF/列表下游全安全。"""
     p = validate(job)
     fs = [f for f in os.listdir(p)
-          if PAGE_RE.fullmatch(f) and os.path.getsize(os.path.join(p, f)) > 0]
+          if PAGE_RE.fullmatch(f) and not os.path.islink(os.path.join(p, f))
+          and os.path.getsize(os.path.join(p, f)) > 0]
     return sorted(fs, key=_page_key)
 
 
@@ -166,8 +198,12 @@ def list_jobs(with_size=False):
 def delete(job):
     """v1.14.3（P3-11）：公共删除入口自持任务锁——新调用点天然安全，无需调用者记加锁。
     已在锁内的内部路径（api_delete/cleanup 等）请调 _delete_locked()，防重入死锁。"""
-    with job_lock(job):
-        _delete_locked(job)
+    try:
+        with job_lock(job):
+            _delete_locked(job)
+    finally:
+        # v1.14.4（P3）：公共入口负责完整生命周期——锁条目同步回收，单独调用不残留
+        release_job_lock(job)
 
 
 def _delete_locked(job):

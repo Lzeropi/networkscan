@@ -18,6 +18,10 @@ _scan_job = None                      # 当前正在扫描的任务名
 
 VALID_DPI = {"75", "150", "200", "300", "400", "600", "1200", "2400"}
 VALID_MODE = {"Color", "Gray", "Lineart"}  # 完整模式集；实际支持由 scanimage -A 探测后前端动态过滤
+# v1.14.4：超时提为常量（测试注入需要——真等 300s 不现实）
+SCAN_CMD_TIMEOUT = 300        # 平板单页 scanimage 超时（秒）
+CONVERT_CMD_TIMEOUT = 120     # 单页 PNM→PNG 转换超时（秒）
+ADF_CMD_TIMEOUT = 3600        # ADF 批量扫描超时（秒）
 
 
 def _params(job):
@@ -113,7 +117,7 @@ def _convert_pnms(job, start):
             dst = os.path.join(p, f[:-4] + ".png")
             try:
                 subprocess.run([CONVERT, src, dst], stderr=subprocess.PIPE,
-                               timeout=120, check=True)
+                               timeout=CONVERT_CMD_TIMEOUT, check=True)
                 os.remove(src)              # 转换成功才删 PNM（v1.14.1）
                 ok += 1
             except (subprocess.CalledProcessError, OSError):
@@ -124,9 +128,11 @@ def _convert_pnms(job, start):
 def _mk_thumb(job, fname):
     src = os.path.join(get_scan_root(), job, fname)
     dst = os.path.join(get_scan_root(), job, ".thumbs", fname[:-4] + ".jpg")
-    im = Image.open(src)
-    im.thumbnail(THUMB_SIZE)
-    im.convert("RGB").save(dst, quality=80)
+    # v1.14.4（P2）：显式 with 关闭句柄——PDF 路径 v1.14.1 已修，此处漏网；
+    # ADF 一次几十页时避免 FD 短暂积压
+    with Image.open(src) as im:
+        im.thumbnail(THUMB_SIZE)
+        im.convert("RGB").save(dst, quality=80)
 
 
 def scan_flatbed(job):
@@ -168,12 +174,22 @@ def scan_flatbed(job):
             try:
                 with open(tmp, "wb") as fh:
                     subprocess.run(_base_cmd(p), stdout=fh, stderr=subprocess.PIPE,
-                                   timeout=300, check=True)
+                                   timeout=SCAN_CMD_TIMEOUT, check=True)
             except subprocess.CalledProcessError as e:
                 err = (e.stderr or b"").decode(errors="ignore").strip()
                 scan_error = err[:300] or f"命令退出码 {e.returncode}"
+            # v1.14.4（P1）：其余异常（TimeoutExpired/OSError/文件错误）同样必须落到
+            # error 收尾——此前直接走 BaseException 抛出，state 永久卡 "scanning"，
+            # 任务删除/排序被 409 死锁
+            except subprocess.TimeoutExpired:
+                scan_error = "扫描超时（300 秒），设备可能卡死"
+            except OSError as e:
+                scan_error = "扫描失败：%s" % str(e)[:250]
+            except Exception as e:
+                scan_error = "扫描异常：%s" % str(e)[:250]
+            if scan_error:
                 _rm(tmp)
-                _rm(out)                       # 清空占位文件
+                _rm(out)                       # 清理占位文件
         finally:
             _scan_job = None
             _scan_start_time = None
@@ -191,7 +207,7 @@ def scan_flatbed(job):
     def _convert_worker():
         try:
             subprocess.run([CONVERT, tmp, out], stderr=subprocess.PIPE,
-                           timeout=120, check=True)
+                           timeout=CONVERT_CMD_TIMEOUT, check=True)
             _mk_thumb(job, fname)
             meta = jobs.load(job)
             meta["pages"] = len(jobs.pages(job))
@@ -256,7 +272,7 @@ def scan_adf(job):
                 cmd += ["--source", source]
             cmd += ["--batch=" + pat, f"--batch-start={start}"]
             try:
-                r = subprocess.run(cmd, capture_output=True, text=True, timeout=3600)
+                r = subprocess.run(cmd, capture_output=True, text=True, timeout=ADF_CMD_TIMEOUT)
                 _ok_cnt, failed_pnms = _convert_pnms(job, start)   # PNM → PNG（v1.14.2 #3：返回转换统计）
                 got = jobs.pages(job)          # 已转 png 的页
                 new = [f for f in got if int(re.search(r"\d+", f).group()) >= start]   # v1.14.2（#10）：页码不限 3 位
