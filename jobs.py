@@ -164,9 +164,23 @@ def list_jobs(with_size=False):
 
 
 def delete(job):
+    """v1.14.3（P3-11）：公共删除入口自持任务锁——新调用点天然安全，无需调用者记加锁。
+    已在锁内的内部路径（api_delete/cleanup 等）请调 _delete_locked()，防重入死锁。"""
+    with job_lock(job):
+        _delete_locked(job)
+
+
+def _delete_locked(job):
     if is_locked(job):
         raise JobError("任务已锁定，不能删除")
     shutil.rmtree(validate(job))
+    # v1.14.3（P2-6）：删除成功同步清扫描状态——cleanup/管理删除路径同样不残留 state 条目，
+    # scanner.state 不再随历史任务无限增长（此前只有用户 DELETE 一处 pop）
+    try:
+        import scanner   # 局部导入避循环（与 cleanup 同模式）
+        scanner.state.pop(job, None)
+    except ImportError:
+        pass
 
 
 def dir_size(p):
@@ -200,7 +214,7 @@ def cleanup():
                 import scanner   # v1.14：局部导入避循环；正在扫描/转换的任务不清理（#2）
                 if scanner.get_state(name)["state"] == "scanning":
                     return False
-                delete(name)
+                _delete_locked(name)   # v1.14.3（P3-11）：本函数已持锁，走无重入版本
                 deleted.append(name)
                 return True
             finally:

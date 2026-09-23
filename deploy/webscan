@@ -34,6 +34,7 @@ PRESERVE=(".venv" "admin_config.json" "examples")
 cmd_update() {
     local pkg=""
     local tmp_dir=""
+    local switched="no"   # v1.14.3（P2-7）：阶段标记——旧目录让位成功才置 yes，rollback 据此决定是否可删新目录
 
     # v1.14.2（#9）：更新全流程互斥——两次并发 update 会同时操作 .old/.preserve/service
     exec 9>/run/lock/scanweb-update.lock
@@ -119,20 +120,24 @@ cmd_update() {
         cp "$SERVICE_FILE" "$service_bak"         # 旧 service 备份，回滚时恢复（防版本错配）
     fi
 
-    # 统一回滚：先从新目录逆移植保留项（可能已归位）→ 清新目录 → 旧目录归位 →
-    # 保留项放回 → service 恢复 → 拉起旧版。任何路径下保留项必须完好（v1.14.1 P0-1）
+    # 统一回滚：切换前失败→原安装未动，不动目录只恢复 service；切换后失败→先从新目录
+    # 逆移植保留项 → 清新目录 → 旧目录归位 → 保留项放回 → service 恢复 → 拉起旧版。
+    # 任何路径下保留项必须完好（v1.14.1 P0-1）；switched 阶段守卫防「mv 失败却把
+    # 唯一旧版删掉」（v1.14.3 P2-7：切换前 rm .old 成功但 mv 失败的极端场景）
     rollback() {
         systemctl stop "$SERVICE_NAME" 2>/dev/null || true
-        for item in "${PRESERVE[@]}"; do
-            if [ -e "${INSTALL_DIR}/${item}" ]; then mv "${INSTALL_DIR}/${item}" "${preserve_dir}/"; fi
-        done
-        rm -rf "${INSTALL_DIR}"
-        if [ -d "${INSTALL_DIR}.old" ]; then
-            mv "${INSTALL_DIR}.old" "${INSTALL_DIR}"
+        if [ "$switched" = "yes" ]; then
+            for item in "${PRESERVE[@]}"; do
+                if [ -e "${INSTALL_DIR}/${item}" ]; then mv "${INSTALL_DIR}/${item}" "${preserve_dir}/"; fi
+            done
+            rm -rf "${INSTALL_DIR}"
+            if [ -d "${INSTALL_DIR}.old" ]; then
+                mv "${INSTALL_DIR}.old" "${INSTALL_DIR}"
+            fi
+            for item in "${PRESERVE[@]}"; do
+                if [ -e "${preserve_dir}/${item}" ]; then mv "${preserve_dir}/${item}" "${INSTALL_DIR}/"; fi
+            done
         fi
-        for item in "${PRESERVE[@]}"; do
-            if [ -e "${preserve_dir}/${item}" ]; then mv "${preserve_dir}/${item}" "${INSTALL_DIR}/"; fi
-        done
         if [ -f "$service_bak" ]; then
             cp "$service_bak" "$SERVICE_FILE"
             systemctl daemon-reload
@@ -150,6 +155,7 @@ cmd_update() {
     yellow "切换版本（原子）..."
     rm -rf "${INSTALL_DIR}.old"
     mv "${INSTALL_DIR}" "${INSTALL_DIR}.old"
+    switched="yes"   # v1.14.3（P2-7）：旧目录已让位——此后 rollback 才允许清理新目录/恢复旧版
     mkdir -p "${INSTALL_DIR}"
     cp -a "${tmp_extract}/scanweb/." "${INSTALL_DIR}/"
     rm -rf "$tmp_extract"

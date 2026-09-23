@@ -24,7 +24,8 @@ app = Flask(__name__)
 app.secret_key = SECRET
 app.config.update(SESSION_COOKIE_SAMESITE="Lax", SESSION_COOKIE_HTTPONLY=True)  # v1.14：基础 CSRF 防护（#7）
 app.register_blueprint(admin.bp)
-FNAME_RE = re.compile(r"p\d{3}\.(png|jpg)")
+FNAME_RE = re.compile(r"p\d+\.(png|jpg)")   # v1.14.3（P2-3）：与 jobs.PAGE_RE 同步 p\d+——p1000 页面 raw/thumb 不再 404
+ZIP_QUEUE_MAXSIZE = 16   # v1.14.3（P2）：提为常量供测试注入（满队列断开场景）
 
 
 # ---------------- 登录（仅当设置 TOKEN 时启用） ----------------
@@ -47,6 +48,10 @@ def login():
         return redirect(url_for("index"))
     err = ""
     if request.method == "POST":
+        # v1.14.3（P2-10）：顺手清理过期超过 1 小时的失败记录——字典不再只增不减
+        now = time.time()
+        for k in [k for k, v in _token_fails.items() if v["lock_until"] and v["lock_until"] < now - 3600]:
+            _token_fails.pop(k, None)
         rec = _token_fails.setdefault(request.remote_addr, {"count": 0, "lock_until": 0.0})
         if time.time() < rec["lock_until"]:
             err = "尝试过于频繁，请稍后再试"
@@ -162,7 +167,7 @@ def api_delete(job):
         if scanner.get_state(job)["state"] == "scanning":
             return jsonify(ok=False, msg="扫描进行中，请等待完成后再删除"), 409
         scanner.state.pop(job, None)
-        jobs.delete(job)
+        jobs._delete_locked(job)   # v1.14.3（P3-11）：本处已持锁，走无重入版本
     jobs.release_job_lock(job)   # v1.14.2（#11）：锁已空闲，回收条目防字典长期增长
     return jsonify(ok=True)
 
@@ -323,9 +328,15 @@ def raw(job, fname):
     if not FNAME_RE.fullmatch(fname) or not fname.endswith(".png"):
         abort(404)
     p = os.path.join(jobs.path(job), fname)
-    if not os.path.exists(p):
-        abort(404)
-    return send_file(p)
+    # v1.14.3（P2-5）：锁内读入内存后返回——消除 exists→send_file 之间任务被删的竞态；
+    # ponytail: 单页 PNG 几 MB × 8 线程并发内存可接受，升级路径=流式持锁
+    with jobs.job_lock(job):
+        try:
+            with open(p, "rb") as f:
+                data = f.read()
+        except OSError:
+            abort(404)
+    return Response(data, mimetype="image/png")
 
 
 @app.route("/job/<job>/thumb/<fname>")
@@ -333,9 +344,14 @@ def thumb(job, fname):
     if not FNAME_RE.fullmatch(fname) or not fname.endswith(".jpg"):
         abort(404)
     p = os.path.join(jobs.path(job), ".thumbs", fname)
-    if not os.path.exists(p):
-        abort(404)
-    return send_file(p)
+    # v1.14.3（P2-5）：同 raw——锁内读内存，消除 TOCTOU 窗口
+    with jobs.job_lock(job):
+        try:
+            with open(p, "rb") as f:
+                data = f.read()
+        except OSError:
+            abort(404)
+    return Response(data, mimetype="image/jpeg")
 
 
 @app.route("/job/<job>/download.zip")
@@ -348,7 +364,7 @@ def dl_zip(job):
     if not files:
         jlock.release()
         abort(404)
-    qu = q.Queue(maxsize=16)   # v1.14.1（P1-8）：背压——慢客户端时压缩线程阻塞，防队列无限吃内存
+    qu = q.Queue(maxsize=ZIP_QUEUE_MAXSIZE)   # v1.14.1（P1-8）：背压——慢客户端时压缩线程阻塞，防队列无限吃内存
     DONE = object()
     cancel = threading.Event()   # v1.14.2（#7）：客户端断开时唤醒 worker 退出，防 daemon 线程永久阻塞
 
@@ -358,10 +374,17 @@ def dl_zip(job):
             def __init__(self):
                 self.pos = 0
             def write(self, b):
-                if cancel.is_set():
-                    raise OSError("zip cancelled")   # 消费者已断开，中止压缩
-                self.pos += len(b)
-                qu.put(b)
+                # v1.14.3（P1-2）：满队列 put 超时重检 cancel——客户端断开后 worker 最多 0.5s 退出，
+                # 不再永久阻塞在无 timeout 的 put 上（v1.14.2 只给 DONE 加了 timeout，此处是漏网点）
+                while True:
+                    if cancel.is_set():
+                        raise OSError("zip cancelled")   # 消费者已断开，中止压缩
+                    try:
+                        qu.put(b, timeout=0.5)
+                        self.pos += len(b)
+                        return
+                    except q.Full:
+                        continue
             def tell(self):
                 return self.pos
             def seek(self, *a):
@@ -404,25 +427,28 @@ def dl_zip(job):
 @app.route("/job/<job>/download.pdf")
 def dl_pdf(job):
     from PIL import Image
-    base = jobs.path(job)
-    files = jobs.pages(job)
-    if not files:
-        abort(404)
-    if len(files) > MAX_PDF_PAGES:
-        abort(413)
-    # v1.14：按像素估算合成内存（Pillow 惰性读头不载位图），超限拒绝防 ARM 盒子 OOM（#5）
-    approx = 0
-    for f in files:
-        with Image.open(os.path.join(base, f)) as im:
-            approx += im.width * im.height * 3
-    if approx > MAX_PDF_MEM:
-        abort(413)
-    imgs = []
-    for f in files:   # v1.14.1（P2-14）：with 显式关闭文件句柄，防连续生成 PDF 时 fd 积累
-        with Image.open(os.path.join(base, f)) as src:
-            imgs.append(src.convert("RGB"))
-    buf = io.BytesIO()
-    imgs[0].save(buf, "PDF", save_all=True, append_images=imgs[1:])
+    # v1.14.3（P2-4）：读取+合成全程持任务锁——期间 delete/reorder 排队，PDF 页面内容一致；
+    # 合成完即释放，网络传输不持锁（PDF 一次生成到内存，最适合此方案）
+    with jobs.job_lock(job):
+        base = jobs.path(job)
+        files = jobs.pages(job)
+        if not files:
+            abort(404)
+        if len(files) > MAX_PDF_PAGES:
+            abort(413)
+        # v1.14：按像素估算合成内存（Pillow 惰性读头不载位图），超限拒绝防 ARM 盒子 OOM（#5）
+        approx = 0
+        for f in files:
+            with Image.open(os.path.join(base, f)) as im:
+                approx += im.width * im.height * 3
+        if approx > MAX_PDF_MEM:
+            abort(413)
+        imgs = []
+        for f in files:   # v1.14.1（P2-14）：with 显式关闭文件句柄，防连续生成 PDF 时 fd 积累
+            with Image.open(os.path.join(base, f)) as src:
+                imgs.append(src.convert("RGB"))
+        buf = io.BytesIO()
+        imgs[0].save(buf, "PDF", save_all=True, append_images=imgs[1:])
     buf.seek(0)
     return send_file(buf, mimetype="application/pdf", as_attachment=True,
                      download_name=f"{job}.pdf")

@@ -15,7 +15,7 @@ import device_probe
 import jobs
 import scanner
 from config import (CONVERT, SCANIMAGE, VERSION, get_cleanup_cfg, get_scan_root,
-                    load_admin_cfg, save_admin_cfg)
+                    load_admin_cfg, save_admin_cfg, update_admin_cfg)
 
 bp = Blueprint("admin", __name__)
 
@@ -39,6 +39,10 @@ _PIN_LOCK_SEC = 60
 
 
 def _pin_rec():
+    # v1.14.3（P2-10）：顺手清理过期超过 1 小时的失败记录——字典不再只增不减
+    now = time.time()
+    for k in [k for k, v in _pin_fails.items() if v["lock_until"] and v["lock_until"] < now - 3600]:
+        _pin_fails.pop(k, None)
     return _pin_fails.setdefault(request.remote_addr, {"count": 0, "lock_until": 0.0})
 
 
@@ -113,15 +117,15 @@ def api_login():
         # 首次使用：设置 PIN（需两次输入一致）
         if pin != str(d.get("confirm", "")).strip():
             return jsonify(ok=False, msg="两次输入不一致，请重试"), 400
-        cfg["pin_hash"] = _hash(pin)
-        save_admin_cfg(cfg)
+        # v1.14.3（P1-1）：改走原子事务——只动 pin_hash 字段，不再整份覆盖并发修改
+        update_admin_cfg(lambda c: c.__setitem__("pin_hash", _hash(pin)))
         session["admin_ok"] = True
         session["csrf"] = secrets.token_hex(16)   # v1.14.1（P2-12）：首次设置同样签发
         return jsonify(ok=True, first=True, csrf=session["csrf"])
     if _verify(pin, cfg["pin_hash"]):
         if "$" not in cfg["pin_hash"]:   # v1.14：旧 sha256 格式登录成功后自动升级为 PBKDF2
-            cfg["pin_hash"] = _hash(pin)
-            save_admin_cfg(cfg)
+            # v1.14.3（P1-1）：同上，原子事务只动 pin_hash
+            update_admin_cfg(lambda c: c.__setitem__("pin_hash", _hash(pin)))
         _pin_fails.pop(request.remote_addr, None)
         session["admin_ok"] = True
         session["csrf"] = secrets.token_hex(16)   # v1.14.1（P2-12）：登录签发 CSRF token
@@ -342,71 +346,82 @@ def api_get_config():
 @require_admin
 def api_save_config():
     d = request.get_json(silent=True) or {}
-    cfg = load_admin_cfg()
-    # 1) 扫描存储路径
-    new_root = str(d.get("scan_root", "")).strip()
-    if new_root:
-        if not os.path.isabs(new_root):
-            return jsonify(ok=False, msg="请输入绝对路径（以 / 开头）"), 400
-        if _root_blocked(new_root):   # v1.14：拒绝系统目录（#13）
-            return jsonify(ok=False, msg="不允许使用系统目录，请选择数据目录（如 /opt、/mnt、/home 下）"), 400
-        current = get_scan_root()
-        if os.path.normpath(new_root) != os.path.normpath(current):
-            if not os.path.isdir(new_root):
-                if not d.get("confirm"):
-                    return jsonify(ok=False, need_confirm=True,
-                                   msg="路径 %s 不存在，是否创建？" % new_root)
-                try:
-                    os.makedirs(new_root, exist_ok=True)
-                    os.chmod(new_root, 0o755)   # 确保服务 umask 不影响 Samba 等其它用户读取
-                except OSError as e:
-                    return jsonify(ok=False, msg="创建失败：%s" % e), 400
-            if not os.access(new_root, os.W_OK):
-                return jsonify(ok=False,
-                                msg="服务用户对 %s 无写入权限，请检查目录属主/权限" % new_root), 403
-            cfg["scan_root"] = new_root
-    # 2) 清理策略（0 = 不启用；任一条件超限即执行对应清理）
-    if isinstance(d.get("cleanup"), dict):
-        for k in ("max_jobs", "max_age_days", "max_total_mb"):
-            if k in d["cleanup"]:
-                try:
-                    cfg["cleanup"][k] = max(0, int(str(d["cleanup"][k]).strip() or 0))
-                except ValueError:
-                    cfg["cleanup"][k] = 0
-    # 3) 设备别名
-    if "device_alias" in d:
-        alias = d["device_alias"]
-        if alias is None:
-            cfg["device_alias"] = {}
-        elif isinstance(alias, dict):
-            # v1.14：别名滤除尖括号（前端 XSS 后端双保险，#12）
-            cfg["device_alias"] = {k: re.sub(r"[<>]", "", str(v))[:50]
-                                   for k, v in alias.items() if v}
-    # 4) 扫描默认值（按设备存储：{ "设备名": {"dpi":"150","mode":"Gray","crop":false} }）
-    if "scan_defaults" in d:
-        sd = d["scan_defaults"]
-        if sd is None:
-            cfg["scan_defaults"] = {}
-        elif isinstance(sd, dict):
-            # v1.14：按设备探测能力白名单校验 dpi/mode，非法值回退探测列表首项（#16）
-            caps = {x["name"]: x for x in device_probe.probe()[0]}
-            cleaned = {}
-            for dev_name, dv in sd.items():
-                if not isinstance(dv, dict):
-                    continue
-                cap = caps.get(dev_name, {})
-                dpi_ok = cap.get("dpi_raw") or []
-                mode_ok = cap.get("modes") or []
-                dpi = str(dv.get("dpi", "150"))
-                mode = str(dv.get("mode", "Gray"))
-                if dpi_ok and dpi not in dpi_ok:
-                    dpi = dpi_ok[0]
-                if mode_ok and mode not in mode_ok:
-                    mode = mode_ok[0]
-                cleaned[dev_name] = {"dpi": dpi, "mode": mode,
-                                     "crop": bool(dv.get("crop", False))}
-            cfg["scan_defaults"] = cleaned
-    save_admin_cfg(cfg)
+
+    class _Reject(Exception):
+        """校验失败提前退出（response, status），v1.14.3（P1-1）：校验+修改+保存同入一个原子事务"""
+        def __init__(self, payload, status):
+            self.payload, self.status = payload, status
+
+    def mutate(cfg):
+        # 1) 扫描存储路径
+        new_root = str(d.get("scan_root", "")).strip()
+        if new_root:
+            if not os.path.isabs(new_root):
+                raise _Reject(jsonify(ok=False, msg="请输入绝对路径（以 / 开头）"), 400)
+            if _root_blocked(new_root):   # v1.14：拒绝系统目录（#13）
+                raise _Reject(jsonify(ok=False, msg="不允许使用系统目录，请选择数据目录（如 /opt、/mnt、/home 下）"), 400)
+            current = get_scan_root()
+            if os.path.normpath(new_root) != os.path.normpath(current):
+                if not os.path.isdir(new_root):
+                    if not d.get("confirm"):
+                        raise _Reject(jsonify(ok=False, need_confirm=True,
+                                              msg="路径 %s 不存在，是否创建？" % new_root), 200)
+                    try:
+                        os.makedirs(new_root, exist_ok=True)
+                        os.chmod(new_root, 0o755)   # 确保服务 umask 不影响 Samba 等其它用户读取
+                    except OSError as e:
+                        raise _Reject(jsonify(ok=False, msg="创建失败：%s" % e), 400)
+                if not os.access(new_root, os.W_OK):
+                    raise _Reject(jsonify(ok=False,
+                                          msg="服务用户对 %s 无写入权限，请检查目录属主/权限" % new_root), 403)
+                cfg["scan_root"] = new_root
+        # 2) 清理策略（0 = 不启用；任一条件超限即执行对应清理）
+        if isinstance(d.get("cleanup"), dict):
+            for k in ("max_jobs", "max_age_days", "max_total_mb"):
+                if k in d["cleanup"]:
+                    try:
+                        cfg["cleanup"][k] = max(0, int(str(d["cleanup"][k]).strip() or 0))
+                    except ValueError:
+                        cfg["cleanup"][k] = 0
+        # 3) 设备别名
+        if "device_alias" in d:
+            alias = d["device_alias"]
+            if alias is None:
+                cfg["device_alias"] = {}
+            elif isinstance(alias, dict):
+                # v1.14：别名滤除尖括号（前端 XSS 后端双保险，#12）
+                cfg["device_alias"] = {k: re.sub(r"[<>]", "", str(v))[:50]
+                                       for k, v in alias.items() if v}
+        # 4) 扫描默认值（按设备存储：{ "设备名": {"dpi":"150","mode":"Gray","crop":false} }）
+        if "scan_defaults" in d:
+            sd = d["scan_defaults"]
+            if sd is None:
+                cfg["scan_defaults"] = {}
+            elif isinstance(sd, dict):
+                # v1.14：按设备探测能力白名单校验 dpi/mode，非法值回退探测列表首项（#16）
+                caps = {x["name"]: x for x in device_probe.probe()[0]}
+                cleaned = {}
+                for dev_name, dv in sd.items():
+                    if not isinstance(dv, dict):
+                        continue
+                    cap = caps.get(dev_name, {})
+                    dpi_ok = cap.get("dpi_raw") or []
+                    mode_ok = cap.get("modes") or []
+                    dpi = str(dv.get("dpi", "150"))
+                    mode = str(dv.get("mode", "Gray"))
+                    if dpi_ok and dpi not in dpi_ok:
+                        dpi = dpi_ok[0]
+                    if mode_ok and mode not in mode_ok:
+                        mode = mode_ok[0]
+                    cleaned[dev_name] = {"dpi": dpi, "mode": mode,
+                                         "crop": bool(dv.get("crop", False))}
+                cfg["scan_defaults"] = cleaned
+
+    # v1.14.3（P1-1）：load→校验→修改→save 全程同锁原子——两个并发保存不再互相覆盖对方的修改
+    try:
+        cfg = update_admin_cfg(mutate)
+    except _Reject as e:
+        return e.payload, e.status
     deleted = jobs.cleanup()
     return jsonify(ok=True, scan_root=get_scan_root(),
                    cleanup=cfg["cleanup"],
@@ -440,7 +455,7 @@ def api_delete(job):
     with jobs.job_lock(job):   # v1.14.1（P1-3）：锁内检查+删除原子化
         if scanner.get_state(job)["state"] == "scanning":
             return jsonify(ok=False, msg="扫描进行中，请等待完成后再删除"), 409
-        jobs.delete(job)   # jobs.delete 内部亦有双保险
+        jobs._delete_locked(job)   # v1.14.3（P3-11）：本处已持锁，走无重入版本
     jobs.release_job_lock(job)   # v1.14.2（#11）：锁已空闲，回收条目防字典长期增长
     return jsonify(ok=True)
 

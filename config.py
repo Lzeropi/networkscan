@@ -26,7 +26,7 @@ SCANIMAGE = os.environ.get("SCANIMAGE", shutil.which("scanimage") or "/usr/bin/s
 CONVERT = os.environ.get("CONVERT_BIN", shutil.which("convert") or "/usr/bin/convert")
 
 # ---------------- v1.10 管理页配置（admin_config.json，优先级高于环境变量） ----------------
-VERSION = "1.14.2"
+VERSION = "1.14.3"
 ADMIN_CFG_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "admin_config.json")
 
 # v1.14.2（#5）：配置保存进程级锁——waitress 8 线程下并发保存会互相覆盖临时文件或丢更新
@@ -75,20 +75,37 @@ def save_admin_cfg(cfg):
     v1.14.2（#5）：并发安全——进程级锁串行化写入 + 每次唯一临时文件名，
     两个请求同时保存不再互相覆盖/丢配置；v1.14.2（#8）：落盘后权限 0600。"""
     with _admin_cfg_lock:
-        tmp = "%s.tmp.%d.%d" % (ADMIN_CFG_PATH, os.getpid(), threading.get_ident())
+        _save_admin_cfg_unlocked(cfg)
+
+
+def _save_admin_cfg_unlocked(cfg):
+    """save 的无锁主体（仅供 update_admin_cfg 在已持锁事务内调用）。"""
+    tmp = "%s.tmp.%d.%d" % (ADMIN_CFG_PATH, os.getpid(), threading.get_ident())
+    try:
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(cfg, f, ensure_ascii=False, indent=2)
+            f.flush()
+            os.fsync(f.fileno())
+        os.chmod(tmp, 0o600)
+        os.replace(tmp, ADMIN_CFG_PATH)
+    finally:
         try:
-            with open(tmp, "w", encoding="utf-8") as f:
-                json.dump(cfg, f, ensure_ascii=False, indent=2)
-                f.flush()
-                os.fsync(f.fileno())
-            os.chmod(tmp, 0o600)
-            os.replace(tmp, ADMIN_CFG_PATH)
-        finally:
-            try:
-                if os.path.exists(tmp):
-                    os.remove(tmp)
-            except OSError:
-                pass
+            if os.path.exists(tmp):
+                os.remove(tmp)
+        except OSError:
+            pass
+
+
+def update_admin_cfg(mutator):
+    """v1.14.3（P1-1）：原子配置事务——锁内 load → mutator(cfg) → save，
+    消除「并发请求各自 load 旧配置、改不同字段、后 save 覆盖前 save」的语义级 lost update
+    （v1.14.2 只修了文件写冲突，未修这个层次）。mutator 原地修改；返回更新后的 cfg。
+    load_admin_cfg 本身不碰 _admin_cfg_lock，锁内直调无死锁。"""
+    with _admin_cfg_lock:
+        cfg = load_admin_cfg()
+        mutator(cfg)
+        _save_admin_cfg_unlocked(cfg)
+        return cfg
 
 
 def get_scan_root():
