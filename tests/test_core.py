@@ -158,5 +158,5 @@ def test_version_consistency():
         import tomli as tomllib
     with open(os.path.join(os.path.dirname(config.__file__), "pyproject.toml"), "rb") as f:
         ver = tomllib.load(f)["project"]["version"]
-    assert config.VERSION == "1.14"
-    assert ver == "1.14.0"
+    assert config.VERSION == "1.14.1"
+    assert ver == "1.14.1"

@@ -3,10 +3,10 @@ AIGC:
   ContentProducer: '001191110102MAD55U9H0F10002'
   ContentPropagator: '001191110102MAD55U9H0F10002'
   Label: '1'
-  ProduceID: '07df38a5-7047-4548-a1a9-ca5716c47233'
-  PropagateID: '07df38a5-7047-4548-a1a9-ca5716c47233'
-  ReservedCode1: '7b10d00e-232c-4229-bc34-64e01b819b55'
-  ReservedCode2: '7b10d00e-232c-4229-bc34-64e01b819b55'
+  ProduceID: '738e056f-27ce-4ee7-b7fd-b49bb9938189'
+  PropagateID: '738e056f-27ce-4ee7-b7fd-b49bb9938189'
+  ReservedCode1: '762c1f87-d35d-4744-95a0-cb280cc18b74'
+  ReservedCode2: '762c1f87-d35d-4744-95a0-cb280cc18b74'
 ---
 
 # ScanWeb — 局域网网页扫描系统
@@ -15,7 +15,7 @@ AIGC:
 
 | 项目信息 | 说明 |
 |---|---|
-| 当前版本 | v1.14 |
+| 当前版本 | v1.14.1 |
 | 适配硬件 | hi3798mv100 机顶盒（ARM32/armhf）或其他 Linux 小主机 |
 | 适配系统 | Ubuntu 20.04 (focal) / Python 3.8+ |
 | 主要设备 | HP LaserJet M1005（其他 SANE 兼容扫描仪亦可） |
@@ -23,6 +23,8 @@ AIGC:
 | 前端形态 | 单页原生 HTML/CSS/JS，零外部依赖、零数据库、无 CDN 引用 |
 | 默认端口 | 9203 |
 
+> v1.14.1 更新：**审计修复版（ChatGPT 二次审计 18 项全修）**。P0：① webscan update 回滚不变量根治——保留项移独立备份目录、service 先备份、统一 rollback（含从新目录逆移植）+ ERR trap 全程兑底，本地故障演练六项不变量全过（旧版回滚会连 .venv/配置一起删）；② scanimage -L 正则兼容 反引号/单引号/无引号 三种后端风格（HP 真机不回归，爱普生/佳能/airscan 不再探测全空），scanner 短名解析同步，新增 203 真机 fixture 测试。P1：③ job_lock 任务生命周期锁根治 TOCTOU（scan/convert/delete/reorder/cleanup 同任务互斥）；④ 转换失败保留 PNM 源数据（提示与行为一致）；⑤ ADF 检查返回码（部分成功不再误报完成）；⑥ ADF 忙同步返回 409；⑦ source 白名单 fail-closed；⑧ ZIP 队列背压 maxsize=16；⑨ 页编号 max+1 防空洞；⑩ safe_slug 拒「..」防死角任务。P2：⑪ TOKEN 登录 IP 限流；⑫ 管理页 CSRF token（登录签发+写请求校验）；⑬ scan_root realpath 防 symlink 绕过；⑭ PDF 句柄显式关闭；⑮ 新增 tests/test_concurrent.py 并发与故障注入 10 项；⑯ README 回滚演练六步清单。
+>
 > v1.14 更新：**锁定保护与安全加固版**。新功能：① 管理页锁定的任务在任务页隐藏「删除任务/删除图片」按钮，普通 API 删除返回 403 三层防护（解锁后恢复）；② 管理页任务名可点击直达任务页，返回按钮自动回到管理页历史任务锚点。修复与加固：③ 平板扫描补写状态（扫描+转换全程可拦截删除/排序/清理）；④ 自动清理排除扫描中任务；⑤ 0 字节转换中占位不再被计入页面数；⑥ 任务 ID 加随机后缀防同秒并发；⑦ Session cookie SameSite=Lax+HttpOnly；⑧ PIN 改 PBKDF2 慢哈希（旧格式登录自动迁移），防暴力锁改按 IP；⑨ 前端 XSS 加固（admin.js 动态值全量转义）；⑩ scan_root 系统目录黑名单；⑪ PDF 合成增加内存估算上限（默认 512MB，SCANWEB_MAX_PDF_MEM 可调）；⑫ 设备探测合并为公共模块（普通页与管理页共用）；⑬ 设备解析缓存按后端分键；⑭ 扫描默认值与 ADF 进纸源白名单校验；⑮ webscan update 原子化（先校验再切换，失败自动回滚）；⑯ 版本号统一（pyproject 同步 1.14.0）。新增 tests/ 目录（24 项 pytest 回归），见「测试」章节。
 >
 > v1.13 更新：① 内置示例任务（输出目录为空时启动自动部署，带 🔒 锁定防清理）；② 默认端口改为 9203；③ CPU 温度优先读海思 /proc/msp/pm_cpu；④ 修复扫描报错——设备短名自动解析为完整名（hpljm1005: → hpljm1005:libusb:xxx:xxx，缓存 60 秒）+ 显式 --format=pnm 消除警告。⑤ 新增交互式系统架构图（/architecture），管理员手册第 12 章。
