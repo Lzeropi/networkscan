@@ -159,5 +159,9 @@ def test_version_consistency():
         import tomli as tomllib
     with open(os.path.join(os.path.dirname(config.__file__), "pyproject.toml"), "rb") as f:
         ver = tomllib.load(f)["project"]["version"]
-    assert config.VERSION == "1.14.2"
-    assert ver == "1.14.2"
+    assert config.VERSION == "1.14.3"
+    assert ver == "1.14.3"
+    # v1.14.3（P2-8）：四版本一致断言——README「当前版本」字段曾漏改致文档与代码矛盾，固化成测试防再犯
+    src = os.path.dirname(config.__file__)
+    readme = open(os.path.join(src, "README.md"), encoding="utf-8").read()
+    assert "| 当前版本 | v%s |" % ver in readme, "README 当前版本字段与代码版本不一致"
