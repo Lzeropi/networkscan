@@ -26,7 +26,7 @@ _ROOT_BLACKLIST = ("/", "/bin", "/boot", "/dev", "/etc", "/lib", "/lib64",
 
 
 def _root_blocked(path):
-    np = os.path.normpath(path)
+    np = os.path.realpath(os.path.normpath(path))   # v1.14.1（P2-13）：realpath 解析 symlink，防软链指向系统目录绕过黑名单
     for b in _ROOT_BLACKLIST:
         if np == b or (b != "/" and np.startswith(b + "/")):
             return True

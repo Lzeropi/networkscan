@@ -25,8 +25,11 @@ def probe(force=False):
     if os.path.exists(SCANIMAGE):
         try:
             r = subprocess.run([SCANIMAGE, "-L"], capture_output=True, text=True, timeout=25)
-            for m in re.finditer(r"device `([^']+)' is a (.+)", r.stdout + r.stderr):
-                dev, desc = m.group(1), m.group(2).strip()
+            # v1.14.1：兼容三种引号风格（P0-2）——HP 为 `name'，epkowa 为 'name'，
+            # pixma/airscan 可能无引号；写死任一种会导致其他后端设备列表为空
+            for m in re.finditer(r"device\s+(?:[`']([^`']+)[`']|(\S+))\s+is\s+a\s+(.*)",
+                                 r.stdout + r.stderr):
+                dev, desc = (m.group(1) or m.group(2)), (m.group(3) or "").strip()
                 info = {"name": dev, "desc": desc, "modes": [], "sources": [],
                         "dpis": [], "dpi": "", "dpi_raw": [], "scan_type": "未知", "error": ""}
                 try:

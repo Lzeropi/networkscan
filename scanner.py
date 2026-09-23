@@ -33,7 +33,9 @@ def _params(job):
 def _resolve_device(name):
     """把短设备名（如 'hpljm1005:'）解析为完整设备名（如 'hpljm1005:libusb:001:003'）。
     hi3798mv100 上 hpaio 后端不接受纯后缀名（open 报 Invalid argument），
-    必须用 scanimage -L 列出的完整名。解析结果缓存 60 秒，USB 重插后自动刷新。"""
+    必须用 scanimage -L 列出的完整名。解析结果缓存 60 秒，USB 重插后自动刷新。
+    注：UI 设备列表用 device_probe 300s 缓存，实际扫描解析用本 60s 缓存——
+    刻意双生命周期（P2-15）：短缓存保证 USB 重插后扫描快速恢复，长缓存减少首页刷新探测。"""
     if not name or ":" not in name:
         return name                       # 无后缀名，原样返回
     backend, _, suffix = name.partition(":")
@@ -46,10 +48,12 @@ def _resolve_device(name):
     try:
         out = subprocess.run([SCANIMAGE, "-L"], capture_output=True, timeout=15)
         for line in out.stdout.decode(errors="ignore").splitlines():
-            m = re.match(r"device [`']([^`']+)[`']", line.strip())
-            if m and m.group(1).startswith(backend + ":"):
-                globals().setdefault("_dev_cache", {})[backend] = (now + 60, m.group(1))
-                return m.group(1)
+            # v1.14.1：与 device_probe 统一引号兼容正则（P0-2，含无引号格式）
+            m = re.match(r"device\s+(?:[`']([^`']+)[`']|(\S+))", line.strip())
+            full = (m.group(1) or m.group(2)) if m else None
+            if full and full.startswith(backend + ":"):
+                globals().setdefault("_dev_cache", {})[backend] = (now + 60, full)
+                return full
     except (OSError, subprocess.SubprocessError):
         pass
     return name                           # 解析失败退回原名（由 scanimage 报错）
@@ -126,7 +130,7 @@ def scan_flatbed(job):
     # v1.14：平板扫描也写 state，扫描+转换期间 delete/reorder/cleanup 可感知（#1）
     st = state.setdefault(job, {})
     st.update(state="scanning", msg="平板扫描中…")
-    n = len(jobs.raw_pages(job)) + 1     # v1.14：含 0 字节占位的裸计数，防过滤后编号冲突（#3）
+    n = jobs.next_page_no(job)        # v1.14.1（P1-9）：max+1 防空洞编号冲突
     fname = f"p{n:03d}.png"
     out = os.path.join(get_scan_root(), job, fname)
     tmp = os.path.join("/tmp", f"scanweb_{job}_{n:03d}.pnm")
@@ -195,7 +199,7 @@ def scan_adf(job):
             _scan_job = job
             st = state.setdefault(job, {})
             st.update(state="scanning", msg="ADF 连续扫描中…")
-            start = len(jobs.raw_pages(job)) + 1   # v1.14：含 0 字节占位的裸计数（#3）
+            start = jobs.next_page_no(job)   # v1.14.1（P1-9）：max+1 防空洞编号冲突
             pat = os.path.join(get_scan_root(), job, "p%03d.pnm")
             source = p.get("source_name") or SCAN_SOURCE  # 优先用探测到的源名，其次配置回退
             # v1.14：进纸源白名单校验，非法值明确报错不执行（#17）

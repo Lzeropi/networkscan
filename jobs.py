@@ -17,8 +17,15 @@ PAGE_RE = re.compile(r"p\d{3}\.png")
 
 
 def safe_slug(s, maxlen=30):
-    s = re.sub(r'[/\\:*?"<>|\x00-\x1f]', "", str(s)).strip()[:maxlen]
+    # v1.14.1（P1-10）：过滤 "." —— JOB_RE 不含点号，否则备注含「..」会生成 validate 永拒的死角任务
+    s = re.sub(r'[/\\:*?"<>|.\x00-\x1f]', "", str(s)).strip()[:maxlen]
     return s
+
+
+def next_page_no(job):
+    """v1.14.1（P1-9）：下一页编号 = 现有最大编号 + 1（len+1 在文件空洞时会冲突）。"""
+    nums = [int(f[1:4]) for f in raw_pages(job)]
+    return max(nums, default=0) + 1
 
 
 def validate(job):
@@ -36,6 +43,7 @@ def create(remark="", params=None):
     slug = safe_slug(remark)
     if slug:
         name += "_" + slug
+    assert JOB_RE.fullmatch(name), name   # v1.14.1（P1-10）：生成值必须能被 validate 接受，防止死角任务
     os.makedirs(os.path.join(get_scan_root(), name, ".thumbs"), exist_ok=True)
     meta = {"remark": slug, "created": time.strftime("%Y-%m-%d %H:%M:%S"),
             "pages": 0, "params": params or {}}

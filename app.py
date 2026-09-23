@@ -279,7 +279,7 @@ def dl_zip(job):
     files = [(f, os.path.join(base, f)) for f in jobs.pages(job)]
     if not files:
         abort(404)
-    qu = q.Queue()
+    qu = q.Queue(maxsize=16)   # v1.14.1（P1-8）：背压——慢客户端时压缩线程阻塞，防队列无限吃内存
     DONE = object()
 
     def worker():
@@ -333,7 +333,10 @@ def dl_pdf(job):
             approx += im.width * im.height * 3
     if approx > MAX_PDF_MEM:
         abort(413)
-    imgs = [Image.open(os.path.join(base, f)).convert("RGB") for f in files]
+    imgs = []
+    for f in files:   # v1.14.1（P2-14）：with 显式关闭文件句柄，防连续生成 PDF 时 fd 积累
+        with Image.open(os.path.join(base, f)) as src:
+            imgs.append(src.convert("RGB"))
     buf = io.BytesIO()
     imgs[0].save(buf, "PDF", save_all=True, append_images=imgs[1:])
     buf.seek(0)
