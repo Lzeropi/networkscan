@@ -121,7 +121,9 @@ def api_scan(job):
 def api_adf(job):
     if jobs.load(job).get("params", {}).get("source", "flatbed") != "adf":
         return jsonify(ok=False, msg="该任务创建时选择的是平板模式"), 400
-    scanner.scan_adf(job)
+    r = scanner.scan_adf(job)
+    if r == "busy":   # v1.14.1（P1-6）：设备忙同步告知，不再异步报错
+        return jsonify(ok=False, msg="设备忙，请稍后再试"), 409
     return jsonify(ok=True)
 
 
