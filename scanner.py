@@ -128,6 +128,8 @@ def scan_flatbed(job):
         elapsed = int(time.time() - _scan_start_time) if _scan_start_time else 0
         raise RuntimeError("设备忙，%s 正在扫描（已用 %d 秒），请稍后再试" % (busy_job, elapsed))
     # v1.14：平板扫描也写 state，扫描+转换期间 delete/reorder/cleanup 可感知（#1）
+    jlock = jobs.job_lock(job)     # v1.14.1（P1-3）：生命周期锁，持有至转换收尾，杜绝 TOCTOU
+    jlock.acquire()
     st = state.setdefault(job, {})
     st.update(state="scanning", msg="平板扫描中…")
     n = jobs.next_page_no(job)        # v1.14.1（P1-9）：max+1 防空洞编号冲突
@@ -135,33 +137,39 @@ def scan_flatbed(job):
     out = os.path.join(get_scan_root(), job, fname)
     tmp = os.path.join("/tmp", f"scanweb_{job}_{n:03d}.pnm")
 
-    # 预占位：先创建空的 .png 占位文件，前端能看到"正在转换"状态
+    # 阶段 1 全部包入：任何异常都必须释放 jlock，防锁泄漏（v1.14.1 P1-3）
     try:
-        open(out, "wb").close()
-    except OSError:
-        pass
-
-    # 阶段 1：scanimage 扫描（持锁）
-    scan_error = None
-    try:
-        _scan_start_time = time.time()
-        _scan_job = job
+        # 预占位：先创建空的 .png 占位文件，前端能看到"正在转换"状态
         try:
-            with open(tmp, "wb") as fh:
-                subprocess.run(_base_cmd(p), stdout=fh, stderr=subprocess.PIPE,
-                               timeout=300, check=True)
-        except subprocess.CalledProcessError as e:
-            err = (e.stderr or b"").decode(errors="ignore").strip()
-            scan_error = err[:300] or f"命令退出码 {e.returncode}"
-            _rm(tmp)
-            _rm(out)                       # 清空占位文件
-    finally:
-        _scan_job = None
-        _scan_start_time = None
-        scan_lock.release()
+            open(out, "wb").close()
+        except OSError:
+            pass
+
+        # 阶段 1：scanimage 扫描（持锁）
+        scan_error = None
+        try:
+            _scan_start_time = time.time()
+            _scan_job = job
+            try:
+                with open(tmp, "wb") as fh:
+                    subprocess.run(_base_cmd(p), stdout=fh, stderr=subprocess.PIPE,
+                                   timeout=300, check=True)
+            except subprocess.CalledProcessError as e:
+                err = (e.stderr or b"").decode(errors="ignore").strip()
+                scan_error = err[:300] or f"命令退出码 {e.returncode}"
+                _rm(tmp)
+                _rm(out)                       # 清空占位文件
+        finally:
+            _scan_job = None
+            _scan_start_time = None
+            scan_lock.release()
+    except BaseException:
+        jlock.release()
+        raise
 
     if scan_error:
         st.update(state="error", msg=scan_error)
+        jlock.release()               # v1.14.1（P1-3）：阶段 1 失败路径释放
         raise RuntimeError(scan_error)
 
     # 阶段 2：后台转换 PNM → PNG + 缩略图（不持锁，不阻塞下一次扫描）
@@ -178,6 +186,8 @@ def scan_flatbed(job):
         except Exception:
             # v1.14.1（P1-4）：失败保留 PNM 源数据供重试，提示与行为一致
             st.update(state="error", msg="后台转换失败：%s，原始数据已保留待重试（%s）" % (fname, tmp))
+        finally:
+            jlock.release()           # v1.14.1（P1-3）：转换收尾（含失败）释放生命周期锁
 
     threading.Thread(target=_convert_worker, daemon=True).start()
     return fname
@@ -193,6 +203,8 @@ def scan_adf(job):
     def worker():
         global _scan_start_time, _scan_job
         p = _params(job)
+        jlock = jobs.job_lock(job)   # v1.14.1（P1-3）：生命周期锁，扫描全程持有
+        jlock.acquire()
         try:
             _scan_start_time = time.time()
             _scan_job = job
@@ -251,6 +263,7 @@ def scan_adf(job):
             _scan_job = None
             _scan_start_time = None
             scan_lock.release()
+            jlock.release()          # v1.14.1（P1-3）
 
     threading.Thread(target=worker, daemon=True).start()
     return "started"

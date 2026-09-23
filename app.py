@@ -140,12 +140,13 @@ def api_scan_status():
 
 @app.delete("/api/jobs/<job>")
 def api_delete(job):
-    if scanner.get_state(job)["state"] == "scanning":
-        return jsonify(ok=False, msg="扫描进行中，请等待完成后再删除"), 409
     if jobs.is_locked(job):   # v1.14：锁定任务双重防护（模板隐藏按钮 + 此处显式 403）
         return jsonify(ok=False, msg="任务已锁定（管理员保护），不能删除"), 403
-    scanner.state.pop(job, None)
-    jobs.delete(job)
+    with jobs.job_lock(job):   # v1.14.1（P1-3）：锁内检查+删除原子化，消除 TOCTOU
+        if scanner.get_state(job)["state"] == "scanning":
+            return jsonify(ok=False, msg="扫描进行中，请等待完成后再删除"), 409
+        scanner.state.pop(job, None)
+        jobs.delete(job)
     return jsonify(ok=True)
 
 
@@ -153,6 +154,12 @@ def api_delete(job):
 def api_reorder(job):
     """按指定顺序物理重命名页面文件（两步重命名防冲突）。
     支持 delete=true：从 order 中省略的页面将被删除，剩余页面重新连续编号。"""
+    # v1.14.1（P1-3）：生命周期锁内执行检查+重命名，扫描/转换期间互斥
+    with jobs.job_lock(job):
+        return _reorder_body(job)
+
+
+def _reorder_body(job):
     # 排序互斥：扫描进行中禁止排序，防止文件被同时操作
     if scanner.get_state(job)["state"] == "scanning":
         return jsonify(ok=False, msg="扫描进行中，请等待完成后再排序"), 409

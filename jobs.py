@@ -3,6 +3,7 @@ import os
 import re
 import secrets
 import shutil
+import threading
 import time
 
 from config import get_cleanup_cfg, get_scan_root
@@ -26,6 +27,18 @@ def next_page_no(job):
     """v1.14.1（P1-9）：下一页编号 = 现有最大编号 + 1（len+1 在文件空洞时会冲突）。"""
     nums = [int(f[1:4]) for f in raw_pages(job)]
     return max(nums, default=0) + 1
+
+
+# v1.14.1（P1-3）：任务生命周期锁——scan/convert/delete/reorder/cleanup 对同一任务互斥，
+# 消除「检查 state → 执行操作」之间的 TOCTOU 竞态窗口。
+# 锁条目随任务创建常驻（每任务一个 Lock 约几十字节，cleanup 策略下任务数有限，不回收）。
+_job_locks = {}
+_job_locks_guard = threading.Lock()
+
+
+def job_lock(job):
+    with _job_locks_guard:
+        return _job_locks.setdefault(job, threading.Lock())
 
 
 def validate(job):
@@ -153,12 +166,18 @@ def cleanup():
         try:
             if is_locked(name):
                 return False
-            import scanner   # v1.14：局部导入避循环；正在扫描/转换的任务不清理（#2）
-            if scanner.get_state(name)["state"] == "scanning":
+            jlock = job_lock(name)
+            if not jlock.acquire(blocking=False):   # v1.14.1（P1-3）：扫描/转换持锁中，跳过不等待
                 return False
-            delete(name)
-            deleted.append(name)
-            return True
+            try:
+                import scanner   # v1.14：局部导入避循环；正在扫描/转换的任务不清理（#2）
+                if scanner.get_state(name)["state"] == "scanning":
+                    return False
+                delete(name)
+                deleted.append(name)
+                return True
+            finally:
+                jlock.release()
         except (JobError, OSError):
             return False
 

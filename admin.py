@@ -417,18 +417,20 @@ def api_jobs():
 def api_lock(job):
     d = request.get_json(silent=True) or {}
     locked = bool(d.get("locked"))
-    jobs.set_locked(job, locked)
+    with jobs.job_lock(job):   # v1.14.1（P1-3）：防锁定写 meta 与转换写 meta 的丢失更新竞态
+        jobs.set_locked(job, locked)
     return jsonify(ok=True, locked=jobs.is_locked(job))
 
 
 @bp.delete("/api/admin/jobs/<job>")
 @require_admin
 def api_delete(job):
-    if scanner.get_state(job)["state"] == "scanning":
-        return jsonify(ok=False, msg="扫描进行中，请等待完成后再删除"), 409
     if jobs.is_locked(job):
         return jsonify(ok=False, msg="任务已锁定，请先解锁再删除"), 403
-    jobs.delete(job)   # jobs.delete 内部亦有双保险
+    with jobs.job_lock(job):   # v1.14.1（P1-3）：锁内检查+删除原子化
+        if scanner.get_state(job)["state"] == "scanning":
+            return jsonify(ok=False, msg="扫描进行中，请等待完成后再删除"), 409
+        jobs.delete(job)   # jobs.delete 内部亦有双保险
     return jsonify(ok=True)
 
 
