@@ -3,10 +3,10 @@ AIGC:
   ContentProducer: '001191110102MAD55U9H0F10002'
   ContentPropagator: '001191110102MAD55U9H0F10002'
   Label: '1'
-  ProduceID: '738e056f-27ce-4ee7-b7fd-b49bb9938189'
-  PropagateID: '738e056f-27ce-4ee7-b7fd-b49bb9938189'
-  ReservedCode1: '762c1f87-d35d-4744-95a0-cb280cc18b74'
-  ReservedCode2: '762c1f87-d35d-4744-95a0-cb280cc18b74'
+  ProduceID: 'd44c8649-4852-444f-9fa7-68712a88a4a4'
+  PropagateID: 'd44c8649-4852-444f-9fa7-68712a88a4a4'
+  ReservedCode1: '1a162775-c158-4b7f-b24c-30bb0877ef4e'
+  ReservedCode2: '1a162775-c158-4b7f-b24c-30bb0877ef4e'
 ---
 
 # ScanWeb — 局域网网页扫描系统
@@ -23,6 +23,7 @@ AIGC:
 | 前端形态 | 单页原生 HTML/CSS/JS，零外部依赖、零数据库、无 CDN 引用 |
 | 默认端口 | 9203 |
 
+> v1.14.2 更新：**二次审计全修版（ChatGPT 第三轮审查 18 项：16 属实全修 + 1 部分属实 + 1 误报澄清）**。P0：① admin.js `api()` 写操作统一自动携带 X-CSRF-Token——v1.14.1 只存不发，管理页全部写操作会被 403（冒烟脚本曾手动注入 token 头致漏检，已改真实 UI 链路）；② 锁顺序统一 job_lock → scan_lock（平板先拿生命周期锁再试扫描仪锁；ADF 主线程双锁到手才启 worker，started 返回时锁已被持有），TOCTOU 窗口彻底闭合。P1：③ ADF 转换完整性判定（scanimage 返回 0 但部分 PNM 转 PNG 失败时报 error，不再误报完成）；④ reorder 事务化（先重编号成功再删待删页，rename 中途失败反向恢复，不再丢数据）；⑤ admin_config 并发写锁 + 唯一临时文件（waitress 8 线程不再丢配置），落盘权限 0600；⑥ ZIP 下载全程持任务锁（期间删除/排序排队而非损坏包）+ cancel event（客户端断开后压缩线程不再永久阻塞）；⑦ webscan update 加 flock 互斥（并发更新不再互相破坏）。P2：⑧ 页码模型 p\d+（超 999 页可识别，数字序排序）；⑨ 任务 ID 后缀 24bit + 碰撞换名重试（不再复用旧目录覆盖 meta）；⑩ admin.js 资源表动态字段全量转义；⑪ 任务删除后锁条目回收；⑫ 设备探测缓存失效钩子（解析失败自动重探，双缓存一致性）；⑬ 转换失败 PNM 移入任务目录存活重启（不再放 /tmp 被启动清理删掉）；⑭ 测试扫描改「已启动 + 轮询终态」语义（不再假成功）；⑮ README 全面同步。新增 tests/test_v1142.py 16 项。
 > v1.14.1 更新：**审计修复版（ChatGPT 二次审计 18 项全修）**。P0：① webscan update 回滚不变量根治——保留项移独立备份目录、service 先备份、统一 rollback（含从新目录逆移植）+ ERR trap 全程兑底，本地故障演练六项不变量全过（旧版回滚会连 .venv/配置一起删）；② scanimage -L 正则兼容 反引号/单引号/无引号 三种后端风格（HP 真机不回归，爱普生/佳能/airscan 不再探测全空），scanner 短名解析同步，新增 203 真机 fixture 测试。P1：③ job_lock 任务生命周期锁根治 TOCTOU（scan/convert/delete/reorder/cleanup 同任务互斥）；④ 转换失败保留 PNM 源数据（提示与行为一致）；⑤ ADF 检查返回码（部分成功不再误报完成）；⑥ ADF 忙同步返回 409；⑦ source 白名单 fail-closed；⑧ ZIP 队列背压 maxsize=16；⑨ 页编号 max+1 防空洞；⑩ safe_slug 拒「..」防死角任务。P2：⑪ TOKEN 登录 IP 限流；⑫ 管理页 CSRF token（登录签发+写请求校验）；⑬ scan_root realpath 防 symlink 绕过；⑭ PDF 句柄显式关闭；⑮ 新增 tests/test_concurrent.py 并发与故障注入 10 项；⑯ README 回滚演练六步清单。
 >
 > v1.14 更新：**锁定保护与安全加固版**。新功能：① 管理页锁定的任务在任务页隐藏「删除任务/删除图片」按钮，普通 API 删除返回 403 三层防护（解锁后恢复）；② 管理页任务名可点击直达任务页，返回按钮自动回到管理页历史任务锚点。修复与加固：③ 平板扫描补写状态（扫描+转换全程可拦截删除/排序/清理）；④ 自动清理排除扫描中任务；⑤ 0 字节转换中占位不再被计入页面数；⑥ 任务 ID 加随机后缀防同秒并发；⑦ Session cookie SameSite=Lax+HttpOnly；⑧ PIN 改 PBKDF2 慢哈希（旧格式登录自动迁移），防暴力锁改按 IP；⑨ 前端 XSS 加固（admin.js 动态值全量转义）；⑩ scan_root 系统目录黑名单；⑪ PDF 合成增加内存估算上限（默认 512MB，SCANWEB_MAX_PDF_MEM 可调）；⑫ 设备探测合并为公共模块（普通页与管理页共用）；⑬ 设备解析缓存按后端分键；⑭ 扫描默认值与 ADF 进纸源白名单校验；⑮ webscan update 原子化（先校验再切换，失败自动回滚）；⑯ 版本号统一（pyproject 同步 1.14.0）。新增 tests/ 目录（24 项 pytest 回归），见「测试」章节。
@@ -126,12 +127,12 @@ df -h /
 > **目的**：把打包好的 ScanWeb 代码放到部署目录。
 
 ```bash
-# 本机执行（传压缩包到盒子）
-scp scanweb-v1.13.tar.gz root@192.168.1.203:/opt/network_scan_service/
-# 盒子上执行
+# 本机执行（传压缩包到盒子，版本号以实际发布为准）
+scp scanweb-v1.14.2.tar.gz root@192.168.1.203:/opt/network_scan_service/
+# 盒子上执行（首次安装）
 cd /opt/network_scan_service
-tar xzf scanweb-v1.13.tar.gz --strip-components=1
-rm -f scanweb-v1.13.tar.gz .python-version
+tar xzf scanweb-v1.14.2.tar.gz --strip-components=1
+rm -f scanweb-v1.14.2.tar.gz .python-version
 ```
 
 ### 第三步：安装编译依赖并安装 Python 包
@@ -303,7 +304,7 @@ ss -tlnp | grep 9203              # 确认端口监听
 | `SCAN_SOURCE` | 空 | ADF 源名称。M1005 无 ADF 留空；换设备后用 `scanimage -A` 查看 |
 | `SCANWEB_MAX_PDF_PAGES` | 20 | PDF 合成页数上限，防 ARM32 内存 OOM |
 
-> v1.10 起存储路径与三项清理策略（任务数 / 保留天数 / 总占用）改由管理页配置，持久化在服务目录 `admin_config.json`（优先级高于上述环境变量），保存后即时生效无需重启；PIN 以 SHA-256 存储，删除该文件即可重置 PIN 与全部管理配置。
+> v1.10 起存储路径与三项清理策略（任务数 / 保留天数 / 总占用）改由管理页配置，持久化在服务目录 `admin_config.json`（优先级高于上述环境变量），保存后即时生效无需重启；v1.14 起 PIN 以 PBKDF2 慢哈希存储（v1.14.2 起文件权限 0600），删除该文件即可重置 PIN 与全部管理配置。
 
 ### 目录结构
 
@@ -379,8 +380,8 @@ webscan version             # 查看当前版本
 **更新流程（典型场景）**：
 
 ```bash
-# 1. 本机上传新版本包
-scp scanweb-v1.13.tar.gz root@192.168.1.203:/opt/network_scan_service/
+# 1. 本机上传新版本包（版本号以实际发布为准）
+scp scanweb-v1.14.2.tar.gz root@192.168.1.203:/opt/network_scan_service/
 
 # 2. SSH 登录盒子
 ssh root@192.168.1.203
@@ -395,11 +396,11 @@ webscan update
 
 ### 版本号规范
 
-- **格式**：`v主版本.次版本`（如 v1.13）
-- **次版本递增**（v1.13 → v1.14）：bug 修复、小功能改进、配置调整
+- **格式**：`v主版本.次版本`（如 v1.14）
+- **次版本递增**（v1.14 → v1.15）：bug 修复、小功能改进、配置调整；补丁号（v1.14.1 → v1.14.2）用于审计/回归修复版
 - **主版本递增**（v1.x → v2.0）：架构性改动、不兼容升级（需重新安装依赖或迁移数据）
-- **版本号写入位置**：`config.py` 的 `VERSION` 变量、README 版本表、git tag
-- **发布包命名**：`scanweb-v1.13.tar.gz`（`webscan update` 按此模式自动检测）
+- **版本号写入位置**：`config.py` 的 `VERSION` 变量、`pyproject.toml`、README 版本表、git tag
+- **发布包命名**：`scanweb-v1.14.2.tar.gz`（`webscan update` 按此模式自动检测）
 
 ### 更新包内容约定
 
@@ -425,7 +426,8 @@ uv pip install --index-url https://pypi.tuna.tsinghua.edu.cn/simple <新依赖>
 3. **故意喂坏包**：`echo not-a-tar > /tmp/bad.tar.gz && webscan update /tmp/bad.tar.gz` → 应报「解压失败，已取消更新（服务未受影响）」，服务保持 active、版本不变
 4. **喂结构错误包**：打一个不含 `scanweb/app.py` 的正常 tar → 应报「更新包结构异常」，服务不受影响
 5. **喂能解压但起不来的版本**（如故意写错语法的 app.py）→ `webscan update` 应走到「启动失败自动回滚」，且回滚后：服务 active、版本回到旧版、`.venv` 存在、`admin_config.json` 完整（用原 PIN 能登录）、扫描数据完好
-6. **清理**：确认无误后删除备份文件
+6. **并发更新互斥**（v1.14.2 新增）：两个终端同时执行 `webscan update` → 第二个应立即报「已有更新正在执行」退出，不得出现两个 update 同时操作 `.old`/`.preserve`/service
+7. **清理**：确认无误后删除备份文件
 
 任一步与预期不符即停更排查。203 盒子首次用 v1.14.1 包更新时本身就是一次实战演练（v1.14 的旧更新脚本有回滚缺陷 P0-1，v1.14.1 已修复）。
 
