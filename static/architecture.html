@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>ScanWeb v1.14.1 系统架构</title>
+<title>ScanWeb v1.14.2 系统架构</title>
 <style>
 /* ===== CSS 变量：深色主题（默认） ===== */
 :root[data-theme="dark"] {
@@ -238,7 +238,7 @@ body {
 </div>
 
 <script>
-/* ===== JSON IR 数据（ScanWeb v1.14.1，archify 生成） ===== */
+/* ===== JSON IR 数据（示例：电商架构） ===== */
 const IR = {
   "diagram_type": "architecture",
   "meta": {
@@ -252,49 +252,49 @@ const IR = {
       "id": "browser",
       "label": "浏览器 Web UI",
       "kind": "frontend",
-      "description": "局域网内手机/平板/电脑直接访问，零安装。index（新建任务）/ job（扫描·排序·下载）/ admin（管理）三页；app.js 扫描轮询与拖拽排序，admin.js 设备卡与任务表（v1.14：动态值全量转义防 XSS，任务名可直达任务页）"
+      "description": "局域网内手机/平板/电脑直接访问，零安装。index（新建任务）/ job（扫描·排序·下载）/ admin（管理）三页。v1.14.2：admin.js api() 写操作统一自动携带 X-CSRF-Token（CSRF 链路闭环）；测试扫描改「已启动+轮询终态」"
     },
     {
       "id": "waitress",
       "label": "Waitress :9203",
       "kind": "gateway",
-      "description": "生产级 WSGI 服务器，8 线程并发。Session cookie SameSite=Lax + HttpOnly（v1.14 基础 CSRF 防护）"
+      "description": "生产级 WSGI 服务器，8 线程并发。Session cookie SameSite=Lax + HttpOnly（v1.14）。8 线程并发安全：v1.14.2 admin_config 进程级写锁 + 唯一临时文件（并发保存不丢配置）"
     },
     {
       "id": "app",
       "label": "app.py 主路由",
       "kind": "backend",
-      "description": "页面 + 任务 API + ZIP 流式下载（v1.14.1：队列背压 maxsize=16）+ PDF 合成（内存上限 512MB + 显式句柄管理）+ TOKEN 登录限流。锁定任务删除 403；任务 ID 随机后缀"
+      "description": "页面 + 任务 API + ZIP 流式下载 + PDF 合成（内存上限 512MB）。v1.14.2：ZIP 全程持任务生命周期锁（下载期间删除/排序排队而非损坏包）+ cancel event（客户端断开压缩线程不再永久阻塞）；reorder 事务化（先重编号成功再删，失败反向恢复）"
     },
     {
       "id": "admin_bp",
       "label": "admin.py 管理蓝图",
       "kind": "backend",
-      "description": "PIN 认证（PBKDF2 200k + 旧格式自动迁移 + IP 防暴力）、CSRF token 校验（v1.14.1：写请求统一 X-CSRF-Token）、资源监控、配置读写、scan_root realpath 黑名单（防 symlink 绕过）、scan_defaults 白名单"
+      "description": "PIN 认证（PBKDF2 200k + 旧格式自动迁移 + IP 防暴力 + TOKEN 登录限流）、CSRF token 校验（v1.14.2 前端接线闭环：后端校验+前端自动携带）；testscan 返回 started 语义；配置文件 0600"
     },
     {
       "id": "scanner",
       "label": "scanner.py 扫描核心",
       "kind": "backend",
-      "description": "scan_lock 设备独占 + job_lock 任务生命周期锁（v1.14.1：TOCTOU 根治，scan/convert/delete/reorder/cleanup 同任务互斥）；state 状态机覆盖扫描+转换全程；转换失败保留 PNM 源数据；ADF 返回码检查/busy 409/source fail-closed；设备解析缓存按后端分键"
+      "description": "scan_lock 设备独占 + job_lock 任务生命周期锁。v1.14.2 锁顺序统一 job_lock→scan_lock（ADF 主线程双锁到手才启 worker，started 即持锁，TOCTOU 窗口彻底闭合）；ADF 转换完整性判定（部分失败报 error）；转换失败 PNM 移任务目录存活重启；设备解析失败自动失效探测缓存"
     },
     {
       "id": "jobsm",
       "label": "jobs.py 任务管理",
       "kind": "backend",
-      "description": "任务创建/元数据/页列表/物理排序重编号。v1.14.1：job_lock 生命周期锁基础设施；pages() 过滤 0 字节占位 + next_page_no max+1 防空洞；safe_slug 拒「..」防死角任务；TOKEN 登录 IP 限流"
+      "description": "任务创建/元数据/页列表/物理排序重编号。v1.14.2：页码模型 p\\d+（超 999 页可识别，数字序）；任务 ID 24bit + 碰撞换名重试（不覆盖旧任务）；任务删除后锁条目回收（_job_locks 不再增长）"
     },
     {
       "id": "dp",
       "label": "device_probe.py 设备探测",
       "kind": "service",
-      "description": "v1.14.1 公共探测模块：正则兼容 反引号/单引号/无引号 三种后端风格（HP/爱普生/佳能/airscan 全兼容，203 真机 fixture 回归），普通页与管理页共用 300s 缓存"
+      "description": "公共探测模块：正则兼容 反引号/单引号/无引号 三种后端风格（HP/爱普生/佳能/airscan 全兼容）；5min 缓存 + v1.14.2 invalidate() 失效钩子（scanner 解析失败自动重探，双缓存一致性）"
     },
     {
       "id": "config",
       "label": "config.py 配置中心",
       "kind": "service",
-      "description": "环境变量（端口/存储路径/页数与内存上限）+ admin_config.json 运行配置（PIN/别名/默认值/清理策略），原子写入"
+      "description": "环境变量（端口/存储路径/页数与内存上限）+ admin_config.json 运行配置（PIN/别名/默认值/清理策略，v1.14.2 权限 0600 + 并发写锁）；VERSION 1.14.2"
     },
     {
       "id": "fs",
@@ -324,7 +324,7 @@ const IR = {
       "id": "systemd",
       "label": "systemd + webscan CLI",
       "kind": "service",
-      "description": "Restart=always 自愈；webscan update v1.14.1 回滚不变量：保留项独立备份 + service 先备份 + 统一 rollback（含逆移植）+ ERR trap 全程兜底，故障演练六项不变量全过"
+      "description": "Restart=always 自愈；webscan update 回滚不变量（保留项独立备份+逆移植+ERR trap）；v1.14.2 flock 互斥——并发 update 立即拒绝，不再互相破坏"
     }
   ],
   "boundaries": [
@@ -358,7 +358,7 @@ const IR = {
     {
       "from": "browser",
       "to": "waitress",
-      "label": "HTTP :9203",
+      "label": "HTTP :9203（写请求自动带 CSRF token）",
       "highlight": true
     },
     {
@@ -391,7 +391,7 @@ const IR = {
     {
       "from": "admin_bp",
       "to": "scanner",
-      "label": "testscan / state"
+      "label": "testscan（started）/ state 轮询"
     },
     {
       "from": "admin_bp",
