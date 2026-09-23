@@ -163,6 +163,7 @@ def api_delete(job):
             return jsonify(ok=False, msg="扫描进行中，请等待完成后再删除"), 409
         scanner.state.pop(job, None)
         jobs.delete(job)
+    jobs.release_job_lock(job)   # v1.14.2（#11）：锁已空闲，回收条目防字典长期增长
     return jsonify(ok=True)
 
 
@@ -195,25 +196,12 @@ def _reorder_body(job):
         for f in new_order:
             if f not in current:
                 return jsonify(ok=False, msg="页面 %s 不存在" % f), 400
-        # 删除不在 new_order 中的文件
+        # v1.14.2（#4）：待删页最后才物理删除——先重编号成功再删，中途失败不再丢数据
         to_delete = [f for f in current if f not in new_order]
-        for f in to_delete:
-            try:
-                os.remove(os.path.join(base, f))
-            except OSError:
-                pass
-            old_thumb = os.path.join(thumb_dir, f[:-4] + ".jpg")
-            if os.path.exists(old_thumb):
-                try:
-                    os.remove(old_thumb)
-                except OSError:
-                    pass
-        # 更新 meta
-        meta = jobs.load(job)
-        meta["pages"] = len(new_order)
-        jobs.save(job, meta)
+        # 更新 meta（重命名不改页数，删除模式页数=保留数）
         if len(new_order) < 2:
-            # 只剩 0 或 1 页，无需重编号
+            # 只剩 0 或 1 页，无需重编号，直接进入删除收尾
+            _finish_delete(job, base, thumb_dir, to_delete, len(new_order))
             return jsonify(ok=True, deleted=len(to_delete))
         # 继续走重编号流程，target = new_order
         current = new_order[:]
@@ -237,25 +225,77 @@ def _reorder_body(job):
                 os.remove(os.path.join(thumb_dir, f))
     except OSError:
         pass
-    # 第一步：全部重命名为临时名
-    for i, old_name in enumerate(current):
-        tmp_name = f"_tmp_{i:03d}.png"
-        os.rename(os.path.join(base, old_name), os.path.join(base, tmp_name))
-        # 缩略图同步
-        old_thumb = os.path.join(thumb_dir, old_name[:-4] + ".jpg")
-        if os.path.exists(old_thumb):
-            os.rename(old_thumb, os.path.join(thumb_dir, f"_tmp_{i:03d}.jpg"))
-    # 第二步：临时名 → 目标名（目标文件名 = 新位置编号，内容跟随新顺序）
-    for i, new_name in enumerate(new_order):
-        old_idx = current.index(new_name)          # 该页面在旧顺序中的位置
-        tmp_key = f"_tmp_{old_idx:03d}.png"
-        dst_name = f"p{i + 1:03d}.png"             # 新顺序第 i 位 → 文件名编号
-        os.rename(os.path.join(base, tmp_key), os.path.join(base, dst_name))
-        # 缩略图同步
-        tmp_thumb = os.path.join(thumb_dir, f"_tmp_{old_idx:03d}.jpg")
-        if os.path.exists(tmp_thumb):
-            os.rename(tmp_thumb, os.path.join(thumb_dir, dst_name[:-4] + ".jpg"))
+    # v1.14.2（#4）：事务化两步重命名——任一步失败反向 rename 恢复原状，不再留半完成状态
+    step1 = []   # 已完成的 (旧名, 临时名)
+    try:
+        for i, old_name in enumerate(current):
+            tmp_name = f"_tmp_{i:03d}.png"
+            os.rename(os.path.join(base, old_name), os.path.join(base, tmp_name))
+            step1.append((old_name, tmp_name))
+            # 缩略图同步（非关键数据，失败可重建，不阻塞页面重命名）
+            old_thumb = os.path.join(thumb_dir, old_name[:-4] + ".jpg")
+            if os.path.exists(old_thumb):
+                try:
+                    os.rename(old_thumb, os.path.join(thumb_dir, f"_tmp_{i:03d}.jpg"))
+                except OSError:
+                    pass
+    except OSError:
+        for old_name, tmp_name in reversed(step1):
+            try:
+                os.rename(os.path.join(base, tmp_name), os.path.join(base, old_name))
+            except OSError:
+                pass
+        return jsonify(ok=False, msg="排序失败（磁盘/权限异常），已恢复原状"), 500
+    step2 = []   # 已完成的 (临时名, 目标名)
+    try:
+        for i, new_name in enumerate(new_order):
+            old_idx = current.index(new_name)          # 该页面在旧顺序中的位置
+            tmp_key = f"_tmp_{old_idx:03d}.png"
+            dst_name = f"p{i + 1:03d}.png"             # 新顺序第 i 位 → 文件名编号
+            os.rename(os.path.join(base, tmp_key), os.path.join(base, dst_name))
+            step2.append((tmp_key, dst_name))
+            # 缩略图同步
+            tmp_thumb = os.path.join(thumb_dir, f"_tmp_{old_idx:03d}.jpg")
+            if os.path.exists(tmp_thumb):
+                try:
+                    os.rename(tmp_thumb, os.path.join(thumb_dir, dst_name[:-4] + ".jpg"))
+                except OSError:
+                    pass
+    except OSError:
+        # 反向恢复：先撤第二步（dst → tmp），再撤第一步（tmp → old）
+        for tmp_key, dst_name in reversed(step2):
+            try:
+                os.rename(os.path.join(base, dst_name), os.path.join(base, tmp_key))
+            except OSError:
+                pass
+        for old_name, tmp_name in reversed(step1):
+            try:
+                os.rename(os.path.join(base, tmp_name), os.path.join(base, old_name))
+            except OSError:
+                pass
+        return jsonify(ok=False, msg="排序失败（磁盘/权限异常），已恢复原状"), 500
+    # v1.14.2（#4）：两步重命名全部成功后才执行物理删除收尾
+    if is_delete:
+        _finish_delete(job, base, thumb_dir, to_delete, len(new_order))
     return jsonify(ok=True)
+
+
+def _finish_delete(job, base, thumb_dir, to_delete, keep):
+    """v1.14.2（#4）：删除模式的收尾——物理删除待删页 + 更新 meta。仅在重命名成功后调用。"""
+    for f in to_delete:
+        try:
+            os.remove(os.path.join(base, f))
+        except OSError:
+            pass
+        old_thumb = os.path.join(thumb_dir, f[:-4] + ".jpg")
+        if os.path.exists(old_thumb):
+            try:
+                os.remove(old_thumb)
+            except OSError:
+                pass
+    meta = jobs.load(job)
+    meta["pages"] = keep
+    jobs.save(job, meta)
 
 
 @app.get("/api/devices")
@@ -301,11 +341,16 @@ def thumb(job, fname):
 @app.route("/job/<job>/download.zip")
 def dl_zip(job):
     base = jobs.path(job)
+    # v1.14.2（#6）：下载全程持任务生命周期锁——期间 delete/reorder 排队等待而非产生截断/损坏包
+    jlock = jobs.job_lock(job)
+    jlock.acquire()
     files = [(f, os.path.join(base, f)) for f in jobs.pages(job)]
     if not files:
+        jlock.release()
         abort(404)
     qu = q.Queue(maxsize=16)   # v1.14.1（P1-8）：背压——慢客户端时压缩线程阻塞，防队列无限吃内存
     DONE = object()
+    cancel = threading.Event()   # v1.14.2（#7）：客户端断开时唤醒 worker 退出，防 daemon 线程永久阻塞
 
     def worker():
         class W:
@@ -313,6 +358,8 @@ def dl_zip(job):
             def __init__(self):
                 self.pos = 0
             def write(self, b):
+                if cancel.is_set():
+                    raise OSError("zip cancelled")   # 消费者已断开，中止压缩
                 self.pos += len(b)
                 qu.put(b)
             def tell(self):
@@ -324,18 +371,30 @@ def dl_zip(job):
         try:
             with zipfile.ZipFile(W(), "w", zipfile.ZIP_DEFLATED) as zf:
                 for arc, path in files:
+                    if cancel.is_set():
+                        break
                     zf.write(path, arcname=arc)
+        except Exception:
+            pass
         finally:
-            qu.put(DONE)
+            if not cancel.is_set():
+                try:
+                    qu.put(DONE, timeout=5)   # v1.14.2（#7）：消费者已走则不投递，防 put 永久阻塞
+                except q.Full:
+                    pass
 
     threading.Thread(target=worker, daemon=True).start()
 
     def gen():
-        while True:
-            chunk = qu.get()
-            if chunk is DONE:
-                break
-            yield chunk
+        try:
+            while True:
+                chunk = qu.get()
+                if chunk is DONE:
+                    break
+                yield chunk
+        finally:
+            cancel.set()          # 正常结束或客户端断开（GeneratorExit）都通知 worker 停止
+            jlock.release()       # v1.14.2（#6）：流结束/中断才释放生命周期锁
 
     return Response(stream_with_context(gen()), mimetype="application/zip",
                     headers={"Content-Disposition":

@@ -35,6 +35,13 @@ cmd_update() {
     local pkg=""
     local tmp_dir=""
 
+    # v1.14.2（#9）：更新全流程互斥——两次并发 update 会同时操作 .old/.preserve/service
+    exec 9>/run/lock/scanweb-update.lock
+    if ! flock -n 9; then
+        echo "已有更新正在执行，请稍后再试"
+        exit 1
+    fi
+
     # 1. 确定更新包路径
     if [ $# -ge 1 ]; then
         pkg="$1"

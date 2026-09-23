@@ -13,6 +13,12 @@ _cache = {"ts": 0.0, "data": None}
 _CACHE_SEC = 300          # 5 分钟缓存，与 v1.13 行为一致
 
 
+def invalidate():
+    """v1.14.2（#14）：失效钩子——scanner._resolve_device 解析不到设备时调用，
+    下次 probe() 强制重探。USB 重插后 UI 列表与实际扫描解析经此恢复一致。"""
+    _cache["data"], _cache["ts"] = None, 0.0
+
+
 def probe(force=False):
     """探测全部扫描设备及其能力。返回 (devs, cached)。
     force=True 时强制重新探测（管理页「重新探测」按钮）。

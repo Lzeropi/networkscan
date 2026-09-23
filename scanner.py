@@ -56,6 +56,13 @@ def _resolve_device(name):
                 return full
     except (OSError, subprocess.SubprocessError):
         pass
+    # v1.14.2（#14）：解析不到设备→失效 device_probe 长缓存，下次首页探测强制重刷，
+    # USB 重插后 UI 与实际扫描解析恢复一致（双缓存失效钩子）
+    try:
+        import device_probe
+        device_probe.invalidate()
+    except ImportError:
+        pass
     return name                           # 解析失败退回原名（由 scanimage 报错）
 
 
@@ -94,10 +101,13 @@ def cleanup_tmp_pnms():
 
 
 def _convert_pnms(job, start):
-    """把 ADF batch 产出的 .pnm 全部转成 .png；成功才删源（v1.14.1 P1-4：失败保留供重试）。"""
+    """把 ADF batch 产出的 .pnm 全部转成 .png；成功才删源（v1.14.1 P1-4：失败保留供重试）。
+    v1.14.2（#3）：返回 (成功数, 失败文件列表)——scanimage 返回码 0 不代表转换全部成功，
+    调用方据此判定，部分失败不再被误报为 done。"""
     p = jobs.validate(job)
+    ok, failed = 0, []
     for f in os.listdir(p):
-        m = re.fullmatch(r"p(\d{3})\.pnm", f)
+        m = re.fullmatch(r"p(\d+)\.pnm", f)      # v1.14.2（#10）：页码模型放宽为不限 3 位
         if m and int(m.group(1)) >= start:
             src = os.path.join(p, f)
             dst = os.path.join(p, f[:-4] + ".png")
@@ -105,8 +115,10 @@ def _convert_pnms(job, start):
                 subprocess.run([CONVERT, src, dst], stderr=subprocess.PIPE,
                                timeout=120, check=True)
                 os.remove(src)              # 转换成功才删 PNM（v1.14.1）
+                ok += 1
             except (subprocess.CalledProcessError, OSError):
-                pass                        # 失败保留 PNM 源数据，不再误删（v1.14.1 P1-4）
+                failed.append(f)           # 失败保留 PNM 源数据，不再误删（v1.14.1 P1-4）
+    return ok, failed
 
 
 def _mk_thumb(job, fname):
@@ -123,13 +135,16 @@ def scan_flatbed(job):
     扫描仪忙时立即返回提示，不阻塞等待。"""
     global _scan_start_time, _scan_job
     p = _params(job)
+    # v1.14.2（P0-2）：锁顺序统一 job_lock → scan_lock——先拿生命周期锁再试扫描仪锁，
+    # 杜绝「拿到 scan_lock、尚未拿到 job_lock」期间 DELETE 删掉任务目录的竞态窗口
+    jlock = jobs.job_lock(job)
+    jlock.acquire()
     if not scan_lock.acquire(blocking=False):
+        jlock.release()          # 忙则立即释放生命周期锁
         busy_job = _scan_job or ""
         elapsed = int(time.time() - _scan_start_time) if _scan_start_time else 0
         raise RuntimeError("设备忙，%s 正在扫描（已用 %d 秒），请稍后再试" % (busy_job, elapsed))
     # v1.14：平板扫描也写 state，扫描+转换期间 delete/reorder/cleanup 可感知（#1）
-    jlock = jobs.job_lock(job)     # v1.14.1（P1-3）：生命周期锁，持有至转换收尾，杜绝 TOCTOU
-    jlock.acquire()
     st = state.setdefault(job, {})
     st.update(state="scanning", msg="平板扫描中…")
     n = jobs.next_page_no(job)        # v1.14.1（P1-9）：max+1 防空洞编号冲突
@@ -184,8 +199,17 @@ def scan_flatbed(job):
             st.update(state="done", msg="扫描完成：%s" % fname)   # v1.14：转换收尾才置 done（#1）
             _rm(tmp)                  # v1.14.1（P1-4）：转换成功才删源 PNM
         except Exception:
-            # v1.14.1（P1-4）：失败保留 PNM 源数据供重试，提示与行为一致
-            st.update(state="error", msg="后台转换失败：%s，原始数据已保留待重试（%s）" % (fname, tmp))
+            # v1.14.2（#15）：失败 PNM 移入任务目录存活服务重启（/tmp 里的会被启动清理删掉），
+            # 文件名与页面同号，可用 convert 手动重转；不再谎称「待重试」却无重试入口
+            bak = tmp
+            try:
+                dst = os.path.join(get_scan_root(), job, fname[:-4] + ".pnm")
+                os.replace(tmp, dst)
+                bak = dst
+            except OSError:
+                pass
+            st.update(state="error",
+                      msg="后台转换失败：%s，原始数据已保留（%s），可用 convert 手动重转" % (fname, bak))
         finally:
             jlock.release()           # v1.14.1（P1-3）：转换收尾（含失败）释放生命周期锁
 
@@ -197,14 +221,18 @@ def scan_adf(job):
     """ADF 连续扫描：后台线程执行，进度/结果用 get_state 轮询。
     v1.14.1（P1-6）：主线程先探测设备忙——忙则立即返回 "busy"（API 层转 409），
     不再让前端收到 ok:true 之后才异步发现失败。锁由主线程获取、worker 释放。"""
+    # v1.14.2（P0-2）：锁顺序统一 job_lock → scan_lock。主线程先拿生命周期锁再拿扫描仪锁，
+    # 两锁到手才启动 worker——API 返回 started 时 jlock 已被持有，DELETE/reorder 必然排队，
+    # 杜绝「返回 started 后、worker 拿锁前」任务被删的竞态窗口（锁主线程获取、worker 释放）
+    jlock = jobs.job_lock(job)
+    jlock.acquire()
     if not scan_lock.acquire(blocking=False):
+        jlock.release()
         return "busy"
 
     def worker():
         global _scan_start_time, _scan_job
         p = _params(job)
-        jlock = jobs.job_lock(job)   # v1.14.1（P1-3）：生命周期锁，扫描全程持有
-        jlock.acquire()
         try:
             _scan_start_time = time.time()
             _scan_job = job
@@ -229,9 +257,9 @@ def scan_adf(job):
             cmd += ["--batch=" + pat, f"--batch-start={start}"]
             try:
                 r = subprocess.run(cmd, capture_output=True, text=True, timeout=3600)
-                _convert_pnms(job, start)            # PNM → PNG（hpljm1005 后端不支持直接输出 PNG）
+                _ok_cnt, failed_pnms = _convert_pnms(job, start)   # PNM → PNG（v1.14.2 #3：返回转换统计）
                 got = jobs.pages(job)          # 已转 png 的页
-                new = [f for f in got if int(f[1:4]) >= start]
+                new = [f for f in got if int(re.search(r"\d+", f).group()) >= start]   # v1.14.2（#10）：页码不限 3 位
                 for f in new:
                     try:
                         _mk_thumb(job, f)
@@ -246,6 +274,13 @@ def scan_adf(job):
                                       (r.returncode, len(new), ("；" + err) if err else ""))
                     else:
                         st.update(state="error", msg=err or "扫描失败（返回码 %s）" % r.returncode)
+                    return
+                # v1.14.2（#3）：转换完整性判定——scanimage 返回 0 但部分 PNM 转 PNG 失败时不能报「完成」
+                if failed_pnms:
+                    st.update(state="error",
+                              msg="本次扫描 %d 页中 %d 页转换失败（%s），原始数据已保留可手动重转" %
+                                  (len(new) + len(failed_pnms), len(failed_pnms),
+                                   ", ".join(failed_pnms)[:200]))
                     return
                 if not new:
                     st.update(state="error",

@@ -10,7 +10,14 @@
     ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 
   async function api(url, opts) {
-    const r = await fetch(url, Object.assign({ headers: { "Content-Type": "application/json" } }, opts));
+    // v1.14.2（P0-1）：写操作统一自动携带 CSRF token——此前只存不发，管理页全部写操作会被后端 403
+    const method = ((opts && opts.method) || "GET").toUpperCase();
+    const headers = Object.assign({ "Content-Type": "application/json" }, (opts && opts.headers) || {});
+    if (method !== "GET") {
+      const t = sessionStorage.getItem("csrf");
+      if (t) headers["X-CSRF-Token"] = t;
+    }
+    const r = await fetch(url, Object.assign({}, opts, { headers }));
     let d = {};
     try { d = await r.json(); } catch (e) { /* 非 JSON */ }
     d._status = r.status;
@@ -116,17 +123,18 @@
     const tb = $("envTable").querySelector("tbody");
     tb.innerHTML = "";
     (d.env.deps || []).forEach(x => {
+      // v1.14.2（#13）：资源表动态字段统一转义，消除存储型 XSS 尾巴
       tb.insertAdjacentHTML("beforeend",
-        "<tr><td>" + x.name + "</td><td>" + (x.ok ? "✓" : "✗") + "</td><td>" + (x.ver || "") + "</td></tr>");
+        "<tr><td>" + esc(x.name) + "</td><td>" + (x.ok ? "✓" : "✗") + "</td><td>" + esc(x.ver || "") + "</td></tr>");
     });
     tb.insertAdjacentHTML("beforeend",
-      "<tr><td>服务用户</td><td>" + (d.env.user ? "✓" : "?") + "</td><td>" + (d.env.user || "未知") +
-      "（所属组：" + (d.env.groups || []).join(", ") + "）</td></tr>");
+      "<tr><td>服务用户</td><td>" + (d.env.user ? "✓" : "?") + "</td><td>" + esc(d.env.user || "未知") +
+      "（所属组：" + esc((d.env.groups || []).join(", ")) + "）</td></tr>");
     tb.insertAdjacentHTML("beforeend",
       "<tr><td>扫描仪访问组 (lp/scanner)</td><td>" + (d.env.scan_group_ok ? "✓" : "✗") +
       "</td><td>" + (d.env.scan_group_ok ? "已加入，可访问 USB 扫描设备" : "未加入 lp/scanner 组，可能无法发现设备") + "</td></tr>");
     tb.insertAdjacentHTML("beforeend",
-      "<tr><td>存储目录</td><td>" + (d.env.scan_root_writable ? "✓" : "✗") + "</td><td>" + d.env.scan_root +
+      "<tr><td>存储目录</td><td>" + (d.env.scan_root_writable ? "✓" : "✗") + "</td><td>" + esc(d.env.scan_root) +
       (d.env.scan_root_writable ? "（可写）" : (d.env.scan_root_exists ? "（无写入权限！）" : "（不存在！）")) + "</td></tr>");
     // 配置回显（首次加载）
     if (!$("scanRootInput").value) $("scanRootInput").value = d.scan_root || "";
@@ -233,18 +241,41 @@
 
   $("btnProbe").addEventListener("click", () => loadDevices(true));
   $("btnRefreshAll").addEventListener("click", () => { loadOverview(); loadDevices(false); loadConfigs(); loadJobs(); });
+  /* v1.14.2（#16）：轮询单任务状态到 done/error（最多 maxSec 秒）——testscan 结果判定用 */
+  async function pollJobState(job, maxSec) {
+    const t0 = Date.now();
+    while (Date.now() - t0 < maxSec * 1000) {
+      const s = await api("/api/jobs/" + encodeURIComponent(job) + "/status");
+      if (s._status === 200) {
+        if (s.state === "done" || s.state === "error") return s;
+        await new Promise(r => setTimeout(r, 2000));
+      } else break;
+    }
+    return { state: "timeout" };
+  }
+
   $("btnTestScan").addEventListener("click", async () => {
     if (!confirm("将执行一次平板单页测试扫描（约 10–30 秒，灰度 150dpi），生成一个「测试扫描」任务。继续？")) return;
     const btn = $("btnTestScan");
     btn.disabled = true; btn.textContent = "扫描中…";
     const d = await api("/api/admin/testscan", { method: "POST" });
-    btn.disabled = false; btn.textContent = "测试扫描";
-    if (d.ok) {
-      alert("测试扫描成功！已生成任务：" + d.job + "（" + d.pages + " 页），可在历史任务中查看");
-      loadJobs();
-    } else {
+    if (!d.ok) {
+      btn.disabled = false; btn.textContent = "测试扫描";
       alert(d.msg || "测试扫描失败");
+      return;
     }
+    // v1.14.2（#16）：API 只报「已启动」，转换在后台异步——轮询 state 到终态才报成败，不再假成功
+    btn.textContent = "转换中…";
+    const s = await pollJobState(d.job, 120);
+    btn.disabled = false; btn.textContent = "测试扫描";
+    if (s.state === "done") {
+      alert("测试扫描成功！已生成任务：" + d.job + "，可在历史任务中查看");
+    } else if (s.state === "error") {
+      alert("测试扫描失败：" + (s.msg || "转换异常"));
+    } else {
+      alert("测试扫描仍在后台进行（任务 " + d.job + "），请稍后在历史任务中查看结果");
+    }
+    loadJobs();
   });
 
   /* ---------------- 配置 ---------------- */

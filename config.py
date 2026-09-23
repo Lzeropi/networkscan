@@ -2,6 +2,7 @@ import json
 import os
 import secrets
 import shutil
+import threading
 
 SCAN_ROOT = os.environ.get("SCAN_ROOT", "/opt/smb_share/scans")
 # 设备名只写后端前缀，不写 :libusb:xxx:xxx（重启后总线号会变导致失效）
@@ -25,8 +26,11 @@ SCANIMAGE = os.environ.get("SCANIMAGE", shutil.which("scanimage") or "/usr/bin/s
 CONVERT = os.environ.get("CONVERT_BIN", shutil.which("convert") or "/usr/bin/convert")
 
 # ---------------- v1.10 管理页配置（admin_config.json，优先级高于环境变量） ----------------
-VERSION = "1.14.1"
+VERSION = "1.14.2"
 ADMIN_CFG_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "admin_config.json")
+
+# v1.14.2（#5）：配置保存进程级锁——waitress 8 线程下并发保存会互相覆盖临时文件或丢更新
+_admin_cfg_lock = threading.Lock()
 
 # 默认值：scan_root 为空表示沿用环境变量/内置默认；三项清理策略 0 = 不启用
 ADMIN_CFG_DEFAULT = {
@@ -40,6 +44,11 @@ ADMIN_CFG_DEFAULT = {
 
 def load_admin_cfg():
     """读取管理配置文件；损坏/不存在时返回默认副本（不落盘）。"""
+    # v1.14.2（#8）：补齐历史文件权限——配置含 PIN 哈希，应仅服务用户可读
+    try:
+        os.chmod(ADMIN_CFG_PATH, 0o600)
+    except OSError:
+        pass
     try:
         with open(ADMIN_CFG_PATH, encoding="utf-8") as f:
             cfg = json.load(f)
@@ -62,11 +71,24 @@ def load_admin_cfg():
 
 
 def save_admin_cfg(cfg):
-    """保存管理配置文件（原子写入：先写临时文件再替换）。"""
-    tmp = ADMIN_CFG_PATH + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as f:
-        json.dump(cfg, f, ensure_ascii=False, indent=2)
-    os.replace(tmp, ADMIN_CFG_PATH)
+    """保存管理配置（原子写入：先写临时文件再替换）。
+    v1.14.2（#5）：并发安全——进程级锁串行化写入 + 每次唯一临时文件名，
+    两个请求同时保存不再互相覆盖/丢配置；v1.14.2（#8）：落盘后权限 0600。"""
+    with _admin_cfg_lock:
+        tmp = "%s.tmp.%d.%d" % (ADMIN_CFG_PATH, os.getpid(), threading.get_ident())
+        try:
+            with open(tmp, "w", encoding="utf-8") as f:
+                json.dump(cfg, f, ensure_ascii=False, indent=2)
+                f.flush()
+                os.fsync(f.fileno())
+            os.chmod(tmp, 0o600)
+            os.replace(tmp, ADMIN_CFG_PATH)
+        finally:
+            try:
+                if os.path.exists(tmp):
+                    os.remove(tmp)
+            except OSError:
+                pass
 
 
 def get_scan_root():

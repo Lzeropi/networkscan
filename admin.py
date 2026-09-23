@@ -441,6 +441,7 @@ def api_delete(job):
         if scanner.get_state(job)["state"] == "scanning":
             return jsonify(ok=False, msg="扫描进行中，请等待完成后再删除"), 409
         jobs.delete(job)   # jobs.delete 内部亦有双保险
+    jobs.release_job_lock(job)   # v1.14.2（#11）：锁已空闲，回收条目防字典长期增长
     return jsonify(ok=True)
 
 
@@ -459,7 +460,9 @@ def api_testscan():
         scanner.scan_flatbed(name)
     except Exception as e:
         return jsonify(ok=False, msg="扫描失败：%s" % str(e)[:200], job=name), 500
-    return jsonify(ok=True, job=name, pages=len(jobs.pages(name)))
+    # v1.14.2（#16）：只报「已启动」——转换在后台异步，此前同步返回 pages 常为 0
+    # 却被前端当作「测试成功」，现由前端轮询任务 state 到终态才报成败
+    return jsonify(ok=True, job=name, started=True)
 
 
 # ---------------- 清理调度线程（每小时 + 外部可立即触发） ----------------

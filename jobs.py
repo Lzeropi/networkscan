@@ -14,7 +14,13 @@ class JobError(Exception):
 
 
 JOB_RE = re.compile(r"\d{8}-\d{6}[\w\-]*")
-PAGE_RE = re.compile(r"p\d{3}\.png")
+# v1.14.2（#10）：页码模型放宽为不限 3 位——p1000+ 也能被识别，不再「看不见就覆盖」
+PAGE_RE = re.compile(r"p\d+\.png")
+
+
+def _page_key(f):
+    """v1.14.2（#10）：页序按数字比较——字符串排序在 p10 与 p2 之间会排错。"""
+    return int(re.search(r"\d+", f).group())
 
 
 def safe_slug(s, maxlen=30):
@@ -24,14 +30,15 @@ def safe_slug(s, maxlen=30):
 
 
 def next_page_no(job):
-    """v1.14.1（P1-9）：下一页编号 = 现有最大编号 + 1（len+1 在文件空洞时会冲突）。"""
-    nums = [int(f[1:4]) for f in raw_pages(job)]
+    """v1.14.1（P1-9）：下一页编号 = 现有最大编号 + 1（len+1 在文件空洞时会冲突）。
+    v1.14.2（#10）：页码解析不再限 3 位切片，p1000+ 也能算入 max。"""
+    nums = [_page_key(f) for f in raw_pages(job)]
     return max(nums, default=0) + 1
 
 
 # v1.14.1（P1-3）：任务生命周期锁——scan/convert/delete/reorder/cleanup 对同一任务互斥，
 # 消除「检查 state → 执行操作」之间的 TOCTOU 竞态窗口。
-# 锁条目随任务创建常驻（每任务一个 Lock 约几十字节，cleanup 策略下任务数有限，不回收）。
+# v1.14.2（#11）：锁条目随任务删除回收（release_job_lock），不再永久增长。
 _job_locks = {}
 _job_locks_guard = threading.Lock()
 
@@ -39,6 +46,18 @@ _job_locks_guard = threading.Lock()
 def job_lock(job):
     with _job_locks_guard:
         return _job_locks.setdefault(job, threading.Lock())
+
+
+def release_job_lock(job):
+    """v1.14.2（#11）：任务删除后回收锁条目。只在锁空闲（试探 acquire 成功）时回收；
+    仍有线程持有则跳过，等下次删除时机——安全不破坏互斥。"""
+    with _job_locks_guard:
+        lock = _job_locks.get(job)
+        if lock is None:
+            return
+        if lock.acquire(blocking=False):
+            _job_locks.pop(job, None)
+            lock.release()
 
 
 def validate(job):
@@ -51,13 +70,20 @@ def validate(job):
 
 
 def create(remark="", params=None):
-    # v1.14：秒级时间戳 + 4 位随机后缀，防同秒并发创建同名任务互相覆盖
-    name = time.strftime("%Y%m%d-%H%M%S") + "_" + secrets.token_hex(2)
+    # v1.14：秒级时间戳 + 随机后缀，防同秒并发创建同名任务互相覆盖
+    # v1.14.2（#12）：后缀 16bit→24bit + 碰撞换名重试——原 exist_ok=True 碰撞时直接
+    # 复用旧目录，save() 会覆盖旧任务 meta
     slug = safe_slug(remark)
-    if slug:
-        name += "_" + slug
-    assert JOB_RE.fullmatch(name), name   # v1.14.1（P1-10）：生成值必须能被 validate 接受，防止死角任务
-    os.makedirs(os.path.join(get_scan_root(), name, ".thumbs"), exist_ok=True)
+    while True:
+        name = time.strftime("%Y%m%d-%H%M%S") + "_" + secrets.token_hex(3)
+        if slug:
+            name += "_" + slug
+        assert JOB_RE.fullmatch(name), name   # v1.14.1（P1-10）：生成值必须能被 validate 接受
+        try:
+            os.makedirs(os.path.join(get_scan_root(), name, ".thumbs"), exist_ok=False)
+            break
+        except FileExistsError:
+            continue                          # v1.14.2（#12）：碰撞则重新随机，绝不复用旧目录
     meta = {"remark": slug, "created": time.strftime("%Y-%m-%d %H:%M:%S"),
             "pages": 0, "params": params or {}}
     save(name, meta)
@@ -93,16 +119,17 @@ def set_locked(job, locked):
 
 
 def pages(job):
-    """已完成页面（v1.14：过滤 0 字节占位文件，#3）。"""
+    """已完成页面（v1.14：过滤 0 字节占位文件，#3）。v1.14.2（#10）：数字序，不限 3 位。"""
     p = validate(job)
-    return sorted(f for f in os.listdir(p)
-                  if PAGE_RE.fullmatch(f) and os.path.getsize(os.path.join(p, f)) > 0)
+    fs = [f for f in os.listdir(p)
+          if PAGE_RE.fullmatch(f) and os.path.getsize(os.path.join(p, f)) > 0]
+    return sorted(fs, key=_page_key)
 
 
 def raw_pages(job):
     """裸页面文件列表（含 0 字节转换中占位，供扫描编号防冲突，v1.14 #3）。"""
     p = validate(job)
-    return sorted(f for f in os.listdir(p) if PAGE_RE.fullmatch(f))
+    return sorted((f for f in os.listdir(p) if PAGE_RE.fullmatch(f)), key=_page_key)
 
 
 def page_pairs(job):
@@ -178,6 +205,7 @@ def cleanup():
                 return True
             finally:
                 jlock.release()
+                release_job_lock(name)   # v1.14.2（#11）：锁已空闲，回收条目
         except (JobError, OSError):
             return False
 
