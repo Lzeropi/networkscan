@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>ScanWeb v1.14.2 系统架构</title>
+<title>ScanWeb v1.14.3 系统架构</title>
 <style>
 /* ===== CSS 变量：深色主题（默认） ===== */
 :root[data-theme="dark"] {
@@ -264,13 +264,13 @@ const IR = {
       "id": "app",
       "label": "app.py 主路由",
       "kind": "backend",
-      "description": "页面 + 任务 API + ZIP 流式下载 + PDF 合成（内存上限 512MB）。v1.14.2：ZIP 全程持任务生命周期锁（下载期间删除/排序排队而非损坏包）+ cancel event（客户端断开压缩线程不再永久阻塞）；reorder 事务化（先重编号成功再删，失败反向恢复）"
+      "description": "页面 + 任务 API + ZIP 流式下载 + PDF 合成（内存上限 512MB）。v1.14.2：ZIP 全程持任务锁 + cancel event；v1.14.3：PDF/raw/thumb 下载持任务锁（期间删除/排序排队）、ZIP 满队列断开 worker 0.5s 退出、FNAME_RE p\\d+（p1000 全链路可访问）、reorder 事务化（先重编号成功再删，失败反向恢复）"
     },
     {
       "id": "admin_bp",
       "label": "admin.py 管理蓝图",
       "kind": "backend",
-      "description": "PIN 认证（PBKDF2 200k + 旧格式自动迁移 + IP 防暴力 + TOKEN 登录限流）、CSRF token 校验（v1.14.2 前端接线闭环：后端校验+前端自动携带）；testscan 返回 started 语义；配置文件 0600"
+      "description": "PIN 认证（PBKDF2 200k + 旧格式自动迁移 + IP 防暴力 + TTL 清理）、CSRF token 校验（前端自动携带闭环）；v1.14.3：配置保存走 update_admin_cfg 原子事务（锁内 load→改→save，并发改不同字段不丢更新）；testscan 返回 started 语义"
     },
     {
       "id": "scanner",
@@ -282,7 +282,7 @@ const IR = {
       "id": "jobsm",
       "label": "jobs.py 任务管理",
       "kind": "backend",
-      "description": "任务创建/元数据/页列表/物理排序重编号。v1.14.2：页码模型 p\\d+（超 999 页可识别，数字序）；任务 ID 24bit + 碰撞换名重试（不覆盖旧任务）；任务删除后锁条目回收（_job_locks 不再增长）"
+      "description": "任务创建/元数据/页列表/物理排序重编号。页码模型 p\\d+（超 999 页可识别，数字序）；任务 ID 24bit + 碰撞重试；v1.14.3：delete() 公共入口自持锁（新调用点天然安全）+ 删除统一清理 scanner.state"
     },
     {
       "id": "dp",
@@ -294,7 +294,7 @@ const IR = {
       "id": "config",
       "label": "config.py 配置中心",
       "kind": "service",
-      "description": "环境变量（端口/存储路径/页数与内存上限）+ admin_config.json 运行配置（PIN/别名/默认值/清理策略，v1.14.2 权限 0600 + 并发写锁）；VERSION 1.14.2"
+      "description": "环境变量（端口/存储路径/页数与内存上限）+ admin_config.json 运行配置（PIN/别名/默认值/清理策略，0600）；v1.14.3：update_admin_cfg 原子事务根治 lost update；VERSION 1.14.3"
     },
     {
       "id": "fs",
@@ -324,7 +324,7 @@ const IR = {
       "id": "systemd",
       "label": "systemd + webscan CLI",
       "kind": "service",
-      "description": "Restart=always 自愈；webscan update 回滚不变量（保留项独立备份+逆移植+ERR trap）；v1.14.2 flock 互斥——并发 update 立即拒绝，不再互相破坏"
+      "description": "Restart=always 自愈；webscan update 回滚不变量 + flock 互斥；v1.14.3：rollback switched 阶段守卫——切换前失败不再误删唯一旧版，保留项必放回（本地双场景演练 8/8）"
     }
   ],
   "boundaries": [
