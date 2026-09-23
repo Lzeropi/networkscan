@@ -146,10 +146,20 @@ body {
 }
 .conn-path {
   fill: none; stroke: var(--connection); stroke-width: 2;
+  stroke-dasharray: 10 8;
+  animation: flow 1.6s linear infinite;
   transition: stroke .2s, stroke-width .2s, opacity .2s;
 }
-.conn-path.highlight { stroke: var(--highlight); stroke-width: 3; }
-.conn-path.dimmed { opacity: var(--dim-opacity); }
+.conn-path.highlight {
+  stroke: var(--highlight); stroke-width: 3;
+  stroke-dasharray: 14 8;
+  animation-duration: .9s;
+}
+.conn-path.dimmed { opacity: var(--dim-opacity); animation-play-state: paused; }
+@keyframes flow {
+  from { stroke-dashoffset: 0; }
+  to   { stroke-dashoffset: -36; }
+}
 .conn-label {
   fill: var(--text-dim); font-size: 11px; text-anchor: middle;
   transition: opacity .2s;
@@ -173,15 +183,19 @@ body {
 #detail-panel .dp-rel .arrow { color:var(--text-dim); }
 #detail-panel .dp-close { position:absolute; top:12px; right:16px; cursor:pointer; font-size:20px; color:var(--text-dim); }
 #detail-panel .dp-close:hover { color:var(--text-bright); }
-/* ===== 图例 ===== */
+/* ===== 图例（右下角可折叠，不遮挡左中部节点，v1.14.1） ===== */
 #legend {
-  position: fixed; bottom:16px; left:16px; z-index:40;
+  position: fixed; bottom:16px; right:16px; z-index:40;
   background: var(--toolbar-bg); border:1px solid var(--toolbar-border);
-  border-radius: 8px; padding: 12px 16px; font-size: 11px;
+  border-radius: 8px; padding: 10px 14px; font-size: 11px;
+  cursor: pointer; user-select: none; max-width: 320px;
 }
 #legend .lg-title { font-weight:600; margin-bottom:6px; color:var(--text-dim); }
 #legend .lg-item { display:inline-flex; align-items:center; gap:4px; margin-right:12px; }
 #legend .lg-dot { width:10px; height:10px; border-radius:3px; border:2px solid; }
+#legend.collapsed .lg-body { display:none; }
+#legend.collapsed .lg-title { margin-bottom:0; }
+
 </style>
 </head>
 <body>
@@ -211,14 +225,16 @@ body {
   <div class="dp-section" id="dp-metadata"></div>
 </div>
 
-<div id="legend">
-  <div class="lg-title">组件类型</div>
-  <span class="lg-item"><span class="lg-dot" style="border-color:var(--kind-frontend-border)"></span>前端</span>
-  <span class="lg-item"><span class="lg-dot" style="border-color:var(--kind-gateway-border)"></span>网关</span>
-  <span class="lg-item"><span class="lg-dot" style="border-color:var(--kind-backend-border)"></span>后端</span>
-  <span class="lg-item"><span class="lg-dot" style="border-color:var(--kind-cache-border)"></span>缓存</span>
-  <span class="lg-item"><span class="lg-dot" style="border-color:var(--kind-database-border)"></span>数据库</span>
-  <span class="lg-item"><span class="lg-dot" style="border-color:var(--kind-external-border)"></span>外部</span>
+<div id="legend" onclick="this.classList.toggle('collapsed')">
+  <div class="lg-title">组件类型 ▾</div>
+  <div class="lg-body">
+    <span class="lg-item"><span class="lg-dot" style="border-color:var(--kind-frontend-border)"></span>前端</span>
+    <span class="lg-item"><span class="lg-dot" style="border-color:var(--kind-gateway-border)"></span>网关</span>
+    <span class="lg-item"><span class="lg-dot" style="border-color:var(--kind-backend-border)"></span>后端</span>
+    <span class="lg-item"><span class="lg-dot" style="border-color:var(--kind-cache-border)"></span>缓存</span>
+    <span class="lg-item"><span class="lg-dot" style="border-color:var(--kind-database-border)"></span>数据库</span>
+    <span class="lg-item"><span class="lg-dot" style="border-color:var(--kind-external-border)"></span>外部</span>
+  </div>
 </div>
 
 <script>
@@ -438,14 +454,15 @@ const IR = {
   ]
 };
 
-/* ===== 布局配置 ===== */
+/* ===== 布局配置（v1.14.1：加大间距防遮挡） ===== */
 const LAYER_ORDER = ['frontend','gateway','service','backend','cache','queue','database','external'];
-const NODE_W = 160, NODE_H = 64, GAP_X = 60, GAP_Y = 120, MARGIN = 48;
+const NODE_W = 180, NODE_H = 72, GAP_X = 120, GAP_Y = 160, MARGIN = 64;
 
 /* ===== 状态 ===== */
 let nodePositions = {};
 let scale = 1, panX = 0, panY = 0;
 let isPanning = false, panStart = { x:0, y:0, px:0, py:0 };
+let canvasW = 0, canvasH = 0;   // v1.14.1：画布内容尺寸，用于居中
 
 /* ===== 图标映射 ===== */
 const KIND_ICONS = {
@@ -464,7 +481,7 @@ function render() {
   updateTransform();
 }
 
-/* ===== 自动布局：按 kind 分层 ===== */
+/* ===== 自动布局：按 kind 分层（v1.14.1 后记录画布尺寸供居中） ===== */
 function layoutNodes() {
   nodePositions = {};
   const layers = {};
@@ -486,6 +503,13 @@ function layoutNodes() {
       };
     });
   });
+  // 计算画布内容包围盒（含节点尺寸）
+  const xs = Object.values(nodePositions).map(p => p.x + p.w);
+  const ys = Object.values(nodePositions).map(p => p.y + p.h);
+  canvasW = (xs.length ? Math.max(...xs) : MARGIN * 2) + MARGIN;
+  canvasH = (ys.length ? Math.max(...ys) : MARGIN * 2) + MARGIN;
+  document.getElementById('canvas-inner').style.minWidth = canvasW + 'px';
+  document.getElementById('canvas-inner').style.minHeight = canvasH + 'px';
 }
 
 /* ===== 渲染边界 ===== */
@@ -669,7 +693,29 @@ function endPan() { isPanning = false; document.removeEventListener('mousemove',
 function updateTransform() {
   document.getElementById('canvas-inner').style.transform = `translate(${panX}px,${panY}px) scale(${scale})`;
 }
-function resetView() { scale=1; panX=0; panY=0; updateTransform(); }
+function resetView() {
+  // v1.14.1：回到 fit 适配居中态
+  fitView();
+  updateTransform();
+}
+
+/* v1.14.1：自适应适配 + 居中——按内容尺寸与视口计算缩放和偏移，保证全部内容可见且居中 */
+function fitView() {
+  const vw = document.getElementById('canvas-wrap').clientWidth;
+  const vh = document.getElementById('canvas-wrap').clientHeight;
+  const s = Math.min(1, (vw - 40) / canvasW, (vh - 40) / canvasH);
+  scale = Math.max(0.5, s);
+  panX = (vw - canvasW * scale) / 2;
+  panY = (vh - canvasH * scale) / 2;
+}
+
+/* v1.14.1：水平垂直居中——按画布内容尺寸与视口计算偏移 */
+function centerView() {
+  const vw = document.getElementById('canvas-wrap').clientWidth;
+  const vh = document.getElementById('canvas-wrap').clientHeight;
+  panX = Math.max(0, (vw - canvasW * scale) / 2);
+  panY = Math.max(0, (vh - canvasH * scale) / 2);
+}
 
 /* ===== 交互：主题切换 ===== */
 function toggleTheme() {
@@ -741,8 +787,10 @@ function downloadBlob(blob, filename) {
   URL.revokeObjectURL(url);
 }
 
-/* ===== 初始化 ===== */
+/* ===== 初始化（v1.14.1：初始视图自动适配+居中） ===== */
 render();
+fitView();
+updateTransform();
 </script>
 </body>
 </html>
