@@ -34,6 +34,7 @@
   /* ---------------- PIN 门 ---------------- */
   async function checkStatus() {
     const d = await api("/api/admin/status");
+    if (d.csrf) sessionStorage.setItem("csrf", d.csrf);   // v1.14.1（P2-12）：已登录会话刷新后从此续取 token
     if (d.logged) { openPanel(); return; }
     gate.style.display = "flex";
     if (!d.has_pin) {
