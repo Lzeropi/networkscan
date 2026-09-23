@@ -3,10 +3,10 @@ AIGC:
   ContentProducer: '001191110102MAD55U9H0F10002'
   ContentPropagator: '001191110102MAD55U9H0F10002'
   Label: '1'
-  ProduceID: 'd44c8649-4852-444f-9fa7-68712a88a4a4'
-  PropagateID: 'd44c8649-4852-444f-9fa7-68712a88a4a4'
-  ReservedCode1: '1a162775-c158-4b7f-b24c-30bb0877ef4e'
-  ReservedCode2: '1a162775-c158-4b7f-b24c-30bb0877ef4e'
+  ProduceID: 'f27b6952-6f77-4889-9708-87d1c9e74420'
+  PropagateID: 'f27b6952-6f77-4889-9708-87d1c9e74420'
+  ReservedCode1: 'f143a038-1d21-4e90-9a76-3d30e3ce9ed7'
+  ReservedCode2: 'f143a038-1d21-4e90-9a76-3d30e3ce9ed7'
 ---
 
 # ScanWeb — 局域网网页扫描系统
@@ -15,7 +15,7 @@ AIGC:
 
 | 项目信息 | 说明 |
 |---|---|
-| 当前版本 | v1.14.1 |
+| 当前版本 | v1.14.3 |
 | 适配硬件 | hi3798mv100 机顶盒（ARM32/armhf）或其他 Linux 小主机 |
 | 适配系统 | Ubuntu 20.04 (focal) / Python 3.8+ |
 | 主要设备 | HP LaserJet M1005（其他 SANE 兼容扫描仪亦可） |
@@ -23,6 +23,7 @@ AIGC:
 | 前端形态 | 单页原生 HTML/CSS/JS，零外部依赖、零数据库、无 CDN 引用 |
 | 默认端口 | 9203 |
 
+> v1.14.3 更新：**三次审计收尾版（ChatGPT 第四轮审查：2 P1 + 6 P2 属实全修 + 4 可选加固）**。P1：① admin_config 原子事务 update_admin_cfg(mutator)——锁内 load→改→save，消除「并发请求改不同字段、后保存覆盖前保存」的语义级 lost update（v1.14.2 只修了文件写冲突）；② ZIP write() 满队列 put 改 timeout 0.5s 循环重检 cancel——客户端断开后 worker 最多 0.5s 退出（v1.14.2 timeout 只给了 DONE，chunk put 是漏网点）。P2：③ FNAME_RE 同步 p\d+——p1000 页面 raw/thumb 不再 404（半修复补齐）；④ PDF 读取+合成全程持任务锁（期间删除/排序排队，页面内容一致）；⑤ raw/thumb 锁内读内存，消除 exists→send_file 竞态；⑥ 任务删除统一清理 scanner.state（cleanup/管理删除不再残留条目）；⑦ webscan rollback 加 switched 阶段标记——切换前失败不再误删唯一旧版；⑧ README 当前版本字段修正 + config/pyproject/README/包名四版本一致断言入测试。可选：⑨ PIN 安全边界说明入 README（4 位为便利设计）；⑩ PIN/TOKEN 失败记录 TTL 清理；⑪ jobs.delete() 公共入口自持锁（拆 _delete_locked，新调用点天然安全）。新增 tests/test_v1143.py 10 项。
 > v1.14.2 更新：**二次审计全修版（ChatGPT 第三轮审查 18 项：16 属实全修 + 1 部分属实 + 1 误报澄清）**。P0：① admin.js `api()` 写操作统一自动携带 X-CSRF-Token——v1.14.1 只存不发，管理页全部写操作会被 403（冒烟脚本曾手动注入 token 头致漏检，已改真实 UI 链路）；② 锁顺序统一 job_lock → scan_lock（平板先拿生命周期锁再试扫描仪锁；ADF 主线程双锁到手才启 worker，started 返回时锁已被持有），TOCTOU 窗口彻底闭合。P1：③ ADF 转换完整性判定（scanimage 返回 0 但部分 PNM 转 PNG 失败时报 error，不再误报完成）；④ reorder 事务化（先重编号成功再删待删页，rename 中途失败反向恢复，不再丢数据）；⑤ admin_config 并发写锁 + 唯一临时文件（waitress 8 线程不再丢配置），落盘权限 0600；⑥ ZIP 下载全程持任务锁（期间删除/排序排队而非损坏包）+ cancel event（客户端断开后压缩线程不再永久阻塞）；⑦ webscan update 加 flock 互斥（并发更新不再互相破坏）。P2：⑧ 页码模型 p\d+（超 999 页可识别，数字序排序）；⑨ 任务 ID 后缀 24bit + 碰撞换名重试（不再复用旧目录覆盖 meta）；⑩ admin.js 资源表动态字段全量转义；⑪ 任务删除后锁条目回收；⑫ 设备探测缓存失效钩子（解析失败自动重探，双缓存一致性）；⑬ 转换失败 PNM 移入任务目录存活重启（不再放 /tmp 被启动清理删掉）；⑭ 测试扫描改「已启动 + 轮询终态」语义（不再假成功）；⑮ README 全面同步。新增 tests/test_v1142.py 16 项。
 > v1.14.1 更新：**审计修复版（ChatGPT 二次审计 18 项全修）**。P0：① webscan update 回滚不变量根治——保留项移独立备份目录、service 先备份、统一 rollback（含从新目录逆移植）+ ERR trap 全程兑底，本地故障演练六项不变量全过（旧版回滚会连 .venv/配置一起删）；② scanimage -L 正则兼容 反引号/单引号/无引号 三种后端风格（HP 真机不回归，爱普生/佳能/airscan 不再探测全空），scanner 短名解析同步，新增 203 真机 fixture 测试。P1：③ job_lock 任务生命周期锁根治 TOCTOU（scan/convert/delete/reorder/cleanup 同任务互斥）；④ 转换失败保留 PNM 源数据（提示与行为一致）；⑤ ADF 检查返回码（部分成功不再误报完成）；⑥ ADF 忙同步返回 409；⑦ source 白名单 fail-closed；⑧ ZIP 队列背压 maxsize=16；⑨ 页编号 max+1 防空洞；⑩ safe_slug 拒「..」防死角任务。P2：⑪ TOKEN 登录 IP 限流；⑫ 管理页 CSRF token（登录签发+写请求校验）；⑬ scan_root realpath 防 symlink 绕过；⑭ PDF 句柄显式关闭；⑮ 新增 tests/test_concurrent.py 并发与故障注入 10 项；⑯ README 回滚演练六步清单。
 >
@@ -305,6 +306,8 @@ ss -tlnp | grep 9203              # 确认端口监听
 | `SCANWEB_MAX_PDF_PAGES` | 20 | PDF 合成页数上限，防 ARM32 内存 OOM |
 
 > v1.10 起存储路径与三项清理策略（任务数 / 保留天数 / 总占用）改由管理页配置，持久化在服务目录 `admin_config.json`（优先级高于上述环境变量），保存后即时生效无需重启；v1.14 起 PIN 以 PBKDF2 慢哈希存储（v1.14.2 起文件权限 0600），删除该文件即可重置 PIN 与全部管理配置。
+>
+> **PIN 安全边界**：PIN 最低 4 位为便利性设计，面向可信局域网（配合按 IP 防暴力锁定），不是高安全认证机制；如需更强保护请设置 8 位以上 PIN，公网/办公网部署应另行加 TLS 与访问控制。
 
 ### 目录结构
 
