@@ -129,12 +129,17 @@ cmd_update() {
     # 任何路径下保留项必须完好（v1.14.1 P0-1）；switched 阶段守卫防「mv 失败却把
     # 唯一旧版删掉」（v1.14.3 P2-7：切换前 rm .old 成功但 mv 失败的极端场景）
     rollback() {
+        # v1.14.5（C2）：各阶段显式 echo——保持「失败即停止」语义，但从静默变为可观察
+        # （运维 journalctl 可见回滚走到哪步；不采用 set +e 半恢复，防更隐蔽的半恢复状态）
+        yellow "回滚开始（switched=$switched）..."
         systemctl stop "$SERVICE_NAME" 2>/dev/null || true
         if [ "$switched" = "yes" ]; then
+            yellow "回滚阶段1：暂存保留项 + 移除新版"
             for item in "${PRESERVE[@]}"; do
                 if [ -e "${INSTALL_DIR}/${item}" ]; then mv "${INSTALL_DIR}/${item}" "${preserve_dir}/"; fi
             done
             rm -rf "${INSTALL_DIR}"
+            yellow "回滚阶段2：恢复旧版 + 保留项归位"
             if [ -d "${INSTALL_DIR}.old" ]; then
                 mv "${INSTALL_DIR}.old" "${INSTALL_DIR}"
             fi
@@ -144,6 +149,7 @@ cmd_update() {
         else
             # v1.14.3（P2-7）：切换前失败——原安装未动，但保留项已提前搬入备份目录，
             # 必须先放回原目录再清备份（演练抓出：直接跳过会把 .venv/配置连带删掉）
+            yellow "回滚：切换前失败——保留项放回原目录"
             for item in "${PRESERVE[@]}"; do
                 if [ -e "${preserve_dir}/${item}" ] && [ ! -e "${INSTALL_DIR}/${item}" ]; then
                     mv "${preserve_dir}/${item}" "${INSTALL_DIR}/"
@@ -151,12 +157,16 @@ cmd_update() {
             done
         fi
         if [ -f "$service_bak" ]; then
+            yellow "回滚阶段3：恢复 service 文件"
             cp "$service_bak" "$SERVICE_FILE"
             systemctl daemon-reload
         fi
         rm -rf "$preserve_dir" "$service_bak"
         if systemctl is-enabled --quiet "$SERVICE_NAME" 2>/dev/null; then
+            yellow "回滚完成：重启旧服务"
             systemctl start "$SERVICE_NAME" 2>/dev/null || true
+        else
+            yellow "回滚完成：旧服务保持停止"
         fi
     }
 

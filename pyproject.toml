@@ -1,6 +1,6 @@
 [project]
 name = "scanweb"
-version = "1.14.4"
+version = "1.14.5"
 description = "LAN scanner web UI (scanimage + Flask + waitress)"
 requires-python = ">=3.8"
 dependencies = [

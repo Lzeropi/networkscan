@@ -3,10 +3,10 @@ AIGC:
   ContentProducer: '001191110102MAD55U9H0F10002'
   ContentPropagator: '001191110102MAD55U9H0F10002'
   Label: '1'
-  ProduceID: '64f75a19-4601-44ae-a3ce-6b5cb423367f'
-  PropagateID: '64f75a19-4601-44ae-a3ce-6b5cb423367f'
-  ReservedCode1: '129f98ef-4d61-4f85-8b4a-5ba7e9593eaf'
-  ReservedCode2: '129f98ef-4d61-4f85-8b4a-5ba7e9593eaf'
+  ProduceID: '44dd7f43-311d-47c4-b11b-601c4472f242'
+  PropagateID: '44dd7f43-311d-47c4-b11b-601c4472f242'
+  ReservedCode1: 'e001784b-acad-4bfa-9dcd-5ca54aa6e6b5'
+  ReservedCode2: 'e001784b-acad-4bfa-9dcd-5ca54aa6e6b5'
 ---
 
 # ScanWeb — 局域网网页扫描系统
@@ -15,7 +15,7 @@ AIGC:
 
 | 项目信息 | 说明 |
 |---|---|
-| 当前版本 | v1.14.4 |
+| 当前版本 | v1.14.5 |
 | 适配硬件 | hi3798mv100 机顶盒（ARM32/armhf）或其他 Linux 小主机 |
 | 适配系统 | Ubuntu 20.04 (focal) / Python 3.8+ |
 | 主要设备 | HP LaserJet M1005（其他 SANE 兼容扫描仪亦可） |
@@ -23,6 +23,7 @@ AIGC:
 | 前端形态 | 单页原生 HTML/CSS/JS，零外部依赖、零数据库、无 CDN 引用 |
 | 默认端口 | 9203 |
 
+> v1.14.5 更新：**五次审计修复版（ChatGPT 第六轮审查 7 项全属实：2 P1 + 3 P2 + 2 P3，全修）**。P1：① ADF worker `_params()` 异常锁泄漏根治——meta.json 损坏/被删时 worker 线程直接死亡且不进 finally，scan_lock/job_lock 永久泄漏（实测复现：全部扫描 busy + 任务死锁，不重启无解）；现移入 try 统一 error 收尾。② symlink 防护补 TOCTOU 残余——新增 `open_page_fd()`（O_NOFOLLOW + fstat 断言普通文件），raw/thumb/PDF 全部改用：保护最终打开的 inode 而非检查时刻的路径，Samba 外部进程检查后替换为链接的越权读窗口闭合。P2：③ 不存在任务的锁条目残留根治（reorder/PDF 404 即可撑大 _job_locks）+ ④ 回收机制 waiter race 根治——锁 registry 改引用计数（refs），取引用即计数（含等待者），release 归零自动回收，同任务不再可能出现两把锁并存互斥失效；⑤ ZIP worker 外部删除文件不再静默吞错（stderr 日志入 journal）。P3：⑥ 版本测试真正验实际发布包文件名；⑦ PIN 哈希格式注释勘误（salt$hash）。**边界声明**：应用锁只约束 ScanWeb 自身线程——scan_root 为 Samba 共享且 LAN 可写时，外部删改文件可致下载/转换异常（详见「安全边界与威胁模型」）。新增 tests/test_v1145.py 8 项，测试总数 90。
 > v1.14.4 更新：**四次审计修复版（ChatGPT 第五轮审查 15 项全属实：1 P0 + 3 P1 + 8 P2 + 3 P3，另 2 项按理由不修）**。P0：① reorder 删除模式数据丢失根治——待删页先改「墓地名」让出编号再重编号（此前新编号与待删旧名碰撞，删第 1 页会连带误删第 2 页数据，实测复现；旧测试无一覆盖成功路径内容）；成功路径内容回归测试 6 项入库。P1：② 平板扫描 TimeoutExpired/OSError 统一落 error 收尾（此前 state 永久卡 "scanning"，删除/排序 409 死锁；扫描超时提为常量可注入测试）；③ PIN/TOKEN 限流字典并发锁（计数读改写/TTL 清理/pop 同步化，并发计数不再丢失）；④ symlink 越权防护——任务目录与页面拒绝符号链接 + realpath containment + pages() 过滤链接页（scan_root 为 Samba 共享时的越权读链路切断）。P2：⑤ meta.json 原子写（tmp+fsync+replace，断电不再产半截 JSON）；⑥ raw/thumb 改 fd snapshot——锁内安全校验+打开句柄后释放锁再流式传输（消除 TOCTOU 且不再整文件读 RAM）；⑦ _mk_thumb 显式 with 关句柄；⑧ webscan update 双状态保持（was_running/was_enabled——原本 stopped 的更新不再被误判失败回滚，也不再被擅自拉起）；⑨ README 安装/更新命令与发布包命名全同步 + 架构图内嵌标题同步；⑩ tests/conftest.py 测试隔离根治（autouse fixture 每测试独立 SCAN_ROOT/ADMIN_CFG_PATH——首导入冻结导致的共享目录 flaky 源头消除）。P3：⑪ jobs.delete() 公共入口 finally 回收锁条目；⑫ 发布包命名断言入版本一致测试；⑬ README 数字勘误（v1143 实为 11 项、可选 3 项）。**不修两项（附理由）**：缩略图 rename 纳入事务回滚（缩略图为可再生数据，页面优先取舍合理）；rollback best-effort 错误收集（主路径已双场景演练，半途故障下「停下报警+人工介入」比自动续跑更安全）。新增 tests/test_v1144.py 14 项，测试总数 82。
 > v1.14.3 更新：**三次审计收尾版（ChatGPT 第四轮审查：2 P1 + 6 P2 属实全修 + 3 项可选加固）**。P1：① admin_config 原子事务 update_admin_cfg(mutator)——锁内 load→改→save，消除「并发请求改不同字段、后保存覆盖前保存」的语义级 lost update（v1.14.2 只修了文件写冲突）；② ZIP write() 满队列 put 改 timeout 0.5s 循环重检 cancel——客户端断开后 worker 最多 0.5s 退出（v1.14.2 timeout 只给了 DONE，chunk put 是漏网点）。P2：③ FNAME_RE 同步 p\d+——p1000 页面 raw/thumb 不再 404（半修复补齐）；④ PDF 读取+合成全程持任务锁（期间删除/排序排队，页面内容一致）；⑤ raw/thumb 锁内读内存，消除 exists→send_file 竞态；⑥ 任务删除统一清理 scanner.state（cleanup/管理删除不再残留条目）；⑦ webscan rollback 加 switched 阶段标记——切换前失败不再误删唯一旧版；⑧ README 当前版本字段修正 + config/pyproject/README/包名四版本一致断言入测试。可选：⑨ PIN 安全边界说明入 README（4 位为便利设计）；⑩ PIN/TOKEN 失败记录 TTL 清理；⑪ jobs.delete() 公共入口自持锁（拆 _delete_locked，新调用点天然安全）。新增 tests/test_v1143.py 11 项。
 > v1.14.2 更新：**二次审计全修版（ChatGPT 第三轮审查 18 项：16 属实全修 + 1 部分属实 + 1 误报澄清）**。P0：① admin.js `api()` 写操作统一自动携带 X-CSRF-Token——v1.14.1 只存不发，管理页全部写操作会被 403（冒烟脚本曾手动注入 token 头致漏检，已改真实 UI 链路）；② 锁顺序统一 job_lock → scan_lock（平板先拿生命周期锁再试扫描仪锁；ADF 主线程双锁到手才启 worker，started 返回时锁已被持有），TOCTOU 窗口彻底闭合。P1：③ ADF 转换完整性判定（scanimage 返回 0 但部分 PNM 转 PNG 失败时报 error，不再误报完成）；④ reorder 事务化（先重编号成功再删待删页，rename 中途失败反向恢复，不再丢数据）；⑤ admin_config 并发写锁 + 唯一临时文件（waitress 8 线程不再丢配置），落盘权限 0600；⑥ ZIP 下载全程持任务锁（期间删除/排序排队而非损坏包）+ cancel event（客户端断开后压缩线程不再永久阻塞）；⑦ webscan update 加 flock 互斥（并发更新不再互相破坏）。P2：⑧ 页码模型 p\d+（超 999 页可识别，数字序排序）；⑨ 任务 ID 后缀 24bit + 碰撞换名重试（不再复用旧目录覆盖 meta）；⑩ admin.js 资源表动态字段全量转义；⑪ 任务删除后锁条目回收；⑫ 设备探测缓存失效钩子（解析失败自动重探，双缓存一致性）；⑬ 转换失败 PNM 移入任务目录存活重启（不再放 /tmp 被启动清理删掉）；⑭ 测试扫描改「已启动 + 轮询终态」语义（不再假成功）；⑮ README 全面同步。新增 tests/test_v1142.py 16 项。
@@ -130,11 +131,11 @@ df -h /
 
 ```bash
 # 本机执行（传压缩包到盒子，版本号以实际发布为准）
-scp scanweb-v1.14.4.tar.gz root@192.168.1.203:/opt/network_scan_service/
+scp scanweb-v1.14.5.tar.gz root@192.168.1.203:/opt/network_scan_service/
 # 盒子上执行（首次安装）
 cd /opt/network_scan_service
-tar xzf scanweb-v1.14.4.tar.gz --strip-components=1
-rm -f scanweb-v1.14.4.tar.gz .python-version
+tar xzf scanweb-v1.14.5.tar.gz --strip-components=1
+rm -f scanweb-v1.14.5.tar.gz .python-version
 ```
 
 ### 第三步：安装编译依赖并安装 Python 包
@@ -309,6 +310,13 @@ ss -tlnp | grep 9203              # 确认端口监听
 > v1.10 起存储路径与三项清理策略（任务数 / 保留天数 / 总占用）改由管理页配置，持久化在服务目录 `admin_config.json`（优先级高于上述环境变量），保存后即时生效无需重启；v1.14 起 PIN 以 PBKDF2 慢哈希存储（v1.14.2 起文件权限 0600），删除该文件即可重置 PIN 与全部管理配置。
 >
 > **PIN 安全边界**：PIN 最低 4 位为便利性设计，面向可信局域网（配合按 IP 防暴力锁定），不是高安全认证机制；如需更强保护请设置 8 位以上 PIN，公网/办公网部署应另行加 TLS 与访问控制。
+>
+> **安全边界与威胁模型**（v1.14.5）：应用内的任务锁/校验只约束 ScanWeb 自身线程，**约束不了外部进程**。`SCAN_ROOT` 默认即 Samba 共享目录 `/opt/smb_share/scans`，若该共享对局域网用户**可写**，则外部删改文件可能造成：
+> - 下载中页面被删 → ZIP 流截断（服务端已记 stderr 日志，客户端重试即可）、PDF 合成报错；
+> - 任务/页面被替换为符号链接 → v1.14.4 起静态链接即拒，v1.14.5 起 `open_page_fd`（O_NOFOLLOW）连「检查后替换」的竞态窗口也已闭合，越权读链路切断；
+> - meta.json 被删/写坏 → ADF 扫描报 error（v1.14.5 起不再锁死服务）。
+>
+> **建议**：把该 Samba 共享对普通用户设为 `read only = yes`（ScanWeb 服务进程直接写本地文件系统，不经 Samba，不受影响）——一行配置即可消除全部外部写风险；若业务必须允许 LAN 写入，请知悉上述边界并接受相应风险。
 
 ### 目录结构
 
@@ -385,7 +393,7 @@ webscan version             # 查看当前版本
 
 ```bash
 # 1. 本机上传新版本包（版本号以实际发布为准）
-scp scanweb-v1.14.4.tar.gz root@192.168.1.203:/opt/network_scan_service/
+scp scanweb-v1.14.5.tar.gz root@192.168.1.203:/opt/network_scan_service/
 
 # 2. SSH 登录盒子
 ssh root@192.168.1.203
@@ -404,7 +412,7 @@ webscan update
 - **次版本递增**（v1.14 → v1.15）：bug 修复、小功能改进、配置调整；补丁号（v1.14.1 → v1.14.2）用于审计/回归修复版
 - **主版本递增**（v1.x → v2.0）：架构性改动、不兼容升级（需重新安装依赖或迁移数据）
 - **版本号写入位置**：`config.py` 的 `VERSION` 变量、`pyproject.toml`、README 版本表、git tag
-- **发布包命名**：`scanweb-v1.14.4.tar.gz`（`webscan update` 按此模式自动检测）
+- **发布包命名**：`scanweb-v1.14.5.tar.gz`（`webscan update` 按此模式自动检测）
 
 ### 更新包内容约定
 

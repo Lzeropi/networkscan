@@ -3,6 +3,7 @@ import os
 import queue as q
 import re
 import shutil
+import sys
 import threading
 import zipfile
 from urllib.parse import quote
@@ -252,7 +253,7 @@ def _reorder_body(job):
                     try:
                         os.rename(dead_thumb, os.path.join(thumb_dir, grave[:-4] + ".jpg"))
                     except OSError:
-                        pass
+                        pass   # v1.14.5（C2）：缩略图是 derived cache（_mk_thumb 随时重建、前端缺失有占位 fallback）——rename 失败不回滚页面事务（v1.14.4 评估不修重申）
         except OSError:
             for dead_name, grave in reversed(step0):
                 try:
@@ -382,7 +383,7 @@ def raw(job, fname):
     # 不读入内存（替代 v1.14.3 的整文件读 RAM，消除大图并发下载内存放大）
     with jobs.job_lock(job):
         try:
-            f = open(jobs.check_page_safe(base, fname), "rb")
+            f = jobs.open_page_fd(base, fname)
         except (jobs.JobError, OSError):
             abort(404)
     return send_file(f, mimetype="image/png")
@@ -399,7 +400,7 @@ def thumb(job, fname):
         abort(404)
     with jobs.job_lock(job):
         try:
-            f = open(jobs.check_page_safe(base, os.path.join(".thumbs", fname)), "rb")
+            f = jobs.open_page_fd(base, os.path.join(".thumbs", fname))
         except (jobs.JobError, OSError):
             abort(404)
     return send_file(f, mimetype="image/jpeg")
@@ -448,8 +449,10 @@ def dl_zip(job):
                     if cancel.is_set():
                         break
                     zf.write(path, arcname=arc)
-        except Exception:
-            pass
+        except Exception as e:
+            # v1.14.5（B3）：Samba 外部删除/替换文件会让 zipfile.write 抛错——不再静默吞，
+            # 记 stderr（journalctl 可见），消费者收到截断流后会重试。应用 job_lock 约束不了外部客户端
+            print("[zip] worker error: %s" % e, file=sys.stderr)
         finally:
             if not cancel.is_set():
                 try:
@@ -490,13 +493,13 @@ def dl_pdf(job):
         # v1.14：按像素估算合成内存（Pillow 惰性读头不载位图），超限拒绝防 ARM 盒子 OOM（#5）
         approx = 0
         for f in files:
-            with Image.open(os.path.join(base, f)) as im:
+            with jobs.open_page_fd(base, f) as fh, Image.open(fh) as im:
                 approx += im.width * im.height * 3
         if approx > MAX_PDF_MEM:
             abort(413)
         imgs = []
-        for f in files:   # v1.14.1（P2-14）：with 显式关闭文件句柄，防连续生成 PDF 时 fd 积累
-            with Image.open(os.path.join(base, f)) as src:
+        for f in files:   # v1.14.1（P2-14）+ v1.14.5（P1-2）：with 显式关闭文件句柄；open_page_fd O_NOFOLLOW 防页面被外部替换为链接越权读
+            with jobs.open_page_fd(base, f) as fh, Image.open(fh) as src:
                 imgs.append(src.convert("RGB"))
         buf = io.BytesIO()
         imgs[0].save(buf, "PDF", save_all=True, append_images=imgs[1:])

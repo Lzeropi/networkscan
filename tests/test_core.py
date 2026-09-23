@@ -159,11 +159,17 @@ def test_version_consistency():
         import tomli as tomllib
     with open(os.path.join(os.path.dirname(config.__file__), "pyproject.toml"), "rb") as f:
         ver = tomllib.load(f)["project"]["version"]
-    assert config.VERSION == "1.14.4"
+    assert config.VERSION == "1.14.5"
     assert ver == config.VERSION, "pyproject 版本必须与 config.VERSION 一致"
-    # v1.14.3（P2-8）+ v1.14.4（P3-12）：四版本一致断言——README「当前版本」字段曾漏改、
+    # v1.14.3（P2-8）+ v1.14.4（P3-12）+ v1.14.5（P3）：四版本一致断言——README「当前版本」字段曾漏改、
     # 发布包命名也曾跨版本残留，固化成测试防再犯
     src = os.path.dirname(config.__file__)
     readme = open(os.path.join(src, "README.md"), encoding="utf-8").read()
     assert "| 当前版本 | v%s |" % ver in readme, "README 当前版本字段与代码版本不一致"
     assert "scanweb-v%s.tar.gz" % ver in readme, "README 发布包命名与代码版本不一致"
+    # v1.14.5（P3）：真正验实际发布包文件名——之前只查 README 字符串，README=v1.14.4 而实包
+    # 是 v1.14.3 的打包事故仍会漏过。包内跑 pytest 无 tar 时静默跳过（不破坏包内测试）
+    from pathlib import Path
+    pkgs = list(Path(src).resolve().parent.parent.glob("scanweb-v*.tar.gz"))
+    if pkgs and not any(p.name == "scanweb-v%s.tar.gz" % ver for p in pkgs):
+        raise AssertionError("存在发布包但无 scanweb-v%s.tar.gz（实际包名与版本不一致）" % ver)

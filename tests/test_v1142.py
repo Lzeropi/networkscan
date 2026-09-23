@@ -321,8 +321,9 @@ def test_page_sort_numeric():
 def test_job_lock_recycled_after_delete():
     _reset()
     name = jobs.create()
-    jobs.job_lock(name)                              # 触发条目生成
+    lk = jobs.job_lock(name)                         # 触发条目生成（v1.14.5 refs 语义）
     assert name in jobs._job_locks
+    lk.abandon()                                     # 未 acquire 放弃引用：refs 归零自动回收
     client = app_mod.app.test_client()
     rd = client.delete("/api/jobs/" + name)
     assert rd.get_json().get("ok") is True

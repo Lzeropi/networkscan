@@ -248,11 +248,14 @@ def scan_adf(job):
 
     def worker():
         global _scan_start_time, _scan_job
-        p = _params(job)
+        # v1.14.5（P1-1）：st 前置 + _params 移入 try——_params 在 try 外时 meta.json 损坏/被删
+        # （Samba 可写场景真实可能）会让 worker 线程直接死亡，try/finally 不进入，
+        # scan_lock/job_lock 永久泄漏（实测复现：全部扫描 busy + 任务死锁，不重启无解）
+        st = state.setdefault(job, {})
         try:
+            p = _params(job)
             _scan_start_time = time.time()
             _scan_job = job
-            st = state.setdefault(job, {})
             st.update(state="scanning", msg="ADF 连续扫描中…")
             start = jobs.next_page_no(job)   # v1.14.1（P1-9）：max+1 防空洞编号冲突
             pat = os.path.join(get_scan_root(), job, "p%03d.pnm")
@@ -310,6 +313,8 @@ def scan_adf(job):
                 st.update(state="error", msg="扫描超时（超过 1 小时）")
             except Exception as e:
                 st.update(state="error", msg=str(e)[:300])
+        except Exception as e:   # v1.14.5（P1-1）：外层兜底——_params/next_page_no/meta 等内层 try 之外的异常
+            st.update(state="error", msg=str(e)[:300])
         finally:
             _scan_job = None
             _scan_start_time = None

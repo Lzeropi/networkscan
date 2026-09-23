@@ -3,6 +3,7 @@ import os
 import re
 import secrets
 import shutil
+import stat as _stat_mod
 import threading
 import time
 
@@ -38,26 +39,74 @@ def next_page_no(job):
 
 # v1.14.1（P1-3）：任务生命周期锁——scan/convert/delete/reorder/cleanup 对同一任务互斥，
 # 消除「检查 state → 执行操作」之间的 TOCTOU 竞态窗口。
-# v1.14.2（#11）：锁条目随任务删除回收（release_job_lock），不再永久增长。
+# v1.14.5（P2-2）：锁条目改为引用计数——registry 值 {lock, refs}。job_lock() 取引用即
+# refs+1（含尚未进入 acquire 的等待者），handle.release() 后 refs==0 自动回收。
+# 根治 v1.14.4 release_job_lock「空闲即 pop」与并发引用的 waiter race：pop 后另一线程
+# setdefault 新锁，同任务两锁并存、互斥失效。404 路径异常退出也走 __exit__ release，
+# 条目自动回收（P2-1 顺手吸收，无需前置 validate 的额外代码）。
 _job_locks = {}
 _job_locks_guard = threading.Lock()
 
 
+class _JobLock:
+    """引用计数句柄。acquire/release 转发底层锁；release 后 refs==0 从 registry 移除。
+    不跨 release 复用：已 release 的 handle 再 acquire 会对孤儿锁操作，与 registry 新条目
+    不互斥。全部调用点均 1:1 配对（with / 单次 acquire-release），无复用模式。"""
+    __slots__ = ("_job", "_entry")
+
+    def __init__(self, job, entry):
+        self._job, self._entry = job, entry
+
+    def acquire(self, blocking=True, timeout=-1):
+        return self._entry["lock"].acquire(blocking, timeout)
+
+    def release(self):
+        self._entry["lock"].release()
+        with _job_locks_guard:
+            e = _job_locks.get(self._job)
+            if e is self._entry:
+                e["refs"] -= 1
+                if e["refs"] <= 0:
+                    _job_locks.pop(self._job, None)
+
+    def abandon(self):
+        """未 acquire 即放弃引用（cleanup acquire(False) 失败路径）——refs-1，归零则回收。"""
+        with _job_locks_guard:
+            e = _job_locks.get(self._job)
+            if e is self._entry:
+                e["refs"] -= 1
+                if e["refs"] <= 0:
+                    _job_locks.pop(self._job, None)
+
+    def __enter__(self):
+        self._entry["lock"].acquire()
+        return self
+
+    def __exit__(self, *exc):
+        self.release()
+        return False
+
+
 def job_lock(job):
     with _job_locks_guard:
-        return _job_locks.setdefault(job, threading.Lock())
+        e = _job_locks.get(job)
+        if e is None:
+            e = {"lock": threading.Lock(), "refs": 0}
+            _job_locks[job] = e
+        e["refs"] += 1
+        return _JobLock(job, e)
 
 
 def release_job_lock(job):
-    """v1.14.2（#11）：任务删除后回收锁条目。只在锁空闲（试探 acquire 成功）时回收；
-    仍有线程持有则跳过，等下次删除时机——安全不破坏互斥。"""
+    """v1.14.5（P2-2）：引用计数下，refs==0 且锁空闲才回收（孤儿条目兜底——正常路径
+    handle.release 已自动回收，此函数保留给 delete finally 冗余兜底，幂等无害）。"""
     with _job_locks_guard:
-        lock = _job_locks.get(job)
-        if lock is None:
+        e = _job_locks.get(job)
+        if e is None or e["refs"]:
             return
-        if lock.acquire(blocking=False):
+        if e["lock"].acquire(blocking=False):
             _job_locks.pop(job, None)
-            lock.release()
+            e["lock"].release()
 
 
 def validate(job):
@@ -83,6 +132,24 @@ def check_page_safe(base, fname):
     if os.path.realpath(base) + os.sep not in real + os.sep:
         raise JobError("页面路径越界")
     return p
+
+
+def open_page_fd(base, fname):
+    """v1.14.5（P1-2）：O_NOFOLLOW + fstat 断言普通文件后 fdopen 返回句柄——保护最终打开的
+    inode 而非检查时刻的路径，根治 check_page_safe 后被 Samba 外部进程替换为 symlink 的
+    TOCTOU 越权读（应用 job_lock 约束不了外部 Samba 客户端）。中间目录 symlink 由上层
+    validate/check_page_safe 的 realpath containment 预检覆盖；O_NOFOLLOW 防最终分量被替换。"""
+    p = check_page_safe(base, fname)
+    try:
+        # O_NONBLOCK 防 FIFO 等特殊文件以读打开阻塞（无写端时卡死）；对普通文件无影响
+        fd = os.open(p, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0))
+    except OSError:
+        raise JobError("非法页面文件（符号链接）")
+    if not _stat_mod.S_ISREG(os.fstat(fd).st_mode):
+        os.close(fd)
+        raise JobError("非法页面文件（非普通文件）")
+    # 去掉 O_NONBLOCK 语义对后续读无碍（普通文件 O_NONBLOCK 被忽略），fdopen 直接用
+    return os.fdopen(fd, "rb")
 
 
 def create(remark="", params=None):
@@ -245,6 +312,7 @@ def cleanup():
                 return False
             jlock = job_lock(name)
             if not jlock.acquire(blocking=False):   # v1.14.1（P1-3）：扫描/转换持锁中，跳过不等待
+                jlock.abandon()                      # v1.14.5（P2-2）：未 acquire 放弃引用，防 refs 泄漏
                 return False
             try:
                 import scanner   # v1.14：局部导入避循环；正在扫描/转换的任务不清理（#2）

@@ -57,7 +57,7 @@ def _pin_locked():
 
 # ---------------- PIN 认证（v1.14：PBKDF2 慢哈希 + 旧格式自动迁移，#8） ----------------
 def _hash(pin, salt=None):
-    """新格式：pbkdf2$salt$hash。"""
+    """新格式：salt$hash（PBKDF2-SHA256，无格式前缀）。"""
     salt = salt or secrets.token_hex(8)
     h = hashlib.pbkdf2_hmac("sha256", pin.encode("utf-8"), salt.encode(), 200000).hex()
     return salt + "$" + h
