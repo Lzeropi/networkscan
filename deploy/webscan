@@ -137,6 +137,14 @@ cmd_update() {
             for item in "${PRESERVE[@]}"; do
                 if [ -e "${preserve_dir}/${item}" ]; then mv "${preserve_dir}/${item}" "${INSTALL_DIR}/"; fi
             done
+        else
+            # v1.14.3（P2-7）：切换前失败——原安装未动，但保留项已提前搬入备份目录，
+            # 必须先放回原目录再清备份（演练抓出：直接跳过会把 .venv/配置连带删掉）
+            for item in "${PRESERVE[@]}"; do
+                if [ -e "${preserve_dir}/${item}" ] && [ ! -e "${INSTALL_DIR}/${item}" ]; then
+                    mv "${preserve_dir}/${item}" "${INSTALL_DIR}/"
+                fi
+            done
         fi
         if [ -f "$service_bak" ]; then
             cp "$service_bak" "$SERVICE_FILE"
