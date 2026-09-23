@@ -40,7 +40,8 @@ def test_job_id_unique_same_second():
     a = jobs.create("备注")
     b = jobs.create("备注")
     assert a != b, "同秒创建的两个任务名必须不同"
-    assert re.fullmatch(r"\d{8}-\d{6}_[0-9a-f]{4}(_\S+)?", a), a
+    # v1.14.2（#12）：后缀 4→6 位十六进制（24bit），碰撞概率再降 65536 倍
+    assert re.fullmatch(r"\d{8}-\d{6}_[0-9a-f]{6}(_\S+)?", a), a
 
 
 # ---------- #3 占位过滤与裸计数 ----------
@@ -158,5 +159,5 @@ def test_version_consistency():
         import tomli as tomllib
     with open(os.path.join(os.path.dirname(config.__file__), "pyproject.toml"), "rb") as f:
         ver = tomllib.load(f)["project"]["version"]
-    assert config.VERSION == "1.14.1"
-    assert ver == "1.14.1"
+    assert config.VERSION == "1.14.2"
+    assert ver == "1.14.2"
