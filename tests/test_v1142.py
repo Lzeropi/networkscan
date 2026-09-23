@@ -184,10 +184,12 @@ def test_reorder_failure_recovers(monkeypatch):
             raise OSError("disk full (injected)")
         return real(src, dst)
 
-    monkeypatch.setattr(app_mod.os, "rename", flaky)
-    r = client.post("/api/jobs/%s/reorder" % name,
-                    json={"order": ["p003.png", "p001.png", "p002.png"]})
-    monkeypatch.undo()
+    app_mod.os.rename = flaky           # v1.14.4：手动补丁（monkeypatch.undo 会误撤 conftest fixture）
+    try:
+        r = client.post("/api/jobs/%s/reorder" % name,
+                        json={"order": ["p003.png", "p001.png", "p002.png"]})
+    finally:
+        app_mod.os.rename = real
     assert r.status_code == 500, "#4：中途失败必须 500"
     assert sorted(jobs.pages(name)) == ["p001.png", "p002.png", "p003.png"], \
         "#4：失败后必须反向恢复原状，不得留半完成状态"
@@ -208,10 +210,12 @@ def test_reorder_delete_mode_failure_keeps_pages(monkeypatch):
             raise OSError("disk full (injected)")
         return real(src, dst)
 
-    monkeypatch.setattr(app_mod.os, "rename", flaky)
-    r = client.post("/api/jobs/%s/reorder" % name,
-                    json={"order": ["p001.png", "p002.png", "p003.png"], "delete": True})
-    monkeypatch.undo()
+    app_mod.os.rename = flaky           # v1.14.4：手动补丁（同上）
+    try:
+        r = client.post("/api/jobs/%s/reorder" % name,
+                        json={"order": ["p001.png", "p002.png", "p003.png"], "delete": True})
+    finally:
+        app_mod.os.rename = real
     assert r.status_code == 500
     assert len(jobs.pages(name)) == 4, \
         "#4：删除模式必须「先重编号成功再删」——重命名失败时待删页一页都不能丢"
