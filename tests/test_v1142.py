@@ -98,18 +98,29 @@ def test_adf_joblock_held_before_started_returns(monkeypatch):
     jobs.save(name, meta)
     device_probe._cache["data"] = []                 # 探测缓存注入空列表（fail-closed 场景）
     device_probe._cache["ts"] = 1e18
+    # 确定性：worker 的探测调用被卡在 Event 上——锁的「持有→释放」全程可控采样，
+    # 消除「worker 快于主线程 return」的时序抖动
+    gate = threading.Event()
+
+    def slow_probe(force=False):
+        gate.wait(timeout=5)
+        return ([], False)
+
+    monkeypatch.setattr(device_probe, "probe", slow_probe)
     try:
         assert scanner.scan_adf(name) == "started"
         lk = jobs.job_lock(name)
         assert not lk.acquire(blocking=False), \
-            "P0-2：API 返回 started 时 job_lock 必须已被 worker 持有（否则删除竞态窗口仍在）"
-        for _ in range(100):                         # 等 worker fail-closed 收尾
+            "P0-2：API 返回 started 时 job_lock 必须已被持有（否则删除竞态窗口仍在）"
+        gate.set()                                   # 放行 worker → fail-closed 收尾
+        for _ in range(100):
             if scanner.get_state(name)["state"] in ("error", "done"):
                 break
             time.sleep(0.02)
         assert lk.acquire(blocking=False), "worker 结束后锁必须释放"
         lk.release()
     finally:
+        gate.set()
         device_probe._cache["data"] = None
         device_probe._cache["ts"] = 0.0
 
@@ -136,6 +147,7 @@ def test_adf_partial_conversion_reports_error(monkeypatch):
     scan_fake = _fake_script(os.path.join(_TEST_ROOT, "_adf_scan"), (
         '#!/bin/sh\npat=""\nfor a in "$@"; do\n'
         '  case "$a" in --batch=*) pat="${a#--batch=}";; esac\ndone\n'
+        '[ -z "$pat" ] && exit 0\n'          # 加固：无 --batch（如 -L 探测调用）不落盘，防污染 cwd
         'dir=$(dirname "$pat")\n: > "$dir/p001.pnm"\n: > "$dir/p002.pnm"\nexit 0\n'))
     cv_fake = _fake_script(os.path.join(_TEST_ROOT, "_cv2"),
                            '#!/bin/sh\ncase "$1" in *p002.pnm) exit 1;; esac\n: > "$2"\nexit 0\n')

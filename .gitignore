@@ -8,3 +8,6 @@ admin_config.json
 .DS_Store
 .temp/
 .pytest_cache/
+
+# v1.14.2：测试残留防护（假 scanimage 在边角时序下可能向 cwd 落 0 字节 pnm）
+*.pnm
