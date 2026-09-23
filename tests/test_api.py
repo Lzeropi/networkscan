@@ -152,10 +152,16 @@ def test_pin_legacy_login_upgrade():
 def test_scan_defaults_validated():
     _reset()
     c2 = app_mod.app.test_client()
-    c2.post("/api/admin/login", json={"pin": "1234", "confirm": "1234"})
-    # 设备探测在本机无 scanimage → 返回空列表 → 不校验直接存（保底可用）
+    r0 = c2.post("/api/admin/login", json={"pin": "1234", "confirm": "1234"})
+    csrf = r0.get_json().get("csrf", "")   # v1.14.1（P2-12）：登录下发 token
+    assert csrf, "登录响应必须携带 csrf token"
+    # 不带 token 的写请求被拒（CSRF 防护）
+    r_bad = c2.post("/api/admin/config", json={"scan_defaults": {}})
+    assert r_bad.status_code == 403, "缺 CSRF token 的写请求必须 403"
+    # 带 token 正常
     r = c2.post("/api/admin/config", json={
-        "scan_defaults": {"hpljm1005:": {"dpi": "150", "mode": "Gray", "crop": False}}})
+        "scan_defaults": {"hpljm1005:": {"dpi": "150", "mode": "Gray", "crop": False}}},
+        headers={"X-CSRF-Token": csrf})
     assert r.get_json().get("ok") is True
 
 

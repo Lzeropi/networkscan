@@ -51,6 +51,7 @@
     const body = { pin: pin };
     if (pinFirst) body.confirm = $("pinConfirm").value.trim();
     const d = await api("/api/admin/login", { method: "POST", body: JSON.stringify(body) });
+    if (d.ok && d.csrf) sessionStorage.setItem("csrf", d.csrf);   // v1.14.1（P2-12）
     if (d.ok) {
       gate.style.display = "none";
       openPanel();

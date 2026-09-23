@@ -75,6 +75,11 @@ def require_admin(f):
     def wrapper(*a, **kw):
         if not admin_ok():
             return jsonify(ok=False, msg="未登录或会话已过期，请输入 PIN"), 401
+        # v1.14.1（P2-12）：写操作统一 CSRF 校验——第三方页面无法读到本站 session 中的 token，
+        # 构造的跨站请求带不上 X-CSRF-Token 即被拒（SameSite 之外的第二道防线）
+        if request.method in ("POST", "DELETE", "PUT", "PATCH"):
+            if request.headers.get("X-CSRF-Token") != session.get("csrf", ""):
+                return jsonify(ok=False, msg="CSRF 校验失败，请刷新页面重试"), 403
         return f(*a, **kw)
     return wrapper
 
@@ -87,7 +92,10 @@ def admin_page():
 @bp.get("/api/admin/status")
 def api_status():
     cfg = load_admin_cfg()
-    return jsonify(logged=admin_ok(), has_pin=bool(cfg["pin_hash"]), version=VERSION)
+    d = {"logged": admin_ok(), "has_pin": bool(cfg["pin_hash"]), "version": VERSION}
+    if admin_ok():
+        d["csrf"] = session.get("csrf", "")   # v1.14.1（P2-12）：前端取 token 供写请求头携带
+    return jsonify(**d)
 
 
 @bp.post("/api/admin/login")
@@ -108,14 +116,16 @@ def api_login():
         cfg["pin_hash"] = _hash(pin)
         save_admin_cfg(cfg)
         session["admin_ok"] = True
-        return jsonify(ok=True, first=True)
+        session["csrf"] = secrets.token_hex(16)   # v1.14.1（P2-12）：首次设置同样签发
+        return jsonify(ok=True, first=True, csrf=session["csrf"])
     if _verify(pin, cfg["pin_hash"]):
         if "$" not in cfg["pin_hash"]:   # v1.14：旧 sha256 格式登录成功后自动升级为 PBKDF2
             cfg["pin_hash"] = _hash(pin)
             save_admin_cfg(cfg)
         _pin_fails.pop(request.remote_addr, None)
         session["admin_ok"] = True
-        return jsonify(ok=True)
+        session["csrf"] = secrets.token_hex(16)   # v1.14.1（P2-12）：登录签发 CSRF token
+        return jsonify(ok=True, csrf=session["csrf"])
     # PIN 错误：计数并按阈值锁定（按 IP，不影响其他管理员）
     rec = _pin_rec()
     rec["count"] += 1

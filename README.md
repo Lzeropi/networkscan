@@ -3,10 +3,10 @@ AIGC:
   ContentProducer: '001191110102MAD55U9H0F10002'
   ContentPropagator: '001191110102MAD55U9H0F10002'
   Label: '1'
-  ProduceID: '16a2d65f-629f-4e05-9359-4dc6cd357b63'
-  PropagateID: '16a2d65f-629f-4e05-9359-4dc6cd357b63'
-  ReservedCode1: '18d3d0b0-22eb-4e5c-b252-910329cb5c99'
-  ReservedCode2: '18d3d0b0-22eb-4e5c-b252-910329cb5c99'
+  ProduceID: '07df38a5-7047-4548-a1a9-ca5716c47233'
+  PropagateID: '07df38a5-7047-4548-a1a9-ca5716c47233'
+  ReservedCode1: '7b10d00e-232c-4229-bc34-64e01b819b55'
+  ReservedCode2: '7b10d00e-232c-4229-bc34-64e01b819b55'
 ---
 
 # ScanWeb — 局域网网页扫描系统
@@ -413,6 +413,19 @@ webscan update
 cd /opt/network_scan_service
 uv pip install --index-url https://pypi.tuna.tsinghua.edu.cn/simple <新依赖>
 ```
+
+### 回滚演练清单（v1.14.1 起每次大版本更新前执行）
+
+`webscan update` 声称「启动失败自动回滚」，回滚逻辑必须**演练**而非假设（P2-18）。新版本上盒前按此走一遍：
+
+1. **备份三样**：`cp admin_config.json admin_config.json.bak`、`tar czf /root/venv.bak.tgz .venv`、`cp /etc/systemd/system/networkscan.service /root/`
+2. **正常更新一轮**：上传包 → `webscan update` → 确认 `webscan version` 与服务 active
+3. **故意喂坏包**：`echo not-a-tar > /tmp/bad.tar.gz && webscan update /tmp/bad.tar.gz` → 应报「解压失败，已取消更新（服务未受影响）」，服务保持 active、版本不变
+4. **喂结构错误包**：打一个不含 `scanweb/app.py` 的正常 tar → 应报「更新包结构异常」，服务不受影响
+5. **喂能解压但起不来的版本**（如故意写错语法的 app.py）→ `webscan update` 应走到「启动失败自动回滚」，且回滚后：服务 active、版本回到旧版、`.venv` 存在、`admin_config.json` 完整（用原 PIN 能登录）、扫描数据完好
+6. **清理**：确认无误后删除备份文件
+
+任一步与预期不符即停更排查。203 盒子首次用 v1.14.1 包更新时本身就是一次实战演练（v1.14 的旧更新脚本有回滚缺陷 P0-1，v1.14.1 已修复）。
 
 ## 十、完整卸载
 

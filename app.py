@@ -16,6 +16,7 @@ import admin
 import device_probe
 import jobs
 import scanner
+import time
 from config import BIND, CONVERT, MAX_PDF_MEM, MAX_PDF_PAGES, PORT, SCANIMAGE, SECRET, TOKEN
 from config import get_scan_root
 
@@ -27,6 +28,12 @@ FNAME_RE = re.compile(r"p\d{3}\.(png|jpg)")
 
 
 # ---------------- 登录（仅当设置 TOKEN 时启用） ----------------
+# v1.14.1（P2-11）：TOKEN 登录防暴力，按 IP 计数（与 PIN 同策略：5 次/60 秒）
+_token_fails = {}   # ip -> {"count": n, "lock_until": ts}；局域网 IP 数有限，不做淘汰
+_TK_MAX_FAILS = 5
+_TK_LOCK_SEC = 60
+
+
 @app.before_request
 def require_login():
     if not TOKEN or session.get("ok") or request.endpoint in ("login", "static", "architecture"):
@@ -40,10 +47,19 @@ def login():
         return redirect(url_for("index"))
     err = ""
     if request.method == "POST":
-        if request.form.get("password", "") == TOKEN:
+        rec = _token_fails.setdefault(request.remote_addr, {"count": 0, "lock_until": 0.0})
+        if time.time() < rec["lock_until"]:
+            err = "尝试过于频繁，请稍后再试"
+        elif request.form.get("password", "") == TOKEN:
+            _token_fails.pop(request.remote_addr, None)
             session["ok"] = True
             return redirect(url_for("index"))
-        err = "口令错误"
+        else:
+            rec["count"] += 1
+            if rec["count"] >= _TK_MAX_FAILS:
+                rec["lock_until"] = time.time() + _TK_LOCK_SEC
+                rec["count"] = 0
+            err = "口令错误"
     return render_template("login.html", err=err)
 
 
