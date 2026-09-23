@@ -13,7 +13,7 @@
 #   version           查看当前版本
 #   uninstall         卸载（停止+禁用服务，保留数据和依赖）
 
-set -euo pipefail
+set -Eeuo pipefail   # -E：errtrace，函数内命令失败也触发 ERR trap（v1.14.1 P0-1）
 
 INSTALL_DIR="/opt/network_scan_service"
 SERVICE_NAME="networkscan"
@@ -98,54 +98,94 @@ cmd_update() {
     echo "  新版本：v${new_ver}"
     echo ""
 
-    # 4. 原子切换：旧目录整体让位，保留项 mv 移植（同分区秒级），新代码落位
+    # 4. v1.14.1（P0-1）：三不变量重构——保留项移独立备份目录（不进新目录）、
+    #    service 先备份、统一 rollback 函数 + ERR trap 全程兜底（中途任何失败也回滚）。
+    local preserve_dir service_bak
+    preserve_dir="${INSTALL_DIR}.preserve.$$"     # 与安装目录同分区，mv 秒级
+    service_bak="/tmp/networkscan.service.bak.$$"
+    rm -rf "$preserve_dir"
+    mkdir -p "$preserve_dir"
+    for item in "${PRESERVE[@]}"; do
+        if [ -e "${INSTALL_DIR}/${item}" ]; then mv "${INSTALL_DIR}/${item}" "${preserve_dir}/"; fi
+    done
+    if [ -f "$SERVICE_FILE" ]; then
+        cp "$SERVICE_FILE" "$service_bak"         # 旧 service 备份，回滚时恢复（防版本错配）
+    fi
+
+    # 统一回滚：先从新目录逆移植保留项（可能已归位）→ 清新目录 → 旧目录归位 →
+    # 保留项放回 → service 恢复 → 拉起旧版。任何路径下保留项必须完好（v1.14.1 P0-1）
+    rollback() {
+        systemctl stop "$SERVICE_NAME" 2>/dev/null || true
+        for item in "${PRESERVE[@]}"; do
+            if [ -e "${INSTALL_DIR}/${item}" ]; then mv "${INSTALL_DIR}/${item}" "${preserve_dir}/"; fi
+        done
+        rm -rf "${INSTALL_DIR}"
+        if [ -d "${INSTALL_DIR}.old" ]; then
+            mv "${INSTALL_DIR}.old" "${INSTALL_DIR}"
+        fi
+        for item in "${PRESERVE[@]}"; do
+            if [ -e "${preserve_dir}/${item}" ]; then mv "${preserve_dir}/${item}" "${INSTALL_DIR}/"; fi
+        done
+        if [ -f "$service_bak" ]; then
+            cp "$service_bak" "$SERVICE_FILE"
+            systemctl daemon-reload
+        fi
+        rm -rf "$preserve_dir" "$service_bak"
+        if systemctl is-enabled --quiet "$SERVICE_NAME" 2>/dev/null; then
+            systemctl start "$SERVICE_NAME" 2>/dev/null || true
+        fi
+    }
+
+    # 中途失败兜底：切换开始后任何命令失败（cp/chown/daemon-reload 等）都统一回滚后退出
+    trap 'red "更新中途失败，自动回滚到 v${old_ver} ..."; rollback; exit 1' ERR
+
+    # 5. 切换：旧目录让位 → 新代码落位 → 保留项归位
     yellow "切换版本（原子）..."
     rm -rf "${INSTALL_DIR}.old"
     mv "${INSTALL_DIR}" "${INSTALL_DIR}.old"
     mkdir -p "${INSTALL_DIR}"
-    for item in "${PRESERVE[@]}"; do
-        if [ -e "${INSTALL_DIR}.old/${item}" ]; then
-            mv "${INSTALL_DIR}.old/${item}" "${INSTALL_DIR}/${item}"
-        fi
-    done
     cp -a "${tmp_extract}/scanweb/." "${INSTALL_DIR}/"
     rm -rf "$tmp_extract"
     rm -f "${INSTALL_DIR}/.python-version" 2>/dev/null || true
+    for item in "${PRESERVE[@]}"; do
+        if [ -e "${preserve_dir}/${item}" ]; then mv "${preserve_dir}/${item}" "${INSTALL_DIR}/"; fi
+    done
 
-    # 5. 清理更新包
+    # 6. 清理更新包
     if [ -f "${INSTALL_DIR}/$(basename "$pkg")" ]; then
         rm -f "${INSTALL_DIR}/$(basename "$pkg")"
     fi
 
-    # 9. 修复权限
+    # 7. 修复权限
     yellow "修复权限..."
     if id scanops &>/dev/null; then
         chown -R scanops:scanops "${INSTALL_DIR}"
     fi
 
-    # 10. 更新 service 文件（如果包里有新的）
+    # 8. 更新 service 文件（如果包里有新的）
     if [ -f "${INSTALL_DIR}/deploy/networkscan.service" ]; then
         cp "${INSTALL_DIR}/deploy/networkscan.service" "$SERVICE_FILE"
         systemctl daemon-reload
     fi
 
-    # 11. 更新 webscan 脚本自身
+    # 9. 更新 webscan 脚本自身
     if [ -f "${INSTALL_DIR}/deploy/webscan" ]; then
         cp "${INSTALL_DIR}/deploy/webscan" "$BIN_PATH"
         chmod +x "$BIN_PATH"
     fi
 
-    # 12. 启动服务
+    # 10. 启动服务
     if [ "$was_running" = "yes" ] || systemctl is-enabled --quiet "$SERVICE_NAME" 2>/dev/null; then
         yellow "启动服务..."
         systemctl start "$SERVICE_NAME"
         sleep 2
     fi
+    trap - ERR    # 启动尝试完成，关闭中途兜底（下面的失败走显式回滚）
 
-    # 14. 验证（v1.14：启动失败自动回滚到旧版本，#14）
+    # 11. 验证（v1.14.1：失败走统一 rollback——保留项/service 全量恢复）
     echo ""
     if systemctl is-active --quiet "$SERVICE_NAME" 2>/dev/null; then
-        rm -rf "${INSTALL_DIR}.old"      # 启动成功才清理旧版本
+        rm -rf "${INSTALL_DIR}.old" "$preserve_dir" "$service_bak"   # 成功才清理旧版本与备份
         local port
         port=$(grep -oP 'SCANWEB_PORT=\K\d+' "$SERVICE_FILE" 2>/dev/null || echo "9203")
         green "更新成功！"
@@ -155,13 +195,10 @@ cmd_update() {
         echo "  管理页：http://$(hostname -I 2>/dev/null | awk '{print $1}' || echo '<盒子IP>'):${port}/admin"
     else
         red "服务启动失败！自动回滚到 v${old_ver} ..."
-        systemctl stop "$SERVICE_NAME" 2>/dev/null || true
-        rm -rf "${INSTALL_DIR}"
-        mv "${INSTALL_DIR}.old" "${INSTALL_DIR}"
-        systemctl start "$SERVICE_NAME" 2>/dev/null || true
+        rollback
         sleep 2
         if systemctl is-active --quiet "$SERVICE_NAME" 2>/dev/null; then
-            yellow "已回滚到旧版本 v${old_ver}，服务运行中。新版本失败原因请检查："
+            yellow "已回滚到旧版本 v${old_ver}（.venv/配置/service 全部保留），服务运行中。失败原因请检查："
         else
             red "回滚后服务仍未运行！请手动检查："
         fi
