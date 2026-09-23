@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>ScanWeb v1.14 系统架构</title>
+<title>ScanWeb v1.14.1 系统架构</title>
 <style>
 /* ===== CSS 变量：深色主题（默认） ===== */
 :root[data-theme="dark"] {
@@ -238,11 +238,11 @@ body {
 </div>
 
 <script>
-/* ===== JSON IR 数据（ScanWeb v1.14，archify 生成） ===== */
+/* ===== JSON IR 数据（ScanWeb v1.14.1，archify 生成） ===== */
 const IR = {
   "diagram_type": "architecture",
   "meta": {
-    "title": "ScanWeb v1.14 系统架构",
+    "title": "ScanWeb v1.14.1 系统架构",
     "locale": "zh-CN",
     "theme": "dark",
     "preset": "signal-flow"
@@ -264,31 +264,31 @@ const IR = {
       "id": "app",
       "label": "app.py 主路由",
       "kind": "backend",
-      "description": "页面渲染 + 任务 API（创建/扫描/删除/排序）+ ZIP 流式下载 + PDF 合成（v1.14：内存估算上限 512MB）+ 扫码取件。锁定任务删除返回 403；任务 ID 秒级时间戳+随机后缀防并发覆盖"
+      "description": "页面 + 任务 API + ZIP 流式下载（v1.14.1：队列背压 maxsize=16）+ PDF 合成（内存上限 512MB + 显式句柄管理）+ TOKEN 登录限流。锁定任务删除 403；任务 ID 随机后缀"
     },
     {
       "id": "admin_bp",
       "label": "admin.py 管理蓝图",
       "kind": "backend",
-      "description": "PIN 认证（v1.14：PBKDF2 200k 慢哈希 + 旧格式自动迁移 + 按 IP 防暴力锁）、资源监控、环境检测、配置读写、任务锁定管理。scan_root 系统目录黑名单；scan_defaults 按设备能力白名单校验"
+      "description": "PIN 认证（PBKDF2 200k + 旧格式自动迁移 + IP 防暴力）、CSRF token 校验（v1.14.1：写请求统一 X-CSRF-Token）、资源监控、配置读写、scan_root realpath 黑名单（防 symlink 绕过）、scan_defaults 白名单"
     },
     {
       "id": "scanner",
       "label": "scanner.py 扫描核心",
       "kind": "backend",
-      "description": "scan_lock 全局独占锁（平板/ADF 互斥）；state 状态机（v1.14：平板扫描+后台转换全程可见，扫描期间删除/排序/清理全部拦截）；PNM→PNG 后台转换不阻塞下次扫描；设备名解析缓存按后端分键（v1.14）；ADF 进纸源白名单校验"
+      "description": "scan_lock 设备独占 + job_lock 任务生命周期锁（v1.14.1：TOCTOU 根治，scan/convert/delete/reorder/cleanup 同任务互斥）；state 状态机覆盖扫描+转换全程；转换失败保留 PNM 源数据；ADF 返回码检查/busy 409/source fail-closed；设备解析缓存按后端分键"
     },
     {
       "id": "jobsm",
       "label": "jobs.py 任务管理",
       "kind": "backend",
-      "description": "任务创建/元数据/页列表/物理排序重编号。v1.14：pages() 过滤 0 字节转换中占位、raw_pages() 裸计数防编号冲突；cleanup 排除扫描中任务；锁定任务三层防护兜底"
+      "description": "任务创建/元数据/页列表/物理排序重编号。v1.14.1：job_lock 生命周期锁基础设施；pages() 过滤 0 字节占位 + next_page_no max+1 防空洞；safe_slug 拒「..」防死角任务；TOKEN 登录 IP 限流"
     },
     {
       "id": "dp",
       "label": "device_probe.py 设备探测",
       "kind": "service",
-      "description": "v1.14 新增公共模块：scanimage -L/-A 解析设备能力（模式/进纸源/DPI 列表），普通页与管理页共用同一实现与 300s 缓存，统一 25s 超时"
+      "description": "v1.14.1 公共探测模块：正则兼容 反引号/单引号/无引号 三种后端风格（HP/爱普生/佳能/airscan 全兼容，203 真机 fixture 回归），普通页与管理页共用 300s 缓存"
     },
     {
       "id": "config",
@@ -324,7 +324,7 @@ const IR = {
       "id": "systemd",
       "label": "systemd + webscan CLI",
       "kind": "service",
-      "description": "Restart=always 自动拉起；webscan update 一键更新（v1.14 原子化：先解压校验→mv 切换→启动验证→失败自动回滚）"
+      "description": "Restart=always 自愈；webscan update v1.14.1 回滚不变量：保留项独立备份 + service 先备份 + 统一 rollback（含逆移植）+ ERR trap 全程兜底，故障演练六项不变量全过"
     }
   ],
   "boundaries": [
