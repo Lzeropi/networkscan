@@ -25,6 +25,16 @@ app = Flask(__name__)
 app.secret_key = SECRET
 app.config.update(SESSION_COOKIE_SAMESITE="Lax", SESSION_COOKIE_HTTPONLY=True)  # v1.14：基础 CSRF 防护（#7）
 app.register_blueprint(admin.bp)
+
+
+@app.after_request
+def _security_headers(resp):
+    """v1.14.6：OWASP 基础响应头——防 clickjacking（管理页/登录被 iframe 嵌套钓鱼）、
+    MIME 嗅探 XSS、Referer 泄漏。纯 HTTP 局域网部署不启用 Cookie Secure（无 TLS）。"""
+    resp.headers["X-Frame-Options"] = "SAMEORIGIN"
+    resp.headers["X-Content-Type-Options"] = "nosniff"
+    resp.headers.setdefault("Referrer-Policy", "same-origin")
+    return resp
 FNAME_RE = re.compile(r"p\d+\.(png|jpg)")   # v1.14.3（P2-3）：与 jobs.PAGE_RE 同步 p\d+——p1000 页面 raw/thumb 不再 404
 ZIP_QUEUE_MAXSIZE = 16   # v1.14.3（P2）：提为常量供测试注入（满队列断开场景）
 
@@ -190,6 +200,7 @@ def api_reorder(job):
 
 
 def _reorder_body(job):
+    jobs.path(job)   # v1.14.6：先验证任务存在——空 order 等分支此前在任务不存在时误返 400
     # 排序互斥：扫描进行中禁止排序，防止文件被同时操作
     if scanner.get_state(job)["state"] == "scanning":
         return jsonify(ok=False, msg="扫描进行中，请等待完成后再排序"), 409

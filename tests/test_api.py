@@ -47,7 +47,7 @@ def test_index_ok():
 
 def test_admin_status_version():
     r = client.get("/api/admin/status")
-    assert r.get_json()["version"] == "1.14.5"
+    assert r.get_json()["version"] == "1.14.6"
 
 
 # ---------- 新1 锁定任务三层防护 ----------

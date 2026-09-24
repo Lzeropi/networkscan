@@ -1,6 +1,7 @@
 import os
 import re
 import subprocess
+import tempfile
 import threading
 import time
 
@@ -156,7 +157,10 @@ def scan_flatbed(job):
     n = jobs.next_page_no(job)        # v1.14.1（P1-9）：max+1 防空洞编号冲突
     fname = f"p{n:03d}.png"
     out = os.path.join(get_scan_root(), job, fname)
-    tmp = os.path.join("/tmp", f"scanweb_{job}_{n:03d}.pnm")
+    # v1.14.6：mkstemp 唯一化中转文件名——旧版可预测的 /tmp/scanweb_{job}_{n}.pnm 可被
+    # 本地其他 shell 用户预创建同名 symlink，扫描写入跟随链接覆盖任意可写文件
+    _fd, tmp = tempfile.mkstemp(prefix=f"scanweb_{job}_{n:03d}_", suffix=".pnm")
+    os.close(_fd)   # 占位 fd 关闭，subprocess 自行创建写入
 
     # 阶段 1 全部包入：任何异常都必须释放 jlock，防锁泄漏（v1.14.1 P1-3）
     try:
