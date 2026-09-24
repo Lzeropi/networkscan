@@ -54,7 +54,7 @@ def test_flatbed_mkstemp_exception_releases_both_locks(monkeypatch):
 def test_flatbed_next_page_exception_releases_both_locks(monkeypatch):
     name = _mk_job()
 
-    def boom(_job):
+    def boom(_job, _root=None):   # v1.15（#1）：next_page_no 增 root 参数
         raise jobs.JobError("simulated missing task during numbering")
 
     monkeypatch.setattr(jobs, "next_page_no", boom)
@@ -71,7 +71,7 @@ def test_flatbed_next_page_exception_releases_both_locks(monkeypatch):
 
 def test_flatbed_init_exception_allows_later_scan_lock_acquire(monkeypatch):
     name = _mk_job()
-    monkeypatch.setattr(jobs, "next_page_no", lambda _job: (_ for _ in ()).throw(OSError("disk error")))
+    monkeypatch.setattr(jobs, "next_page_no", lambda _job, _root=None: (_ for _ in ()).throw(OSError("disk error")))
 
     try:
         scanner.scan_flatbed(name)

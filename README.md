@@ -3,10 +3,10 @@ AIGC:
   ContentProducer: '001191110102MAD55U9H0F10002'
   ContentPropagator: '001191110102MAD55U9H0F10002'
   Label: '1'
-  ProduceID: 'e24b72d2-dce9-430c-aed8-b2bfb8c08f49'
-  PropagateID: 'e24b72d2-dce9-430c-aed8-b2bfb8c08f49'
-  ReservedCode1: 'bc68b693-8cba-479f-9cc5-0ab7834bb5dc'
-  ReservedCode2: 'bc68b693-8cba-479f-9cc5-0ab7834bb5dc'
+  ProduceID: '4d0ff615-526d-4ad1-ad9a-aac8692b8329'
+  PropagateID: '4d0ff615-526d-4ad1-ad9a-aac8692b8329'
+  ReservedCode1: 'e644a66d-b01b-4b55-a18a-a8cb894eff03'
+  ReservedCode2: 'e644a66d-b01b-4b55-a18a-a8cb894eff03'
 ---
 
 # ScanWeb — 局域网网页扫描系统
@@ -15,7 +15,7 @@ AIGC:
 
 | 项目信息 | 说明 |
 |---|---|
-| 当前版本 | v1.14.8 |
+| 当前版本 | v1.15 |
 | 适配硬件 | hi3798mv100 机顶盒（ARM32/armhf）或其他 Linux 小主机 |
 | 适配系统 | Ubuntu 20.04 (focal) / Python 3.8+ |
 | 主要设备 | HP LaserJet M1005（其他 SANE 兼容扫描仪亦可） |
@@ -23,6 +23,7 @@ AIGC:
 | 前端形态 | 单页原生 HTML/CSS/JS，零外部依赖、零数据库、无 CDN 引用 |
 | 默认端口 | 9203 |
 
+> v1.15 更新：**八轮审查收官版（ChatGPT 对 v1.14.8 源码级复审 7 项：3 P2 全修 + 3 P3 修 + 1 注记）**。修复：① 【P2】invalidate 竞态根除——v1.14.8 的 dirty 布尔在 probe 锁内「读+清零」元组赋值非原子，invalidate 置位可被 False 覆盖致失效请求永久丢失；改版本号方案（invalidate 只递增 ver 永不消费，probe 读快照比对 data_ver），无覆盖窗口、扫描线程零阻塞、探测中失效最多多探一次永不误旧当新；② 【P2】扫描期间改存储路径 TOCTOU 后果消除——不用会阻塞保存 300s 的 scan_start_guard，改 worker 启动时快照根并全程透传（next_page_no/convert/缩略图/meta 落盘均用快照），409 检查窗漏过的保存不再分裂任务数据（本批完整落旧根，下次保存生效）；③ 【P2 注记】cleanup 60s 节流为进程内状态——部署形态单 Waitress 进程（systemd 单实例）语义成立，多进程部署需改落盘时间戳（docstring 已声明边界）；④ errno 提示细化（ELOOP/ENOENT/EACCES/EIO/EMFILE 等分列）＋顺修 v1.14.8 运算符优先级缺陷（`% e.strerror or "…"` 恒返回格式化串，回退分支永不生效）；⑤ pages/raw_pages 过滤规则收口至 `_iter_page_files()`（v1.14.8 A 项漏同步的根因是两处各写一遍）；⑥ 测试报告补依赖环境说明。新增 tests/test_v115.py 6 项，测试总数 110。
 > v1.14.8 更新：**完整审查修复版（第七轮审查 10 项：8 项修复 + 2 项注记）**。修复：① raw_pages 过滤 symlink（Samba 下幽灵页不再使回收编号跳至 p1000）＋ open_page_fd 报错精确化（缺失/非法/系统错误区分 404/409 语义）；② invalidate 改 dirty 标志置位（不再持锁——扫描线程不再被阻塞等 25s 探测锁）；③ get_scan_root 按 (path, mtime, size) 缓存（每请求省一次读盘+chmod）+ 命中返回 deepcopy（防 update_admin_cfg mutator 异常退出污染内存态）；④ cleanup 60s 节流（保存配置后 force 强制清理）；⑤ 改扫描路径与在扫任务互斥——检测到 scanning 直接 409（TOCTOU 残窗收窄）；⑥ 移除 MAX_TOTAL_BYTES 死配置；⑦ test_v1147 弱断言加固（不再恒真恒过）；⑧ conftest 重置节流状态保证测试隔离。**注记不修**：PIN 首次启动空窗（请求即写，可接受）；/architecture 免 TOKEN（静态只读页，无副作用）。新增 tests/test_v1148.py 8 项，测试总数 104。
 > v1.14.7 更新：**ChatGPT P1 修复入库版**：scan_flatbed 初始化阶段异常双锁泄漏根治——next_page_no/mkstemp 在两锁内、try 外，初始化异常会泄漏 scan_lock/job_lock（上轮自审漏网）；统一移入 try/finally。新增 tests/test_v1147.py 3 项，测试总数 96。
 > v1.14.6 更新：**五次自审修复版（无 P0/P1，修 4 项 P3）**：① reorder 空 order 先 validate 任务（404 语义）再操作；② after_request 补安全头（X-Frame-Options / X-Content-Type-Options: nosniff / Referrer-Policy）；③ PNM 中转改 mkstemp 唯一化（防 symlink 覆盖）；④ 设备探测加锁去重（并发只跑一轮 scanimage）。新增 tests/test_v1146.py 3 项，测试总数 93。
@@ -134,11 +135,11 @@ df -h /
 
 ```bash
 # 本机执行（传压缩包到盒子，版本号以实际发布为准）
-scp scanweb-v1.14.8.tar.gz root@192.168.1.203:/opt/network_scan_service/
+scp scanweb-v1.15.tar.gz root@192.168.1.203:/opt/network_scan_service/
 # 盒子上执行（首次安装）
 cd /opt/network_scan_service
-tar xzf scanweb-v1.14.8.tar.gz --strip-components=1
-rm -f scanweb-v1.14.8.tar.gz .python-version
+tar xzf scanweb-v1.15.tar.gz --strip-components=1
+rm -f scanweb-v1.15.tar.gz .python-version
 ```
 
 ### 第三步：安装编译依赖并安装 Python 包
@@ -396,7 +397,7 @@ webscan version             # 查看当前版本
 
 ```bash
 # 1. 本机上传新版本包（版本号以实际发布为准）
-scp scanweb-v1.14.8.tar.gz root@192.168.1.203:/opt/network_scan_service/
+scp scanweb-v1.15.tar.gz root@192.168.1.203:/opt/network_scan_service/
 
 # 2. SSH 登录盒子
 ssh root@192.168.1.203
@@ -415,7 +416,7 @@ webscan update
 - **次版本递增**（v1.14 → v1.15）：bug 修复、小功能改进、配置调整；补丁号（v1.14.1 → v1.14.2）用于审计/回归修复版
 - **主版本递增**（v1.x → v2.0）：架构性改动、不兼容升级（需重新安装依赖或迁移数据）
 - **版本号写入位置**：`config.py` 的 `VERSION` 变量、`pyproject.toml`、README 版本表、git tag
-- **发布包命名**：`scanweb-v1.14.8.tar.gz`（`webscan update` 按此模式自动检测）
+- **发布包命名**：`scanweb-v1.15.tar.gz`（`webscan update` 按此模式自动检测）
 
 ### 更新包内容约定
 

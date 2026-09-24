@@ -105,11 +105,14 @@ def cleanup_tmp_pnms():
     return removed
 
 
-def _convert_pnms(job, start):
+def _convert_pnms(job, start, root=None):
     """把 ADF batch 产出的 .pnm 全部转成 .png；成功才删源（v1.14.1 P1-4：失败保留供重试）。
     v1.14.2（#3）：返回 (成功数, 失败文件列表)——scanimage 返回码 0 不代表转换全部成功，
-    调用方据此判定，部分失败不再被误报为 done。"""
-    p = jobs.validate(job)
+    调用方据此判定，部分失败不再被误报为 done。
+    v1.15（#1）：root 传扫描启动时的根快照——转换期间管理员改存储路径时，
+    本批 PNM 仍归档到启动时的旧根，任务数据不再分裂（TOCTOU 后果消除）。
+    root=None 时沿用 validate 现取（含名校验/symlink 拒），供非 worker 调用。"""
+    p = os.path.join(root, job) if root else jobs.validate(job)
     ok, failed = 0, []
     for f in os.listdir(p):
         m = re.fullmatch(r"p(\d+)\.pnm", f)      # v1.14.2（#10）：页码模型放宽为不限 3 位
@@ -126,9 +129,12 @@ def _convert_pnms(job, start):
     return ok, failed
 
 
-def _mk_thumb(job, fname):
-    src = os.path.join(get_scan_root(), job, fname)
-    dst = os.path.join(get_scan_root(), job, ".thumbs", fname[:-4] + ".jpg")
+def _mk_thumb(job, fname, root=None):
+    """v1.15（#1）：root 传扫描启动时的根快照（worker 路径）——转换期间改存储路径
+    不再使缩略图落新根（任务分裂）；缺省现取，非 worker 调用行为不变。"""
+    base = root or get_scan_root()
+    src = os.path.join(base, job, fname)
+    dst = os.path.join(base, job, ".thumbs", fname[:-4] + ".jpg")
     # v1.14.4（P2）：显式 with 关闭句柄——PDF 路径 v1.14.1 已修，此处漏网；
     # ADF 一次几十页时避免 FD 短暂积压
     with Image.open(src) as im:
@@ -162,12 +168,18 @@ def scan_flatbed(job):
             raise RuntimeError("设备忙，%s 正在扫描（已用 %d 秒），请稍后再试" % (busy_job, elapsed))
         scan_acquired = True
 
+        # v1.15（#1）：锁内立即快照存储根——保存配置的 409 检查看 state，快照先于
+        # state 写入：保存线程在快照后穿过检查窗 → worker 全程用旧根完整落盘（本次
+        # 保存不生效，下次生效）；在快照前穿过 → 快照即新根，open 占位失败被忽略、
+        # convert error 兜底 PNM 保留，无数据损坏。两种序列均不再产生任务分裂。
+        root = get_scan_root()
+
         # 从取得两把锁开始，所有可能抛异常的初始化与扫描代码都在 finally 保护内。
         st = state.setdefault(job, {})
         st.update(state="scanning", msg="平板扫描中…")
-        n = jobs.next_page_no(job)
+        n = jobs.next_page_no(job, root)
         fname = f"p{n:03d}.png"
-        out = os.path.join(get_scan_root(), job, fname)
+        out = os.path.join(root, job, fname)
 
         # v1.14.6：mkstemp 唯一化中转文件名——旧版可预测的 /tmp/scanweb_{job}_{n}.pnm 可被
         # 本地其他 shell 用户预创建同名 symlink，扫描写入跟随链接覆盖任意可写文件
@@ -215,17 +227,17 @@ def scan_flatbed(job):
             try:
                 subprocess.run([CONVERT, tmp, out], stderr=subprocess.PIPE,
                                timeout=CONVERT_CMD_TIMEOUT, check=True)
-                _mk_thumb(job, fname)
-                meta = jobs.load(job)
-                meta["pages"] = len(jobs.pages(job))
-                jobs.save(job, meta)
+                _mk_thumb(job, fname, root)
+                meta = jobs.load(job, root)
+                meta["pages"] = len(jobs.pages(job, root))
+                jobs.save(job, meta, root)
                 st.update(state="done", msg="扫描完成：%s" % fname)
                 _rm(tmp)
                 tmp = None
             except Exception:
                 bak = tmp
                 try:
-                    dst = os.path.join(get_scan_root(), job, fname[:-4] + ".pnm")
+                    dst = os.path.join(root, job, fname[:-4] + ".pnm")
                     os.replace(tmp, dst)
                     bak = dst
                     tmp = None
@@ -282,13 +294,16 @@ def scan_adf(job):
         # （Samba 可写场景真实可能）会让 worker 线程直接死亡，try/finally 不进入，
         # scan_lock/job_lock 永久泄漏（实测复现：全部扫描 busy + 任务死锁，不重启无解）
         st = state.setdefault(job, {})
+        # v1.15（#1）：worker 全程用启动时根快照——ADF 转换/缩略图/meta 均落旧根，
+        # 扫描期间改存储路径不再分裂任务数据（快照后改路径 → 本批落旧根完整闭环）
+        root = get_scan_root()
         try:
             p = _params(job)
             _scan_start_time = time.time()
             _scan_job = job
             st.update(state="scanning", msg="ADF 连续扫描中…")
-            start = jobs.next_page_no(job)   # v1.14.1（P1-9）：max+1 防空洞编号冲突
-            pat = os.path.join(get_scan_root(), job, "p%03d.pnm")
+            start = jobs.next_page_no(job, root)   # v1.14.1（P1-9）：max+1 防空洞编号冲突
+            pat = os.path.join(root, job, "p%03d.pnm")
             source = p.get("source_name") or SCAN_SOURCE  # 优先用探测到的源名，其次配置回退
             # v1.14.1（P1-7）：fail-closed——探测不到设备能力时拒绝扫描，不再放行任意 source
             if source:
@@ -306,12 +321,12 @@ def scan_adf(job):
             cmd += ["--batch=" + pat, f"--batch-start={start}"]
             try:
                 r = subprocess.run(cmd, capture_output=True, text=True, timeout=ADF_CMD_TIMEOUT)
-                _ok_cnt, failed_pnms = _convert_pnms(job, start)   # PNM → PNG（v1.14.2 #3：返回转换统计）
-                got = jobs.pages(job)          # 已转 png 的页
+                _ok_cnt, failed_pnms = _convert_pnms(job, start, root)   # PNM → PNG（v1.14.2 #3：返回转换统计）
+                got = jobs.pages(job, root)          # 已转 png 的页
                 new = [f for f in got if int(re.search(r"\d+", f).group()) >= start]   # v1.14.2（#10）：页码不限 3 位
                 for f in new:
                     try:
-                        _mk_thumb(job, f)
+                        _mk_thumb(job, f, root)
                     except Exception:
                         pass
                 err = (r.stderr or "").strip()[:300]
@@ -335,9 +350,9 @@ def scan_adf(job):
                     st.update(state="error",
                               msg=err or "未扫描到任何页面，请检查进纸器")
                     return
-                meta = jobs.load(job)
+                meta = jobs.load(job, root)
                 meta["pages"] = len(got)
-                jobs.save(job, meta)
+                jobs.save(job, meta, root)
                 st.update(state="done", msg=f"连续扫描完成，本次 {len(new)} 页")
             except subprocess.TimeoutExpired:
                 st.update(state="error", msg="扫描超时（超过 1 小时）")

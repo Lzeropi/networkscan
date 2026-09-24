@@ -143,6 +143,9 @@ def test_adf_source_whitelist():
         "modes": ["Gray"], "dpi_raw": ["150"], "dpis": ["150"],
         "desc": "", "dpi": "", "scan_type": "", "error": ""}]
     device_probe._cache["ts"] = 1e18
+    # v1.15（#2）：缓存命中条件为 data_ver == ver——仅设 data/ts 不再命中（会强制重探）
+    device_probe._cache["ver"] = 1
+    device_probe._cache["data_ver"] = 1
     p = {"device": "epkowa:", "source_name": "EVIL_SOURCE"}
     cap = next((x for x in device_probe.probe()[0]
                 if x["name"] == p["device"] or x["name"].startswith(p["device"])), None)
@@ -159,7 +162,7 @@ def test_version_consistency():
         import tomli as tomllib
     with open(os.path.join(os.path.dirname(config.__file__), "pyproject.toml"), "rb") as f:
         ver = tomllib.load(f)["project"]["version"]
-    assert config.VERSION == "1.14.8"
+    assert config.VERSION == "1.15"
     assert ver == config.VERSION, "pyproject 版本必须与 config.VERSION 一致"
     # v1.14.3（P2-8）+ v1.14.4（P3-12）+ v1.14.5（P3）：四版本一致断言——README「当前版本」字段曾漏改、
     # 发布包命名也曾跨版本残留，固化成测试防再犯

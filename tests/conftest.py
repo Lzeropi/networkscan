@@ -26,3 +26,6 @@ def isolated_env(tmp_path, monkeypatch):
     scanner.state.clear()
     jobs._job_locks.clear()
     jobs._cleanup_last["ts"] = 0.0   # v1.14.8（F）：重置 cleanup 节流，防跨用例串扰
+    import device_probe
+    device_probe._cache.update(ts=0.0, data=None, ver=0, data_ver=-1)
+    # v1.15（#2）：重置探测缓存版本号状态——旧用例手改 _cache 后不残留，防跨用例串扰

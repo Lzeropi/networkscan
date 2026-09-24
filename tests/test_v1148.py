@@ -65,20 +65,27 @@ def test_open_page_fd_errno_split():
 
 # ---------- C：invalidate 改 dirty 标志（不清缓存，probe 锁内消化） ----------
 def test_invalidate_dirty_flag(monkeypatch):
-    device_probe._cache.update(ts=time.time() - 1, data=[{"name": "old"}], dirty=False)
+    """v1.14.8（C）验证 dirty 标志；v1.15（#2）dirty 布尔改版本号（读+清零元组赋值
+    非原子可覆盖 invalidate 置位），断言随之改版本号语义，旧断言保留意图。"""
+    device_probe._cache.update(ts=time.time() - 1, data=[{"name": "old"}],
+                               ver=3, data_ver=3)
     device_probe.invalidate()
     assert device_probe._cache["data"] == [{"name": "old"}], "C：invalidate 不再直接清缓存"
-    assert device_probe._cache["dirty"] is True, "C：置 dirty 标志"
+    assert device_probe._cache["ver"] == 4, "C/v1.15：invalidate 递增版本号（不消费不清零）"
     calls = []
     real = device_probe.subprocess.run
     monkeypatch.setattr(device_probe.subprocess, "run",
                         lambda cmd, **kw: calls.append(cmd) or type("R", (), {"stdout": "", "stderr": ""})())
     monkeypatch.setattr(device_probe.os.path, "exists", lambda p: True)
     devs, cached = device_probe.probe()
-    assert devs == [], "C：dirty 使缓存强制重探（无设备环境返回空列表而非旧数据）"
-    assert cached is False and calls, "C：dirty 必须触发真实探测"
+    assert devs == [], "C：失效后强制重探（无设备环境返回空列表而非旧数据）"
+    assert cached is False and calls, "C：失效必须触发真实探测"
     monkeypatch.setattr(device_probe.subprocess, "run", real)
-    assert device_probe._cache["dirty"] is False, "C：probe 锁内取走并清零 dirty"
+    assert device_probe._cache["data_ver"] == 4, "v1.15：probe 写入进入时 ver 快照"
+    # 二次 probe 无新失效 → 命中缓存不再探测（语义闭环）
+    calls.clear()
+    devs2, cached2 = device_probe.probe()
+    assert cached2 is True and not calls, "v1.15：无新失效时命中缓存"
 
 
 # ---------- E：admin 配置 mtime 缓存（副本独立 + mtime 变化自动重读） ----------

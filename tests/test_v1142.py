@@ -348,15 +348,18 @@ def test_id_collision_retry(monkeypatch):
 def test_device_probe_invalidate(monkeypatch):
     import device_probe
     monkeypatch.setattr(device_probe, "SCANIMAGE", "/nonexistent/scanimage")   # 避免真跑 scanimage
-    device_probe._cache["data"] = []
-    device_probe._cache["ts"] = time.time()
+    device_probe._cache.update(data=[], ts=time.time(), ver=0, data_ver=0)
+    before = device_probe._cache["ver"]
     device_probe.invalidate()
-    # v1.14.8（C）：invalidate 改为置 dirty 标志（持锁清理会阻塞扫描线程等 25s 探测锁），
-    # 语义等价——下次 probe 强制重探；断言随之改为行为级（不再查 data/ts 清空细节）
-    assert device_probe._cache["dirty"] is True, "#14：invalidate 应置 dirty 标志"
+    # v1.15（#2）：dirty 布尔改版本号——invalidate 只递增 ver（只增不消费，无覆盖窗口），
+    # probe 读快照比对 data_ver；探测中失效 → data_ver 落后 → 下次必重探，永不丢失
+    assert device_probe._cache["ver"] == before + 1, "#14：invalidate 应递增版本号"
+    assert device_probe._cache["data_ver"] == 0, "#14：invalidate 不消费/不清零缓存元数据"
     devs, cached = device_probe.probe()
-    assert cached is False, "#14：dirty 置位后下次 probe 必须强制重探"
-    assert device_probe._cache["dirty"] is False, "#14：probe 锁内应取走 dirty 标志"
+    assert cached is False, "#14：ver 与 data_ver 不等时 probe 必须强制重探"
+    assert device_probe._cache["data_ver"] == before + 1, "#14：probe 应写入进入时 ver 快照"
+    devs2, cached2 = device_probe.probe()
+    assert cached2 is True, "#14：无新失效时命中缓存（不再重探）"
 
 
 # ---------- #15：转换失败 PNM 移入任务目录存活重启 ----------

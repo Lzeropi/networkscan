@@ -31,10 +31,11 @@ def safe_slug(s, maxlen=30):
     return s
 
 
-def next_page_no(job):
+def next_page_no(job, root=None):
     """v1.14.1（P1-9）：下一页编号 = 现有最大编号 + 1（len+1 在文件空洞时会冲突）。
-    v1.14.2（#10）：页码解析不再限 3 位切片，p1000+ 也能算入 max。"""
-    nums = [_page_key(f) for f in raw_pages(job)]
+    v1.14.2（#10）：页码解析不再限 3 位切片，p1000+ 也能算入 max。
+    v1.15（#1）：root 传扫描启动时根快照（worker 路径），扫描期间改路径不致编号错根。"""
+    nums = [_page_key(f) for f in raw_pages(job, root)]
     return max(nums, default=0) + 1
 
 
@@ -110,10 +111,12 @@ def release_job_lock(job):
             e["lock"].release()
 
 
-def validate(job):
+def validate(job, root=None):
+    """v1.15（#1）：root 可选传扫描启动时根快照（worker 路径）——任务名校验/
+    symlink 拒绝/isdir 检查全保留，仅拼路径用快照，扫描期间改路径不致错根。"""
     if not job or not JOB_RE.fullmatch(job) or ".." in job:
         raise JobError("非法任务名")
-    p = os.path.join(get_scan_root(), job)
+    p = os.path.join(root or get_scan_root(), job)
     # v1.14.4（P1）：拒 symlink 任务目录——scan_root 为 Samba 共享时，LAN 可写用户
     # 可造 job -> 外部目录 链接，借 raw/thumb/PDF/ZIP 越权读服务用户可达的任意文件
     if os.path.islink(p):
@@ -123,8 +126,15 @@ def validate(job):
     return p
 
 
+# v1.15（#4）：open_page_fd 报错 errno 细化提示——现场诊断不再千篇一律报 I/O 错误
+_ERRNO_HINT = {errno.ELOOP: "符号链接", errno.ENOENT: "文件不存在或已被删除",
+               errno.EACCES: "无访问权限", errno.EPERM: "无访问权限",
+               errno.EIO: "磁盘 I/O 错误", errno.ENXIO: "设备不存在",
+               errno.EMFILE: "进程 fd 耗尽", errno.ENFILE: "系统 fd 耗尽"}
+
+
 def check_page_safe(base, fname):
-    """v1.14.4（P1）：页面文件安全校验——拒绝 symlink 并验证 realpath 在任务目录内，
+    """页面文件安全校验——拒绝 symlink 并验证 realpath 在任务目录内，
     防 page -> 外部文件 链接越权读（供 raw/thumb/PDF 等文件读取入口调用）。"""
     p = os.path.join(base, fname)
     if os.path.islink(p):
@@ -145,11 +155,14 @@ def open_page_fd(base, fname):
         # O_NONBLOCK 防 FIFO 等特殊文件以读打开阻塞（无写端时卡死）；对普通文件无影响
         fd = os.open(p, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0))
     except OSError as e:
-        # v1.14.8（B）：区分 errno——ELOOP=最终分量是 symlink（被 O_NOFOLLOW 拒），
-        # 其余（ENOENT/EACCES/EIO 等）是真实 I/O 错误，报错不再误导排障
+        # v1.14.8（B）：区分 errno——ELOOP=最终分量是 symlink（被 O_NOFOLLOW 拒）。
+        # v1.15（#4）：细化常见 errno 提示；顺修 v1.14.8 引入的运算符优先级缺陷
+        # （原 `"…" % e.strerror or "I/O 错误"` 先求值 % 再 or，strerror=None 时
+        #   显示「(None)」且回退分支永不生效；or 现移入参数括号内）
         if e.errno == errno.ELOOP:
             raise JobError("非法页面文件（符号链接）")
-        raise JobError("页面文件读取失败（%s）" % e.strerror or "I/O 错误")
+        hint = _ERRNO_HINT.get(e.errno, e.strerror or "I/O 错误")
+        raise JobError("页面文件读取失败（%s）" % hint)
     if not _stat_mod.S_ISREG(os.fstat(fd).st_mode):
         os.close(fd)
         raise JobError("非法页面文件（非普通文件）")
@@ -182,18 +195,19 @@ def path(job):
     return validate(job)
 
 
-def load(job):
+def load(job, root=None):
     try:
-        with open(os.path.join(validate(job), "meta.json"), encoding="utf-8") as f:
+        with open(os.path.join(validate(job, root), "meta.json"), encoding="utf-8") as f:
             return json.load(f)
     except (OSError, json.JSONDecodeError) as e:
         raise JobError(f"无法读取任务：{e}")
 
 
-def save(job, meta):
+def save(job, meta, root=None):
     """v1.14.4（P2）：原子写——临时文件 + fsync + replace，断电/崩溃不再产半截 JSON
-    （半截 meta 会让任务从 UI 直接消失）。"""
-    p = os.path.join(get_scan_root(), job, "meta.json")
+    （半截 meta 会让任务从 UI 直接消失）。
+    v1.15（#1）：root 可选传扫描启动时根快照（worker 路径）。"""
+    p = os.path.join(root or get_scan_root(), job, "meta.json")
     tmp = "%s.tmp.%d" % (p, os.getpid())
     try:
         with open(tmp, "w", encoding="utf-8") as f:
@@ -220,24 +234,37 @@ def set_locked(job, locked):
     save(job, meta)
 
 
-def pages(job):
+def _iter_page_files(job, require_nonempty, root=None):
+    """页面文件公共枚举（v1.15-5）：PAGE_RE 匹配 + symlink 过滤在此统一收口——
+    v1.14.8 曾出现 pages() 补了 symlink 过滤而 raw_pages() 漏同步（A 项），
+    根因是两处各写一遍规则。0 字节占位是否过滤由调用方语义决定：
+    pages() 给用户看完成页须过滤；raw_pages() 供扫描编号防冲突须保留占位。
+    v1.15（#1）：root 可选传扫描启动时根快照（worker 路径）。"""
+    p = validate(job, root)
+    out = []
+    for f in os.listdir(p):
+        fp = os.path.join(p, f)
+        if not PAGE_RE.fullmatch(f) or os.path.islink(fp):
+            continue
+        if require_nonempty and os.path.getsize(fp) <= 0:
+            continue
+        out.append(f)
+    return sorted(out, key=_page_key)
+
+
+def pages(job, root=None):
     """已完成页面（v1.14：过滤 0 字节占位文件，#3）。v1.14.2（#10）：数字序，不限 3 位。
-    v1.14.4（P1）：过滤 symlink 页面——列表层根除链接页，ZIP/PDF/列表下游全安全。"""
-    p = validate(job)
-    fs = [f for f in os.listdir(p)
-          if PAGE_RE.fullmatch(f) and not os.path.islink(os.path.join(p, f))
-          and os.path.getsize(os.path.join(p, f)) > 0]
-    return sorted(fs, key=_page_key)
+    v1.14.4（P1）：过滤 symlink 页面——列表层根除链接页，ZIP/PDF/列表下游全安全。
+    v1.15（#5）：过滤规则收口至 _iter_page_files，与 raw_pages() 不再各写一遍。"""
+    return _iter_page_files(job, True, root)
 
 
-def raw_pages(job):
+def raw_pages(job, root=None):
     """裸页面文件列表（含 0 字节转换中占位，供扫描编号防冲突，v1.14 #3）。
     v1.14.8（A）：与 pages() 一致过滤 symlink 页——幽灵链接页会使 next_page_no 跳号
-    （实测 p999 链接页 → 新页编到 p1000），虽无数据损坏，但编号空洞无谓。"""
-    p = validate(job)
-    return sorted((f for f in os.listdir(p)
-                   if PAGE_RE.fullmatch(f) and not os.path.islink(os.path.join(p, f))),
-                  key=_page_key)
+    （实测 p999 链接页 → 新页编到 p1000），虽无数据损坏，但编号空洞无谓。
+    v1.15（#5）：过滤规则收口至 _iter_page_files。"""
+    return _iter_page_files(job, False, root)
 
 
 def page_pairs(job):
@@ -314,7 +341,11 @@ def cleanup(force=False):
     """v1.10 清理策略（OR 组合：条数/天数/容量任一超限即执行对应清理；锁定任务永不动）。
     返回被删除的任务名列表（供管理页展示报告）。
     v1.14.8（F）：默认 60s 节流（首页高频访问不再每次全量算）；保存策略/调度/测试
-    需要「立即执行」语义时传 force=True。try_delete 自持任务锁，多触发并发无数据风险。"""
+    需要「立即执行」语义时传 force=True。try_delete 自持任务锁，多触发并发无数据风险。
+    v1.15（#3 注记）：节流时间戳为进程内状态——本项目部署形态为单 Waitress 进程
+    （systemd 单实例，deploy/networkscan.service），语义成立；若未来改多进程部署
+    （gunicorn 多 worker 等），节流需改为落盘时间戳（admin_config 或 .cleanup_stamp），
+    在那之前不做无用抽象。"""
     deleted = []
     if not force and time.time() - _cleanup_last["ts"] < 60:
         return deleted
