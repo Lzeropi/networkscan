@@ -1,4 +1,4 @@
-# device_probe.py — v1.14 设备探测公共模块（app.py 与 admin.py 共用，单一缓存）
+# device_probe.py — v1.15.1 设备探测公共模块（app.py 与 admin.py 共用，单一缓存）
 # 背景（#11）：此前普通页与管理页各有一套 scanimage -L/-A 解析实现，字段与超时不一致。
 # 合并为超集字段：name/desc/modes/sources/dpis/dpi_raw/dpi/scan_type/error，
 # app.js 依赖 dpis/modes/sources，admin.js 依赖 dpi_raw/desc/scan_type/error，此超集全覆盖。
