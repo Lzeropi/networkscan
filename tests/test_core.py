@@ -162,7 +162,7 @@ def test_version_consistency():
         import tomli as tomllib
     with open(os.path.join(os.path.dirname(config.__file__), "pyproject.toml"), "rb") as f:
         ver = tomllib.load(f)["project"]["version"]
-    assert config.VERSION == "1.15"
+    assert config.VERSION == "1.15.1"
     assert ver == config.VERSION, "pyproject 版本必须与 config.VERSION 一致"
     # v1.14.3（P2-8）+ v1.14.4（P3-12）+ v1.14.5（P3）：四版本一致断言——README「当前版本」字段曾漏改、
     # 发布包命名也曾跨版本残留，固化成测试防再犯

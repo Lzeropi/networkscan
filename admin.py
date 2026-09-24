@@ -437,7 +437,12 @@ def api_save_config():
 
     # v1.14.3（P1-1）：load→校验→修改→save 全程同锁原子——两个并发保存不再互相覆盖对方的修改
     try:
-        cfg = update_admin_cfg(mutate)
+        # v1.15.1（P2-1，ChatGPT v1.15 审查）：启动闸门——「检查+落盘」与扫描启动段
+        # [快照+写 state] 互斥。序列完备：先拿 guard → 检查时不存在「已启动未写 state」
+        # 的扫描（409 判定完整）；持 guard 落盘期间新扫描启动段排队，落盘后启动的
+        # 扫描快照新根，任务不在新根走 error 兜底——零数据分裂。guard 毫秒级。
+        with scanner._scan_start_guard:
+            cfg = update_admin_cfg(mutate)
     except _Reject as e:
         return e.payload, e.status
     deleted = jobs.cleanup(force=True)

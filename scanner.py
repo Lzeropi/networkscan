@@ -16,6 +16,12 @@ scan_lock = threading.Lock()          # 扫描仪全局独占锁
 state = {}                            # job -> {"state": "scanning|done|error", "msg": str}
 _scan_start_time = None               # 当前扫描开始时间戳（float）
 _scan_job = None                      # 当前正在扫描的任务名
+# v1.15.1（P2-1，ChatGPT v1.15 审查建议）：扫描启动闸门——只覆盖「快照+写 state」
+# 毫秒级启动段，与 admin.save_config 的「检查+落盘」原子段互斥，消除保存瞬间穿插
+# 新扫描的 TOCTOU 残窗（409 判定从此完整）。锁序：scan 侧 jlock→scan_lock→guard；
+# admin 侧 guard→admin_cfg_lock——无交叉持有，无死锁。guard 从不覆盖扫描 body
+# （最长 300s），保存配置永不等待扫描完成。
+_scan_start_guard = threading.Lock()
 
 VALID_DPI = {"75", "150", "200", "300", "400", "600", "1200", "2400"}
 VALID_MODE = {"Color", "Gray", "Lineart"}  # 完整模式集；实际支持由 scanimage -A 探测后前端动态过滤
@@ -148,9 +154,10 @@ def scan_flatbed(job):
 
     v1.14.7：锁取得后立即进入统一 finally 生命周期；next_page_no/mkstemp
     等初始化步骤发生异常时也必须释放 scan_lock + job_lock，不能留下永久 busy。
+    v1.15.1：_params 移入锁生命周期（ChatGPT 建议 P3-1）；启动闸门使「快照+写
+    state」与 save_config 的「检查+落盘」互斥，保存配置真正原子（P2-1）。
     """
     global _scan_start_time, _scan_job
-    p = _params(job)
 
     jlock = jobs.job_lock(job)
     scan_acquired = False
@@ -162,21 +169,23 @@ def scan_flatbed(job):
 
     jlock.acquire()
     try:
+        p = _params(job)   # v1.15.1（P3-1）：移入锁生命周期——异常统一收尾，未来加逻辑不需重找 finally
         if not scan_lock.acquire(blocking=False):
             busy_job = _scan_job or ""
             elapsed = int(time.time() - _scan_start_time) if _scan_start_time else 0
             raise RuntimeError("设备忙，%s 正在扫描（已用 %d 秒），请稍后再试" % (busy_job, elapsed))
         scan_acquired = True
 
-        # v1.15（#1）：锁内立即快照存储根——保存配置的 409 检查看 state，快照先于
-        # state 写入：保存线程在快照后穿过检查窗 → worker 全程用旧根完整落盘（本次
-        # 保存不生效，下次生效）；在快照前穿过 → 快照即新根，open 占位失败被忽略、
-        # convert error 兜底 PNM 保留，无数据损坏。两种序列均不再产生任务分裂。
-        root = get_scan_root()
+        # v1.15（#1）：锁内立即快照存储根——worker 全程用快照，扫描期间改根不再分裂
+        # 任务数据（保存线程穿过检查窗 → 本批完整落旧根，无数据损坏）。
+        # v1.15.1（P2-1）：启动闸门——[快照+写 state] 与 save_config「检查+落盘」
+        # 原子互斥，保存瞬间不再穿插新扫描，409 判定完整；guard 仅毫秒级，不阻塞扫描 body。
+        with _scan_start_guard:
+            root = get_scan_root()
+            st = state.setdefault(job, {})
+            st.update(state="scanning", msg="平板扫描中…")
 
         # 从取得两把锁开始，所有可能抛异常的初始化与扫描代码都在 finally 保护内。
-        st = state.setdefault(job, {})
-        st.update(state="scanning", msg="平板扫描中…")
         n = jobs.next_page_no(job, root)
         fname = f"p{n:03d}.png"
         out = os.path.join(root, job, fname)
@@ -294,14 +303,16 @@ def scan_adf(job):
         # （Samba 可写场景真实可能）会让 worker 线程直接死亡，try/finally 不进入，
         # scan_lock/job_lock 永久泄漏（实测复现：全部扫描 busy + 任务死锁，不重启无解）
         st = state.setdefault(job, {})
-        # v1.15（#1）：worker 全程用启动时根快照——ADF 转换/缩略图/meta 均落旧根，
-        # 扫描期间改存储路径不再分裂任务数据（快照后改路径 → 本批落旧根完整闭环）
-        root = get_scan_root()
         try:
-            p = _params(job)
-            _scan_start_time = time.time()
-            _scan_job = job
-            st.update(state="scanning", msg="ADF 连续扫描中…")
+            # v1.15.1（P2-1）：启动闸门——[快照+写 state] 与 save_config「检查+落盘」互斥
+            # （毫秒级，ADF 批量 body 在 guard 外）；v1.15（#1）：worker 全程根快照——
+            # 扫描期间改存储路径不再分裂任务数据（本批完整落旧根）
+            with _scan_start_guard:
+                root = get_scan_root()
+                p = _params(job)
+                _scan_start_time = time.time()
+                _scan_job = job
+                st.update(state="scanning", msg="ADF 连续扫描中…")
             start = jobs.next_page_no(job, root)   # v1.14.1（P1-9）：max+1 防空洞编号冲突
             pat = os.path.join(root, job, "p%03d.pnm")
             source = p.get("source_name") or SCAN_SOURCE  # 优先用探测到的源名，其次配置回退
