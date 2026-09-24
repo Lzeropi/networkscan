@@ -137,40 +137,49 @@ def _mk_thumb(job, fname):
 
 
 def scan_flatbed(job):
-    """平板单页扫描：scanimage 输出 PNM 到 /tmp 后立即释放锁，
-    convert+缩略图在后台线程执行，不阻塞下一次扫描。
-    扫描仪忙时立即返回提示，不阻塞等待。"""
+    """平板单页扫描：scanimage 输出 PNM 到 /tmp，扫描阶段持有两把锁，
+    扫描成功后由后台线程完成 convert+缩略图。
+
+    v1.14.7：锁取得后立即进入统一 finally 生命周期；next_page_no/mkstemp
+    等初始化步骤发生异常时也必须释放 scan_lock + job_lock，不能留下永久 busy。
+    """
     global _scan_start_time, _scan_job
     p = _params(job)
-    # v1.14.2（P0-2）：锁顺序统一 job_lock → scan_lock——先拿生命周期锁再试扫描仪锁，
-    # 杜绝「拿到 scan_lock、尚未拿到 job_lock」期间 DELETE 删掉任务目录的竞态窗口
-    jlock = jobs.job_lock(job)
-    jlock.acquire()
-    if not scan_lock.acquire(blocking=False):
-        jlock.release()          # 忙则立即释放生命周期锁
-        busy_job = _scan_job or ""
-        elapsed = int(time.time() - _scan_start_time) if _scan_start_time else 0
-        raise RuntimeError("设备忙，%s 正在扫描（已用 %d 秒），请稍后再试" % (busy_job, elapsed))
-    # v1.14：平板扫描也写 state，扫描+转换期间 delete/reorder/cleanup 可感知（#1）
-    st = state.setdefault(job, {})
-    st.update(state="scanning", msg="平板扫描中…")
-    n = jobs.next_page_no(job)        # v1.14.1（P1-9）：max+1 防空洞编号冲突
-    fname = f"p{n:03d}.png"
-    out = os.path.join(get_scan_root(), job, fname)
-    # v1.14.6：mkstemp 唯一化中转文件名——旧版可预测的 /tmp/scanweb_{job}_{n}.pnm 可被
-    # 本地其他 shell 用户预创建同名 symlink，扫描写入跟随链接覆盖任意可写文件
-    _fd, tmp = tempfile.mkstemp(prefix=f"scanweb_{job}_{n:03d}_", suffix=".pnm")
-    os.close(_fd)   # 占位 fd 关闭，subprocess 自行创建写入
 
-    # 阶段 1 全部包入：任何异常都必须释放 jlock，防锁泄漏（v1.14.1 P1-3）
+    jlock = jobs.job_lock(job)
+    scan_acquired = False
+    handoff = False
+    tmp = None
+    out = None
+    fname = None
+    st = None
+
+    jlock.acquire()
     try:
+        if not scan_lock.acquire(blocking=False):
+            busy_job = _scan_job or ""
+            elapsed = int(time.time() - _scan_start_time) if _scan_start_time else 0
+            raise RuntimeError("设备忙，%s 正在扫描（已用 %d 秒），请稍后再试" % (busy_job, elapsed))
+        scan_acquired = True
+
+        # 从取得两把锁开始，所有可能抛异常的初始化与扫描代码都在 finally 保护内。
+        st = state.setdefault(job, {})
+        st.update(state="scanning", msg="平板扫描中…")
+        n = jobs.next_page_no(job)
+        fname = f"p{n:03d}.png"
+        out = os.path.join(get_scan_root(), job, fname)
+
+        # v1.14.6：mkstemp 唯一化中转文件名——旧版可预测的 /tmp/scanweb_{job}_{n}.pnm 可被
+        # 本地其他 shell 用户预创建同名 symlink，扫描写入跟随链接覆盖任意可写文件
+        _fd, tmp = tempfile.mkstemp(prefix=f"scanweb_{job}_{n:03d}_", suffix=".pnm")
+        os.close(_fd)
+
         # 预占位：先创建空的 .png 占位文件，前端能看到"正在转换"状态
         try:
             open(out, "wb").close()
         except OSError:
             pass
 
-        # 阶段 1：scanimage 扫描（持锁）
         scan_error = None
         try:
             _scan_start_time = time.time()
@@ -182,59 +191,76 @@ def scan_flatbed(job):
             except subprocess.CalledProcessError as e:
                 err = (e.stderr or b"").decode(errors="ignore").strip()
                 scan_error = err[:300] or f"命令退出码 {e.returncode}"
-            # v1.14.4（P1）：其余异常（TimeoutExpired/OSError/文件错误）同样必须落到
-            # error 收尾——此前直接走 BaseException 抛出，state 永久卡 "scanning"，
-            # 任务删除/排序被 409 死锁
             except subprocess.TimeoutExpired:
                 scan_error = "扫描超时（300 秒），设备可能卡死"
             except OSError as e:
                 scan_error = "扫描失败：%s" % str(e)[:250]
             except Exception as e:
                 scan_error = "扫描异常：%s" % str(e)[:250]
-            if scan_error:
-                _rm(tmp)
-                _rm(out)                       # 清理占位文件
         finally:
             _scan_job = None
             _scan_start_time = None
             scan_lock.release()
-    except BaseException:
-        jlock.release()
-        raise
+            scan_acquired = False
 
-    if scan_error:
-        st.update(state="error", msg=scan_error)
-        jlock.release()               # v1.14.1（P1-3）：阶段 1 失败路径释放
-        raise RuntimeError(scan_error)
+        if scan_error:
+            _rm(tmp)
+            tmp = None
+            _rm(out)
+            st.update(state="error", msg=scan_error)
+            raise RuntimeError(scan_error)
 
-    # 阶段 2：后台转换 PNM → PNG + 缩略图（不持锁，不阻塞下一次扫描）
-    def _convert_worker():
-        try:
-            subprocess.run([CONVERT, tmp, out], stderr=subprocess.PIPE,
-                           timeout=CONVERT_CMD_TIMEOUT, check=True)
-            _mk_thumb(job, fname)
-            meta = jobs.load(job)
-            meta["pages"] = len(jobs.pages(job))
-            jobs.save(job, meta)
-            st.update(state="done", msg="扫描完成：%s" % fname)   # v1.14：转换收尾才置 done（#1）
-            _rm(tmp)                  # v1.14.1（P1-4）：转换成功才删源 PNM
-        except Exception:
-            # v1.14.2（#15）：失败 PNM 移入任务目录存活服务重启（/tmp 里的会被启动清理删掉），
-            # 文件名与页面同号，可用 convert 手动重转；不再谎称「待重试」却无重试入口
-            bak = tmp
+        def _convert_worker():
+            nonlocal tmp
             try:
-                dst = os.path.join(get_scan_root(), job, fname[:-4] + ".pnm")
-                os.replace(tmp, dst)
-                bak = dst
-            except OSError:
-                pass
-            st.update(state="error",
-                      msg="后台转换失败：%s，原始数据已保留（%s），可用 convert 手动重转" % (fname, bak))
-        finally:
-            jlock.release()           # v1.14.1（P1-3）：转换收尾（含失败）释放生命周期锁
+                subprocess.run([CONVERT, tmp, out], stderr=subprocess.PIPE,
+                               timeout=CONVERT_CMD_TIMEOUT, check=True)
+                _mk_thumb(job, fname)
+                meta = jobs.load(job)
+                meta["pages"] = len(jobs.pages(job))
+                jobs.save(job, meta)
+                st.update(state="done", msg="扫描完成：%s" % fname)
+                _rm(tmp)
+                tmp = None
+            except Exception:
+                bak = tmp
+                try:
+                    dst = os.path.join(get_scan_root(), job, fname[:-4] + ".pnm")
+                    os.replace(tmp, dst)
+                    bak = dst
+                    tmp = None
+                except OSError:
+                    pass
+                st.update(state="error",
+                          msg="后台转换失败：%s，原始数据已保留（%s），可用 convert 手动重转" % (fname, bak))
+            finally:
+                jlock.release()
 
-    threading.Thread(target=_convert_worker, daemon=True).start()
-    return fname
+        try:
+            threading.Thread(target=_convert_worker, daemon=True).start()
+            handoff = True
+        except BaseException:
+            _rm(tmp)
+            tmp = None
+            _rm(out)
+            st.update(state="error", msg="后台转换线程启动失败")
+            raise
+
+        return fname
+
+    except BaseException as e:
+        if st is not None and st.get("state") == "scanning":
+            st.update(state="error", msg="扫描初始化失败：%s" % str(e)[:250])
+        raise
+    finally:
+        if scan_acquired:
+            scan_lock.release()
+            _scan_job = None
+            _scan_start_time = None
+        if not handoff:
+            if tmp:
+                _rm(tmp)
+            jlock.release()
 
 
 def scan_adf(job):

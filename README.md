@@ -15,7 +15,7 @@ AIGC:
 
 | 项目信息 | 说明 |
 |---|---|
-| 当前版本 | v1.14.6 |
+| 当前版本 | v1.14.7 |
 | 适配硬件 | hi3798mv100 机顶盒（ARM32/armhf）或其他 Linux 小主机 |
 | 适配系统 | Ubuntu 20.04 (focal) / Python 3.8+ |
 | 主要设备 | HP LaserJet M1005（其他 SANE 兼容扫描仪亦可） |
@@ -131,11 +131,11 @@ df -h /
 
 ```bash
 # 本机执行（传压缩包到盒子，版本号以实际发布为准）
-scp scanweb-v1.14.6.tar.gz root@192.168.1.203:/opt/network_scan_service/
+scp scanweb-v1.14.7.tar.gz root@192.168.1.203:/opt/network_scan_service/
 # 盒子上执行（首次安装）
 cd /opt/network_scan_service
-tar xzf scanweb-v1.14.6.tar.gz --strip-components=1
-rm -f scanweb-v1.14.6.tar.gz .python-version
+tar xzf scanweb-v1.14.7.tar.gz --strip-components=1
+rm -f scanweb-v1.14.7.tar.gz .python-version
 ```
 
 ### 第三步：安装编译依赖并安装 Python 包
@@ -393,7 +393,7 @@ webscan version             # 查看当前版本
 
 ```bash
 # 1. 本机上传新版本包（版本号以实际发布为准）
-scp scanweb-v1.14.6.tar.gz root@192.168.1.203:/opt/network_scan_service/
+scp scanweb-v1.14.7.tar.gz root@192.168.1.203:/opt/network_scan_service/
 
 # 2. SSH 登录盒子
 ssh root@192.168.1.203
@@ -412,7 +412,7 @@ webscan update
 - **次版本递增**（v1.14 → v1.15）：bug 修复、小功能改进、配置调整；补丁号（v1.14.1 → v1.14.2）用于审计/回归修复版
 - **主版本递增**（v1.x → v2.0）：架构性改动、不兼容升级（需重新安装依赖或迁移数据）
 - **版本号写入位置**：`config.py` 的 `VERSION` 变量、`pyproject.toml`、README 版本表、git tag
-- **发布包命名**：`scanweb-v1.14.6.tar.gz`（`webscan update` 按此模式自动检测）
+- **发布包命名**：`scanweb-v1.14.7.tar.gz`（`webscan update` 按此模式自动检测）
 
 ### 更新包内容约定
 
