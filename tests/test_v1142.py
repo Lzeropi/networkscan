@@ -345,13 +345,18 @@ def test_id_collision_retry(monkeypatch):
 
 
 # ---------- #14：探测缓存失效钩子 ----------
-def test_device_probe_invalidate():
+def test_device_probe_invalidate(monkeypatch):
     import device_probe
+    monkeypatch.setattr(device_probe, "SCANIMAGE", "/nonexistent/scanimage")   # 避免真跑 scanimage
     device_probe._cache["data"] = []
     device_probe._cache["ts"] = time.time()
     device_probe.invalidate()
-    assert device_probe._cache["data"] is None and device_probe._cache["ts"] == 0.0, \
-        "#14：invalidate 必须使下次 probe 强制重探"
+    # v1.14.8（C）：invalidate 改为置 dirty 标志（持锁清理会阻塞扫描线程等 25s 探测锁），
+    # 语义等价——下次 probe 强制重探；断言随之改为行为级（不再查 data/ts 清空细节）
+    assert device_probe._cache["dirty"] is True, "#14：invalidate 应置 dirty 标志"
+    devs, cached = device_probe.probe()
+    assert cached is False, "#14：dirty 置位后下次 probe 必须强制重探"
+    assert device_probe._cache["dirty"] is False, "#14：probe 锁内应取走 dirty 标志"
 
 
 # ---------- #15：转换失败 PNM 移入任务目录存活重启 ----------

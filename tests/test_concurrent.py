@@ -31,7 +31,7 @@ def test_cleanup_skips_job_holding_lock():
     config.save_admin_cfg(cfg)
     lk = jobs.job_lock(new)
     assert lk.acquire(blocking=False)
-    deleted = jobs.cleanup()
+    deleted = jobs.cleanup(force=True)
     assert old in deleted and new not in deleted, "持锁任务必须被保护，超限任务照删"
     lk.release()
     assert jobs.cleanup() == []       # 剩 1 个未超限，不应再删

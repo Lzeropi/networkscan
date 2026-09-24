@@ -25,3 +25,4 @@ def isolated_env(tmp_path, monkeypatch):
     yield
     scanner.state.clear()
     jobs._job_locks.clear()
+    jobs._cleanup_last["ts"] = 0.0   # v1.14.8（F）：重置 cleanup 节流，防跨用例串扰

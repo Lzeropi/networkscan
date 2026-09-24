@@ -161,7 +161,7 @@ def test_state_cleared_after_auto_cleanup():
     cfg["cleanup"]["max_jobs"] = 1
     config.save_admin_cfg(cfg)
     jobs.create("占位")          # 2 个任务超限（max_jobs=1），cleanup 必删其一
-    deleted = jobs.cleanup()
+    deleted = jobs.cleanup(force=True)
     assert deleted, "超限必须触发删除"
     # P2-6 语义断言：无论 cleanup 删的是哪个（同秒创建时删除顺序由名字序决定），
     # 被删任务的 state 条目必须同步清理——dict 不再无限增长

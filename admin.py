@@ -369,6 +369,11 @@ def api_save_config():
         # 1) 扫描存储路径
         new_root = str(d.get("scan_root", "")).strip()
         if new_root:
+            # v1.14.8（G）：改路径前查有无任务在扫——在扫任务的转换 worker 用新根拼旧任务
+            # 路径，PNM 归档/缩略图会失败（error 兜底不丢数据，但任务白扫）；防呆优先。
+            # 检查后新扫描仍可启动（TOCTOU 残窗），但窗口从「任意时刻」收窄到「保存瞬间」
+            if any(st.get("state") == "scanning" for st in scanner.state.values()):
+                raise _Reject(jsonify(ok=False, msg="有任务正在扫描/转换，请等待完成后再修改存储路径"), 409)
             if not os.path.isabs(new_root):
                 raise _Reject(jsonify(ok=False, msg="请输入绝对路径（以 / 开头）"), 400)
             if _root_blocked(new_root):   # v1.14：拒绝系统目录（#13）
@@ -435,7 +440,7 @@ def api_save_config():
         cfg = update_admin_cfg(mutate)
     except _Reject as e:
         return e.payload, e.status
-    deleted = jobs.cleanup()
+    deleted = jobs.cleanup(force=True)
     return jsonify(ok=True, scan_root=get_scan_root(),
                    cleanup=cfg["cleanup"],
                    device_alias=cfg.get("device_alias", {}),

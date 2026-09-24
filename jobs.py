@@ -1,3 +1,4 @@
+import errno
 import json
 import os
 import re
@@ -143,8 +144,12 @@ def open_page_fd(base, fname):
     try:
         # O_NONBLOCK 防 FIFO 等特殊文件以读打开阻塞（无写端时卡死）；对普通文件无影响
         fd = os.open(p, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0))
-    except OSError:
-        raise JobError("非法页面文件（符号链接）")
+    except OSError as e:
+        # v1.14.8（B）：区分 errno——ELOOP=最终分量是 symlink（被 O_NOFOLLOW 拒），
+        # 其余（ENOENT/EACCES/EIO 等）是真实 I/O 错误，报错不再误导排障
+        if e.errno == errno.ELOOP:
+            raise JobError("非法页面文件（符号链接）")
+        raise JobError("页面文件读取失败（%s）" % e.strerror or "I/O 错误")
     if not _stat_mod.S_ISREG(os.fstat(fd).st_mode):
         os.close(fd)
         raise JobError("非法页面文件（非普通文件）")
@@ -226,9 +231,13 @@ def pages(job):
 
 
 def raw_pages(job):
-    """裸页面文件列表（含 0 字节转换中占位，供扫描编号防冲突，v1.14 #3）。"""
+    """裸页面文件列表（含 0 字节转换中占位，供扫描编号防冲突，v1.14 #3）。
+    v1.14.8（A）：与 pages() 一致过滤 symlink 页——幽灵链接页会使 next_page_no 跳号
+    （实测 p999 链接页 → 新页编到 p1000），虽无数据损坏，但编号空洞无谓。"""
     p = validate(job)
-    return sorted((f for f in os.listdir(p) if PAGE_RE.fullmatch(f)), key=_page_key)
+    return sorted((f for f in os.listdir(p)
+                   if PAGE_RE.fullmatch(f) and not os.path.islink(os.path.join(p, f))),
+                  key=_page_key)
 
 
 def page_pairs(job):
@@ -297,10 +306,19 @@ def dir_size(p):
     return total
 
 
-def cleanup():
+_cleanup_last = {"ts": 0.0}   # v1.14.8（F）：cleanup 60s 节流——首页每次访问都全量计算清理策略
+                             # （list_jobs×2 + 容量段 dir_size 全目录 walk），任务多时首页变慢
+
+
+def cleanup(force=False):
     """v1.10 清理策略（OR 组合：条数/天数/容量任一超限即执行对应清理；锁定任务永不动）。
-    返回被删除的任务名列表（供管理页展示报告）。"""
+    返回被删除的任务名列表（供管理页展示报告）。
+    v1.14.8（F）：默认 60s 节流（首页高频访问不再每次全量算）；保存策略/调度/测试
+    需要「立即执行」语义时传 force=True。try_delete 自持任务锁，多触发并发无数据风险。"""
     deleted = []
+    if not force and time.time() - _cleanup_last["ts"] < 60:
+        return deleted
+    _cleanup_last["ts"] = time.time()
     cfg = get_cleanup_cfg()
     max_jobs, max_age_days, max_total_mb = cfg["max_jobs"], cfg["max_age_days"], cfg["max_total_mb"]
     if not any([max_jobs, max_age_days, max_total_mb]):

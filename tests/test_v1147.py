@@ -17,6 +17,9 @@ def _mk_job():
 
 def _assert_locks_released(name):
     assert not scanner.scan_lock.locked(), "P1：初始化异常后 scan_lock 必须释放"
+    # v1.14.8（D）：条目回收断言移到新建引用之前——原断言在自己 release 后恒真，
+    # 未验证「异常收尾后条目已被自动回收」（v1.14.5 refs 机制的自然效果）
+    assert name not in jobs._job_locks, "P1：异常收尾后锁 registry 应已自动回收（refs 归零）"
     handle = jobs.job_lock(name)
     try:
         assert handle.acquire(False), "P1：初始化异常后 job_lock 必须立即可获取"
@@ -27,7 +30,7 @@ def _assert_locks_released(name):
         except Exception:
             pass
         raise
-    assert name not in jobs._job_locks, "P1：异常收尾后任务锁 registry 应自动回收"
+    assert name not in jobs._job_locks, "P1：断言后条目应再次自动回收"
 
 
 def test_flatbed_mkstemp_exception_releases_both_locks(monkeypatch):

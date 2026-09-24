@@ -1,3 +1,4 @@
+import copy
 import json
 import os
 import secrets
@@ -13,9 +14,8 @@ PORT = int(os.environ.get("SCANWEB_PORT", "9203"))
 TOKEN = os.environ.get("SCANWEB_TOKEN", "")           # 空 = 不启用登录
 SECRET = os.environ.get("SCANWEB_SECRET") or secrets.token_hex(32)
 
-# 存储保护（0 = 关闭）：目录总配额（字节）、任务保留天数，超限自动删最旧任务
-MAX_TOTAL_BYTES = int(os.environ.get("SCAN_MAX_TOTAL_BYTES", "0"))
-MAX_AGE_DAYS = int(os.environ.get("SCAN_MAX_AGE_DAYS", "0"))
+# 存储保护：MAX_TOTAL_BYTES/MAX_AGE_DAYS 环境变量已废弃（v1.14.8 清理：全项目零使用点，
+# 实际清理策略走管理页 admin_config.json 的 max_jobs/max_age_days/max_total_mb，见 get_cleanup_cfg）
 MAX_PDF_PAGES = int(os.environ.get("SCANWEB_MAX_PDF_PAGES", "20"))  # PDF 合成页数上限，超限拒绝（防 OOM）
 MAX_PDF_MEM = int(os.environ.get("SCANWEB_MAX_PDF_MEM", str(512 * 1024 * 1024)))  # v1.14：PDF 合成预估内存上限（字节，#5）
 
@@ -26,11 +26,12 @@ SCANIMAGE = os.environ.get("SCANIMAGE", shutil.which("scanimage") or "/usr/bin/s
 CONVERT = os.environ.get("CONVERT_BIN", shutil.which("convert") or "/usr/bin/convert")
 
 # ---------------- v1.10 管理页配置（admin_config.json，优先级高于环境变量） ----------------
-VERSION = "1.14.7"
+VERSION = "1.14.8"
 ADMIN_CFG_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "admin_config.json")
 
 # v1.14.2（#5）：配置保存进程级锁——waitress 8 线程下并发保存会互相覆盖临时文件或丢更新
 _admin_cfg_lock = threading.Lock()
+_cfg_cache = {"key": None, "cfg": None}   # v1.14.8（E）：load_admin_cfg 的 mtime 缓存
 
 # 默认值：scan_root 为空表示沿用环境变量/内置默认；三项清理策略 0 = 不启用
 ADMIN_CFG_DEFAULT = {
@@ -43,8 +44,20 @@ ADMIN_CFG_DEFAULT = {
 
 
 def load_admin_cfg():
-    """读取管理配置文件；损坏/不存在时返回默认副本（不落盘）。"""
+    """读取管理配置文件；损坏/不存在时返回默认副本（不落盘）。
+    v1.14.8（E）：mtime+size 缓存——get_scan_root 每次请求都读盘+chmod，调用点遍布每条路由
+    （ARM eMMC IO 放大）。key 含路径（测试每用例切 ADMIN_CFG_PATH 不会串）；命中返回
+    deepcopy，防 update_admin_cfg 的 mutator 改动缓存后 _Reject 中途退出污染内存态。
+    外部手动改文件 → mtime/size 变 → 自动重读；save 后置失效。"""
+    try:
+        st = os.stat(ADMIN_CFG_PATH)
+        key = (ADMIN_CFG_PATH, st.st_mtime_ns, st.st_size)
+        if _cfg_cache["key"] == key:
+            return copy.deepcopy(_cfg_cache["cfg"])
+    except OSError:
+        key = None   # 文件不存在：走默认分支，不缓存
     # v1.14.2（#8）：补齐历史文件权限——配置含 PIN 哈希，应仅服务用户可读
+    # （v1.14.8：随缓存 miss 才 chmod，mtime 不变则不再重复 chmod 系统调用）
     try:
         os.chmod(ADMIN_CFG_PATH, 0o600)
     except OSError:
@@ -65,7 +78,8 @@ def load_admin_cfg():
             out["scan_defaults"] = raw_sd
         else:
             out["scan_defaults"] = {}
-        return out
+        _cfg_cache["key"], _cfg_cache["cfg"] = key, out
+        return copy.deepcopy(out)
     except (OSError, ValueError, TypeError):
         return {k: (dict(v) if isinstance(v, dict) else v) for k, v in ADMIN_CFG_DEFAULT.items()}
 
@@ -89,6 +103,7 @@ def _save_admin_cfg_unlocked(cfg):
         os.chmod(tmp, 0o600)
         os.replace(tmp, ADMIN_CFG_PATH)
     finally:
+        _cfg_cache["key"] = None   # v1.14.8（E）：写盘后失效缓存，下次 load 重读
         try:
             if os.path.exists(tmp):
                 os.remove(tmp)

@@ -80,12 +80,12 @@ def test_cleanup_skips_active_job():
     cfg["cleanup"]["max_jobs"] = 1
     config.save_admin_cfg(cfg)
     scanner.state[new] = {"state": "scanning", "msg": "扫描中"}
-    deleted = jobs.cleanup()
+    deleted = jobs.cleanup(force=True)
     assert old in deleted, "超限的最旧任务应被清理"
     assert new not in deleted, "扫描中任务不能被清理"
     scanner.state.clear()
     # 剩 1 个任务未超 max_jobs=1，不应再删；active 保护解除后语义仍正确
-    assert jobs.cleanup() == [], "未超限时不应清理"
+    assert jobs.cleanup(force=True) == [], "未超限时不应清理"
     cfg["cleanup"]["max_jobs"] = 0
     config.save_admin_cfg(cfg)
 
@@ -159,7 +159,7 @@ def test_version_consistency():
         import tomli as tomllib
     with open(os.path.join(os.path.dirname(config.__file__), "pyproject.toml"), "rb") as f:
         ver = tomllib.load(f)["project"]["version"]
-    assert config.VERSION == "1.14.7"
+    assert config.VERSION == "1.14.8"
     assert ver == config.VERSION, "pyproject 版本必须与 config.VERSION 一致"
     # v1.14.3（P2-8）+ v1.14.4（P3-12）+ v1.14.5（P3）：四版本一致断言——README「当前版本」字段曾漏改、
     # 发布包命名也曾跨版本残留，固化成测试防再犯

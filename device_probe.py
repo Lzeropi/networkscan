@@ -10,15 +10,17 @@ import time
 
 from config import SCANIMAGE
 
-_cache = {"ts": 0.0, "data": None}
+_cache = {"ts": 0.0, "data": None, "dirty": False}
 _CACHE_SEC = 300          # 5 分钟缓存，与 v1.13 行为一致
 _probe_lock = threading.Lock()   # v1.14.6：并发 miss 去重——避免 waitress 多线程同时跑多个 scanimage -L/-A
 
 
 def invalidate():
     """v1.14.2（#14）：失效钩子——scanner._resolve_device 解析不到设备时调用，
-    下次 probe() 强制重探。USB 重插后 UI 列表与实际扫描解析经此恢复一致。"""
-    _cache["data"], _cache["ts"] = None, 0.0
+    下次 probe() 强制重探。USB 重插后 UI 列表与实际扫描解析经此恢复一致。
+    v1.14.8（C）：改置 dirty 标志而非直接清缓存——若持锁清理，扫描线程恰逢 probe
+    在跑（-L/-A 各最长 25s）会阻塞等锁；置位后由 probe 锁内取走并强制重探，语义等价。"""
+    _cache["dirty"] = True
 
 
 def probe(force=False):
@@ -28,8 +30,9 @@ def probe(force=False):
     前端 app.js/admin.js 各有 fallback 默认值。超时取 ARM 慢值 25s。"""
     with _probe_lock:   # v1.14.6：锁内二次查缓存——并发 miss 时首个线程探测完写缓存，
         # 等待线程复用结果，不再各自跑一遍 scanimage（waitress 8 线程上限下避免进程风暴）
+        dirty, _cache["dirty"] = _cache["dirty"], False   # v1.14.8（C）：锁内取走失效标志
         now = time.time()
-        if not force and _cache["data"] is not None and now - _cache["ts"] < _CACHE_SEC:
+        if not force and not dirty and _cache["data"] is not None and now - _cache["ts"] < _CACHE_SEC:
             return _cache["data"], True
         devs = []
         if os.path.exists(SCANIMAGE):
