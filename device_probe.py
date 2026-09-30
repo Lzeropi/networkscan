@@ -84,4 +84,24 @@ def probe(force=False):
             except Exception:
                 pass
         _cache["data"], _cache["ts"], _cache["data_ver"] = devs, now, ver
+        _sync_resolve_cache(devs, now)
         return devs, False
+
+
+def _sync_resolve_cache(devs, now):
+    """v1.15.1 性能优化：probe 跑完 -L 后，把结果同步喂给 scanner._dev_cache——
+    用户操作必然是「开首页 → /api/devices（触发 probe）→ 进任务 → 点扫描」，
+    首页 probe 已拿到完整设备名，点扫描时 _resolve_device 命中缓存零等待。
+    缓存 TTL 与 _dev_cache 原有 60s 对齐；过期后下次扫描仍自跑 -L（fallback 安全）。
+    USB 重插：invalidate 钩子（v1.14.2 #14）失效 probe 缓存 → 下次 probe 重探 →
+    本函数同步更新 _dev_cache → 扫描链路自动恢复，安全机制不破。"""
+    try:
+        import scanner
+        c = scanner.__dict__.setdefault("_dev_cache", {})
+        for d in devs:
+            name = d.get("name", "")
+            if ":" in name:
+                backend = name.split(":", 1)[0]
+                c[backend] = (now + 60, name)
+    except Exception:
+        pass   # scanner 未导入（测试环境等）时静默跳过，不影响 probe 本身

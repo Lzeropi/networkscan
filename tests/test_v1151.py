@@ -261,3 +261,35 @@ def test_two_scans_same_job(tmp_path):
     if ok1:
         scanner.scan_lock.release()
     assert ok1, "并发扫描结束后 scan_lock 必须可获取"
+
+
+# ---------- 性能优化：probe 预热 _resolve_device 缓存 ----------
+def test_probe_warms_resolve_cache(monkeypatch):
+    """probe() 完成后应同步填充 scanner._dev_cache，使 _resolve_device 命中缓存零等待"""
+    import device_probe
+    scanner._dev_cache = {}   # 清空，确保从冷开始
+    # 假装 probe 跑完 -L 返回一台设备
+    monkeypatch.setattr(device_probe.os.path, "exists", lambda p: True)
+    monkeypatch.setattr(device_probe.subprocess, "run",
+                        lambda cmd, **kw: type("R", (), {
+                            "stdout": "device `hpljm1005:libusb:001:005' is a HP M1005\n",
+                            "stderr": ""})() if "-L" in cmd
+                        else type("R", (), {"stdout": "", "stderr": ""})())
+    device_probe._cache.update(ts=0.0, data=None, ver=0, data_ver=-1)
+    devs, cached = device_probe.probe()
+    assert not cached and devs, "probe 应返回探测结果"
+    # 核心断言：_dev_cache 已被预热
+    assert "hpljm1005" in scanner._dev_cache, "probe 后 _dev_cache 必须含 hpljm1005 键"
+    expiry, full_name = scanner._dev_cache["hpljm1005"]
+    assert full_name == "hpljm1005:libusb:001:005", "缓存值应为完整设备名"
+    assert expiry > time.time(), "TTL 应在未来"
+    # _resolve_device 命中缓存——不再跑 scanimage -L
+    calls = []
+    real_run = scanner.subprocess.run
+    monkeypatch.setattr(scanner.subprocess, "run",
+                        lambda cmd, **kw: calls.append(cmd) or type("R", (), {
+                            "stdout": "device `x' is a x\n", "stderr": ""})())
+    result = scanner._resolve_device("hpljm1005:")
+    assert result == "hpljm1005:libusb:001:005", "应返回缓存的完整名"
+    assert not calls, "_resolve_device 命中缓存时不得跑 scanimage -L，实际跑了 %s" % calls
+    monkeypatch.setattr(scanner.subprocess, "run", real_run)
