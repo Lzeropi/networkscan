@@ -16,6 +16,12 @@ scan_lock = threading.Lock()          # 扫描仪全局独占锁
 state = {}                            # job -> {"state": "scanning|done|error", "msg": str}
 _scan_start_time = None               # 当前扫描开始时间戳（float）
 _scan_job = None                      # 当前正在扫描的任务名
+# v1.15.1-tmp04：转换中页登记——锁分段后转换不再持 jlock，reorder/PDF/ZIP/raw
+# 需要凭此在 jlock 内识别"该页文件还是 0 字节占位"，避免打穿/混入产物。
+# 锁序约定：jlock → _pending_lock（所有调用方一致，无反向嵌套，无死锁）。
+# has_pending 必须在 jlock 内调用才原子：jlock 内转换无法落盘，检查结果稳定。
+_pending = {}                         # {job: {fname, ...}}
+_pending_lock = threading.Lock()
 # v1.15.1（P2-1，ChatGPT v1.15 审查建议）：扫描启动闸门——只覆盖「快照+写 state」
 # 毫秒级启动段，与 admin.save_config 的「检查+落盘」原子段互斥，消除保存瞬间穿插
 # 新扫描的 TOCTOU 残窗（409 判定从此完整）。锁序：scan 侧 jlock→scan_lock→guard；
@@ -29,6 +35,51 @@ VALID_MODE = {"Color", "Gray", "Lineart"}  # 完整模式集；实际支持由 s
 SCAN_CMD_TIMEOUT = 300        # 平板单页 scanimage 超时（秒）
 CONVERT_CMD_TIMEOUT = 120     # 单页 PNM→PNG 转换超时（秒）
 ADF_CMD_TIMEOUT = 3600        # ADF 批量扫描超时（秒）
+
+
+def _pending_add(job, fname):
+    with _pending_lock:
+        _pending.setdefault(job, set()).add(fname)
+
+
+def _pending_remove(job, fname):
+    with _pending_lock:
+        s = _pending.get(job)
+        if s:
+            s.discard(fname)
+            if not s:
+                _pending.pop(job, None)
+
+
+def has_pending(job, fname=None):
+    """转换中页查询（必须在 jlock 内调用才原子）：fname=None → 该任务是否有
+    任何转换中页；指定 fname → 该页是否转换中。reorder/PDF/ZIP/raw 落盘前凭此 409。"""
+    with _pending_lock:
+        s = _pending.get(job)
+        if fname is None:
+            return bool(s)
+        return fname in (s or ())
+
+
+def cleanup_empty_pages():
+    """v1.15.1-tmp04：启动时清理崩溃残留的 0 字节占位页（转换中断遗留）。
+    真页不可能是 0 字节（PNG 有文件头）；0 字节 + 非 symlink = 安全识别。"""
+    try:
+        root = get_scan_root()
+        for name in os.listdir(root):
+            d = os.path.join(root, name)
+            if not os.path.isdir(d):
+                continue
+            for f in os.listdir(d):
+                fp = os.path.join(d, f)
+                try:
+                    if (re.fullmatch(r"p\d+\.png", f) and not os.path.islink(fp)
+                            and os.path.getsize(fp) == 0):
+                        os.remove(fp)
+                except OSError:
+                    pass
+    except Exception:
+        pass
 
 
 def _params(job):
@@ -163,18 +214,17 @@ def _mk_thumb(job, fname, root=None):
 
 
 def scan_flatbed(job):
-    """平板单页扫描（同步返回文件名，PIL 后台转换不占 scan_lock）。
+    """平板单页扫描（v1.15.1-tmp04 锁分段）：POST 同步等 scanimage 完成返回文件名，
+    PIL 计算在后台无锁线程进行，落盘段毫秒级短锁。
 
-    v1.51-tmp03：回退异步化——POST 同步等 scanimage -d 完成后返回文件名，
-    彻底消除前端轮询（请求 ~40→~3）。scan_lock 只覆盖 scanimage -d（~8s），
-    PIL+thumb+meta 在后台线程释放 scan_lock 后进行 → 设备停转仅 0.6s。
+    连续扫描间隔只受 scanimage 物理极限（M1005 彩色 ~19s），PIL 转换与下一次
+    扫描并行——用户两次点击间无需等 14.5s 的 PNG 压缩。
 
-    主线程：jlock(阻塞) → scan_lock(非阻塞) → scanimage -d → 释放 scan_lock →
-            启转换线程 → 返回文件名
-    转换线程：PIL → thumb → meta → 释放 jlock
+    主线程：jlock(阻塞) → scan_lock(非阻塞) → scanimage → 释放双锁 → 返回文件名
+    转换线程：PIL 计算(无锁) → jlock 短锁(落盘+thumb+meta+done) → 释放 jlock
     """
     jlock = jobs.job_lock(job)
-    jlock.acquire()                    # 阻塞排队（等上一个扫描的 jlock 释放）
+    jlock.acquire()                    # 阻塞排队（等上一个扫描段释放）
     if not scan_lock.acquire(blocking=False):
         jlock.release()
         return "busy"
@@ -198,7 +248,7 @@ def scan_flatbed(job):
         _fd, tmp = tempfile.mkstemp(prefix=f"scanweb_{job}_{n:03d}_", suffix=".pnm")
         os.close(_fd)
 
-        # 预占位
+        # 预占位（编号占位；转换完成 os.replace 覆盖为真实 PNG）
         try:
             open(out, "wb").close()
         except OSError:
@@ -219,7 +269,7 @@ def scan_flatbed(job):
         except Exception as e:
             scan_error = "扫描异常：%s" % str(e)[:250]
 
-        # scanimage 完成 → 立即释放 scan_lock（PIL 转换不需要扫描仪）
+        # 扫描段结束 → 双锁立即全释放（PIL 计算不需要任何锁）
         scan_lock.release()
         _scan_job = None
         _scan_start_time = None
@@ -231,36 +281,59 @@ def scan_flatbed(job):
             jlock.release()
             raise RuntimeError(scan_error)
 
-        # 后台转换线程（只持 jlock，不持 scan_lock → 下一页可立即开始扫描）
+        # 转换中登记（reorder/PDF/ZIP/raw 落盘前凭此 409）
+        _pending_add(job, fname)
+        # 后台转换：PIL 计算无锁 → 落盘段短锁（rename+thumb+meta+done）
         _tmp, _out, _fname, _root = tmp, out, fname, root
 
         def convert_worker():
+            tmp_png = _tmp[:-4] + ".png"        # /tmp 同名 PNG（PIL 输出落点）
             try:
-                _pnm_to_png(_tmp, _out)
-                _rm(_tmp)
-                _mk_thumb(job, _fname, _root)
-                meta = jobs.load(job, _root)
-                meta["pages"] = len(jobs.pages(job, _root))
-                jobs.save(job, meta, _root)
-                st.update(state="done", msg="扫描完成：%s" % _fname)
+                _pnm_to_png(_tmp, tmp_png)      # 14.5s 计算全程无锁
             except Exception:
-                bak = _tmp
+                # 转换失败：PNM 归档进任务目录（需短锁）
+                jlock.acquire()
                 try:
-                    dst = os.path.join(_root, job, _fname[:-4] + ".pnm")
-                    os.replace(_tmp, dst)
-                    bak = dst
-                except OSError:
-                    pass
+                    bak = _tmp
+                    try:
+                        dst = os.path.join(_root, job, _fname[:-4] + ".pnm")
+                        os.replace(_tmp, dst)
+                        bak = dst
+                    except OSError:
+                        pass
+                    st.update(state="error",
+                              msg="转换失败：%s，原始数据已保留（%s）" % (_fname, bak))
+                finally:
+                    _rm(tmp_png)
+                    _rm(_tmp)
+                    _pending_remove(job, _fname)
+                    jlock.release()
+                return
+            # 落盘段：短锁（rename + thumb + meta + done）
+            jlock.acquire()
+            try:
+                if os.path.isdir(os.path.join(_root, job)):  # DELETE 可能已删任务
+                    os.replace(tmp_png, _out)
+                    _mk_thumb(job, _fname, _root)
+                    meta = jobs.load(job, _root)
+                    meta["pages"] = len(jobs.pages(job, _root))
+                    jobs.save(job, meta, _root)
+                    st.update(state="done", msg="扫描完成：%s" % _fname)
+                else:
+                    _rm(tmp_png)                # 任务已删：转换结果无主，清理
+            except Exception:
                 st.update(state="error",
-                          msg="转换失败：%s，原始数据已保留（%s）" % (_fname, bak))
+                          msg="转换落盘失败：%s，原始数据已保留" % _fname)
             finally:
+                _rm(_tmp)
+                _pending_remove(job, _fname)
                 jlock.release()
 
         threading.Thread(target=convert_worker, daemon=True).start()
+        jlock.release()                  # ←← 关键：扫描段结束即释放，不等转换
         return fname
 
     except RuntimeError:
-        # scan_error 路径已释放双锁，直接 raise
         raise
     except Exception as e:
         # 兜底：scan_lock 释放前的异常（_params / mkstemp 等）

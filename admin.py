@@ -476,8 +476,9 @@ def api_delete(job):
     if jobs.is_locked(job):
         return jsonify(ok=False, msg="任务已锁定，请先解锁再删除"), 403
     with jobs.job_lock(job):   # v1.14.1（P1-3）：锁内检查+删除原子化
-        if scanner.get_state(job)["state"] == "scanning":
-            return jsonify(ok=False, msg="扫描进行中，请等待完成后再删除"), 409
+        # v1.15.1-tmp04：不再检查 state==scanning——能拿到 jlock 即扫描段已结束；
+        # 转换中删除允许，convert_worker 落盘段 isdir 兜底。
+        scanner.state.pop(job, None)
         jobs._delete_locked(job)   # v1.14.3（P3-11）：本处已持锁，走无重入版本
     jobs.release_job_lock(job)   # v1.14.2（#11）：锁已空闲，回收条目防字典长期增长
     return jsonify(ok=True)

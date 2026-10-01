@@ -186,9 +186,9 @@ def api_scan_status():
 def api_delete(job):
     if jobs.is_locked(job):   # v1.14：锁定任务双重防护（模板隐藏按钮 + 此处显式 403）
         return jsonify(ok=False, msg="任务已锁定（管理员保护），不能删除"), 403
+    # v1.15.1-tmp04：不再检查 state==scanning——能拿到 jlock 即扫描段已结束
+    # （扫描段全程持 jlock）；转换中删除允许，convert_worker 落盘段 isdir 兜底。
     with jobs.job_lock(job):   # v1.14.1（P1-3）：锁内检查+删除原子化，消除 TOCTOU
-        if scanner.get_state(job)["state"] == "scanning":
-            return jsonify(ok=False, msg="扫描进行中，请等待完成后再删除"), 409
         scanner.state.pop(job, None)
         jobs._delete_locked(job)   # v1.14.3（P3-11）：本处已持锁，走无重入版本
     jobs.release_job_lock(job)   # v1.14.2（#11）：锁已空闲，回收条目防字典长期增长
@@ -209,6 +209,9 @@ def _reorder_body(job):
     # 排序互斥：扫描进行中禁止排序，防止文件被同时操作
     if scanner.get_state(job)["state"] == "scanning":
         return jsonify(ok=False, msg="扫描进行中，请等待完成后再排序"), 409
+    # v1.15.1-tmp04：转换中禁止排序（落盘段会 os.replace 到旧名，reorder 改名会打穿）
+    if scanner.has_pending(job):
+        return jsonify(ok=False, msg="有页面正在转换，请等待完成后再排序"), 409
     body = request.get_json() or {}
     new_order = body.get("order", [])
     is_delete = body.get("delete", False)
@@ -398,6 +401,9 @@ def raw(job, fname):
     # 已打开的 inode 不受后续 rename/删除影响（TOCTOU 消除），网络传输不占锁、
     # 不读入内存（替代 v1.14.3 的整文件读 RAM，消除大图并发下载内存放大）
     with jobs.job_lock(job):
+        # v1.15.1-tmp04：该页转换中（0 字节占位）→ 409，避免下载到空文件
+        if scanner.has_pending(job, fname):
+            abort(409)
         try:
             f = jobs.open_page_fd(base, fname)
         except (jobs.JobError, OSError):
@@ -428,6 +434,10 @@ def dl_zip(job):
     # v1.14.2（#6）：下载全程持任务生命周期锁——期间 delete/reorder 排队等待而非产生截断/损坏包
     jlock = jobs.job_lock(job)
     jlock.acquire()
+    # v1.15.1-tmp04：转换中页是 0 字节占位，混入 ZIP 会产生损坏文件
+    if scanner.has_pending(job):
+        jlock.release()
+        return jsonify(ok=False, msg="有页面正在转换，请等待完成后再下载"), 409
     files = [(f, os.path.join(base, f)) for f in jobs.pages(job)]
     if not files:
         jlock.release()
@@ -500,6 +510,9 @@ def dl_pdf(job):
     # v1.14.3（P2-4）：读取+合成全程持任务锁——期间 delete/reorder 排队，PDF 页面内容一致；
     # 合成完即释放，网络传输不持锁（PDF 一次生成到内存，最适合此方案）
     with jobs.job_lock(job):
+        # v1.15.1-tmp04：转换中页是 0 字节占位，混入 PDF 会产生空白页
+        if scanner.has_pending(job):
+            return jsonify(ok=False, msg="有页面正在转换，请等待完成后再下载 PDF"), 409
         base = jobs.path(job)
         files = jobs.pages(job)
         if not files:
@@ -575,6 +588,7 @@ def _start_dev_cache_refresher():
 
 if __name__ == "__main__":
     scanner.cleanup_tmp_pnms()           # 清理上次异常中断残留的 PNM 临时文件
+    scanner.cleanup_empty_pages()        # v1.15.1-tmp04：清理 0 字节占位页（转换中断残留）
     jobs.cleanup()                       # 启动时执行一次清理（锁定任务永不动）
     deploy_examples()                    # 输出目录为空时部署内置示例任务
     admin.start_cleanup_scheduler()      # 后台每小时检查一次

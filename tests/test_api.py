@@ -47,7 +47,7 @@ def test_index_ok():
 
 def test_admin_status_version():
     r = client.get("/api/admin/status")
-    assert r.get_json()["version"] == "1.51-tmp03"
+    assert r.get_json()["version"] == "1.15.1-tmp04"
 
 
 # ---------- 新1 锁定任务三层防护 ----------
@@ -105,15 +105,20 @@ def test_admin_page_has_jobs_manage_anchor():
     assert b'id="jobs-manage"' in client.get("/admin").get_data()
 
 
-# ---------- #1 扫描中删除/排序拦截 ----------
+# ---------- #1 扫描中排序拦截（DELETE 语义 v1.15.1-tmp04 已变：jlock 才是扫描段标志） ----------
 def test_scanning_job_delete_409():
     name = _mk_job()
     scanner.state[name] = {"state": "scanning", "msg": "扫描中"}
+    # v1.15.1-tmp04：DELETE 不再凭 state 拒绝——能拿 jlock 即扫描段已结束；
+    # 伪造 state（jlock 空闲）→ DELETE 直接成功（转换中删除由 convert_worker 兜底）
     r = client.delete("/api/jobs/" + name)
-    assert r.status_code == 409
-    r = client.post("/api/jobs/%s/reorder" % name,
-                    json={"order": ["p002.png", "p001.png"]})
-    assert r.status_code == 409
+    assert r.status_code == 200, "无锁占用时 DELETE 应成功，实际 %s" % r.status_code
+    # reorder 仍凭 state 拒绝（转换中改名会打穿落盘目标名）
+    name2 = _mk_job()
+    scanner.state[name2] = {"state": "scanning", "msg": "扫描中"}
+    r2 = client.post("/api/jobs/%s/reorder" % name2,
+                     json={"order": ["p002.png", "p001.png"]})
+    assert r2.status_code == 409
     scanner.state.clear()
 
 
