@@ -44,9 +44,10 @@ def _params(job):
 def _resolve_device(name):
     """把短设备名（如 'hpljm1005:'）解析为完整设备名（如 'hpljm1005:libusb:001:003'）。
     hi3798mv100 上 hpaio 后端不接受纯后缀名（open 报 Invalid argument），
-    必须用 scanimage -L 列出的完整名。解析结果缓存 60 秒，USB 重插后自动刷新。
-    注：UI 设备列表用 device_probe 300s 缓存，实际扫描解析用本 60s 缓存——
-    刻意双生命周期（P2-15）：短缓存保证 USB 重插后扫描快速恢复，长缓存减少首页刷新探测。"""
+    必须用 scanimage -L 列出的完整名。解析结果缓存 300 秒（v1.51-tmp03：60→300，
+    用户换纸/看结果常超 60s 导致每次扫描重跑 -L 耗 12s），USB 重插后自动刷新。
+    注：UI 设备列表用 device_probe 300s 缓存，实际扫描解析用本 300s 缓存——
+    刻意双生命周期（P2-15）：缓存统一 300s，后台保活线程每 240s 刷新确保不过期。"""
     if not name or ":" not in name:
         return name                       # 无后缀名，原样返回
     backend, _, suffix = name.partition(":")
@@ -63,7 +64,7 @@ def _resolve_device(name):
             m = re.match(r"device\s+(?:[`']([^`']+)[`']|(\S+))", line.strip())
             full = (m.group(1) or m.group(2)) if m else None
             if full and full.startswith(backend + ":"):
-                globals().setdefault("_dev_cache", {})[backend] = (now + 60, full)
+                globals().setdefault("_dev_cache", {})[backend] = (now + 300, full)
                 return full
     except (OSError, subprocess.SubprocessError):
         pass
@@ -162,106 +163,117 @@ def _mk_thumb(job, fname, root=None):
 
 
 def scan_flatbed(job):
-    """平板单页扫描（v1.51-tmp02 异步化）：主线程拿双锁→启 worker→立即返回 started。
-    POST /scan 不再同步等 scanimage 完成——点击即返回，设备后台扫描+转换。
-    连续点击：scan_lock busy → 返回 busy（409）→ 前端自动重试，设备不停转。
+    """平板单页扫描（同步返回文件名，PIL 后台转换不占 scan_lock）。
 
-    锁序与 ADF 一致：jlock→scan_lock，主线程获取、worker 释放。
-    前端轮询 GET /status 获取 state（scanning→done/error）+ file 名。
+    v1.51-tmp03：回退异步化——POST 同步等 scanimage -d 完成后返回文件名，
+    彻底消除前端轮询（请求 ~40→~3）。scan_lock 只覆盖 scanimage -d（~8s），
+    PIL+thumb+meta 在后台线程释放 scan_lock 后进行 → 设备停转仅 0.6s。
+
+    主线程：jlock(阻塞) → scan_lock(非阻塞) → scanimage -d → 释放 scan_lock →
+            启转换线程 → 返回文件名
+    转换线程：PIL → thumb → meta → 释放 jlock
     """
     jlock = jobs.job_lock(job)
-    if not jlock.acquire(blocking=False):
-        return "busy"
+    jlock.acquire()                    # 阻塞排队（等上一个扫描的 jlock 释放）
     if not scan_lock.acquire(blocking=False):
         jlock.release()
         return "busy"
 
-    def worker():
-        global _scan_start_time, _scan_job
-        st = state.setdefault(job, {})
-        scan_acquired = True
-        tmp = None
-        out = None
-        fname = None
+    global _scan_start_time, _scan_job
+    st = state.setdefault(job, {})
+    tmp = None
+    out = None
+    try:
+        with _scan_start_guard:
+            root = get_scan_root()
+            p = _params(job)
+            _scan_start_time = time.time()
+            _scan_job = job
+            st.update(state="scanning", msg="平板扫描中…")
+
+        n = jobs.next_page_no(job, root)
+        fname = f"p{n:03d}.png"
+        out = os.path.join(root, job, fname)
+
+        _fd, tmp = tempfile.mkstemp(prefix=f"scanweb_{job}_{n:03d}_", suffix=".pnm")
+        os.close(_fd)
+
+        # 预占位
         try:
-            with _scan_start_guard:
-                root = get_scan_root()
-                p = _params(job)
-                _scan_start_time = time.time()
-                _scan_job = job
-                st.update(state="scanning", msg="平板扫描中…")
+            open(out, "wb").close()
+        except OSError:
+            pass
 
-            n = jobs.next_page_no(job, root)
-            fname = f"p{n:03d}.png"
-            out = os.path.join(root, job, fname)
+        scan_error = None
+        try:
+            with open(tmp, "wb") as fh:
+                subprocess.run(_base_cmd(p), stdout=fh, stderr=subprocess.PIPE,
+                               timeout=SCAN_CMD_TIMEOUT, check=True)
+        except subprocess.CalledProcessError as e:
+            err = (e.stderr or b"").decode(errors="ignore").strip()
+            scan_error = err[:300] or f"命令退出码 {e.returncode}"
+        except subprocess.TimeoutExpired:
+            scan_error = "扫描超时（300 秒），设备可能卡死"
+        except OSError as e:
+            scan_error = "扫描失败：%s" % str(e)[:250]
+        except Exception as e:
+            scan_error = "扫描异常：%s" % str(e)[:250]
 
-            _fd, tmp = tempfile.mkstemp(prefix=f"scanweb_{job}_{n:03d}_", suffix=".pnm")
-            os.close(_fd)
+        # scanimage 完成 → 立即释放 scan_lock（PIL 转换不需要扫描仪）
+        scan_lock.release()
+        _scan_job = None
+        _scan_start_time = None
 
-            # 预占位
+        if scan_error:
+            _rm(tmp); tmp = None
+            _rm(out)
+            st.update(state="error", msg=scan_error)
+            jlock.release()
+            raise RuntimeError(scan_error)
+
+        # 后台转换线程（只持 jlock，不持 scan_lock → 下一页可立即开始扫描）
+        _tmp, _out, _fname, _root = tmp, out, fname, root
+
+        def convert_worker():
             try:
-                open(out, "wb").close()
-            except OSError:
-                pass
-
-            scan_error = None
-            try:
-                with open(tmp, "wb") as fh:
-                    subprocess.run(_base_cmd(p), stdout=fh, stderr=subprocess.PIPE,
-                                   timeout=SCAN_CMD_TIMEOUT, check=True)
-            except subprocess.CalledProcessError as e:
-                err = (e.stderr or b"").decode(errors="ignore").strip()
-                scan_error = err[:300] or f"命令退出码 {e.returncode}"
-            except subprocess.TimeoutExpired:
-                scan_error = "扫描超时（300 秒），设备可能卡死"
-            except OSError as e:
-                scan_error = "扫描失败：%s" % str(e)[:250]
-            except Exception as e:
-                scan_error = "扫描异常：%s" % str(e)[:250]
-
-            if scan_error:
-                _rm(tmp); tmp = None
-                _rm(out)
-                st.update(state="error", msg=scan_error)
-                st["_file"] = None
-                return
-
-            # PIL 转换 + 缩略图 + meta（worker 内完成，仍持双锁——转换仅 0.6s）
-            try:
-                _pnm_to_png(tmp, out)
-                _rm(tmp); tmp = None
-                _mk_thumb(job, fname, root)
-                meta = jobs.load(job, root)
-                meta["pages"] = len(jobs.pages(job, root))
-                jobs.save(job, meta, root)
-                st.update(state="done", msg="扫描完成：%s" % fname)
-                st["_file"] = fname
+                _pnm_to_png(_tmp, _out)
+                _rm(_tmp)
+                _mk_thumb(job, _fname, _root)
+                meta = jobs.load(job, _root)
+                meta["pages"] = len(jobs.pages(job, _root))
+                jobs.save(job, meta, _root)
+                st.update(state="done", msg="扫描完成：%s" % _fname)
             except Exception:
-                bak = tmp
+                bak = _tmp
                 try:
-                    dst = os.path.join(root, job, fname[:-4] + ".pnm")
-                    os.replace(tmp, dst)
-                    bak = dst; tmp = None
+                    dst = os.path.join(_root, job, _fname[:-4] + ".pnm")
+                    os.replace(_tmp, dst)
+                    bak = dst
                 except OSError:
                     pass
                 st.update(state="error",
-                          msg="转换失败：%s，原始数据已保留（%s）" % (fname, bak))
-                st["_file"] = None
-        except Exception as e:
-            st.update(state="error", msg=str(e)[:300])
-            st["_file"] = None
-            if tmp:
-                _rm(tmp)
-            if out:
-                _rm(out)
-        finally:
-            _scan_job = None
-            _scan_start_time = None
-            scan_lock.release()
-            jlock.release()
+                          msg="转换失败：%s，原始数据已保留（%s）" % (_fname, bak))
+            finally:
+                jlock.release()
 
-    threading.Thread(target=worker, daemon=True).start()
-    return "started"
+        threading.Thread(target=convert_worker, daemon=True).start()
+        return fname
+
+    except RuntimeError:
+        # scan_error 路径已释放双锁，直接 raise
+        raise
+    except Exception as e:
+        # 兜底：scan_lock 释放前的异常（_params / mkstemp 等）
+        _scan_job = None
+        _scan_start_time = None
+        scan_lock.release()
+        st.update(state="error", msg=str(e)[:300])
+        if tmp:
+            _rm(tmp)
+        if out:
+            _rm(out)
+        jlock.release()
+        raise
 
 
 def scan_adf(job):

@@ -150,11 +150,15 @@ def api_create():
 
 @app.post("/api/jobs/<job>/scan")
 def api_scan(job):
-    # v1.51-tmp02：异步化——立即返回 started/busy，不等 scanimage
-    r = scanner.scan_flatbed(job)
+    # v1.51-tmp03：同步返回——POST 等 scanimage -d 完成后返回文件名，
+    # 前端据此显示占位 + pollThumbReady（彻底消除 status 轮询）
+    try:
+        r = scanner.scan_flatbed(job)
+    except RuntimeError as e:
+        return jsonify(ok=False, msg=str(e)[:300]), 500
     if r == "busy":
         return jsonify(ok=False, msg="设备忙，请稍后再试"), 409
-    return jsonify(ok=True, msg="started")
+    return jsonify(ok=True, file=r)
 
 
 @app.post("/api/jobs/<job>/adf")
@@ -554,9 +558,25 @@ def deploy_examples():
             shutil.copytree(s, d)
 
 
+def _start_dev_cache_refresher():
+    """v1.51-tmp03：后台线程每 240s 刷新 _dev_cache（TTL 300s 的 80%），
+    确保扫描时缓存不过期——消除 scanimage -L 的 12s 冷启动。
+    scanimage -L 不占 scan_lock，与正在进行的扫描不冲突。"""
+    from config import DEVICE
+    def _loop():
+        while True:
+            try:
+                scanner._resolve_device(DEVICE)
+            except Exception:
+                pass
+            time.sleep(240)
+    threading.Thread(target=_loop, daemon=True).start()
+
+
 if __name__ == "__main__":
     scanner.cleanup_tmp_pnms()           # 清理上次异常中断残留的 PNM 临时文件
     jobs.cleanup()                       # 启动时执行一次清理（锁定任务永不动）
     deploy_examples()                    # 输出目录为空时部署内置示例任务
     admin.start_cleanup_scheduler()      # 后台每小时检查一次
+    _start_dev_cache_refresher()         # v1.51-tmp03：保活 _dev_cache
     serve(app, host=BIND, port=PORT, threads=8)

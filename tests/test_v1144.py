@@ -116,18 +116,8 @@ def test_delete_no_grave_leftover():
     assert jobs.load(name)["pages"] == 2
 
 
-def _wait_terminal(name, timeout=10):
-    """v1.51-tmp02：异步化后轮询等待 worker 落终态（done/error）。"""
-    deadline = time.time() + timeout
-    st = scanner.get_state(name)
-    while time.time() < deadline and st["state"] not in ("done", "error"):
-        time.sleep(0.05)
-        st = scanner.get_state(name)
-    return st
-
-
 # ---------- P1：平板扫描 TimeoutExpired 后 state 必须落 error ----------
-# v1.51-tmp02：异步化——scan_flatbed 立即返回 started，超时错误在 worker 内落 state
+# v1.51-tmp03：同步返回——scan_flatbed 超时后 raise RuntimeError，双锁已释放
 def test_flatbed_timeout_state_error(monkeypatch):
     _reset()
     fake = os.path.join(_TEST_ROOT, "_stuck_scan")
@@ -137,11 +127,13 @@ def test_flatbed_timeout_state_error(monkeypatch):
     monkeypatch.setattr(scanner, "SCANIMAGE", fake)
     monkeypatch.setattr(scanner, "SCAN_CMD_TIMEOUT", 0.3)   # 300s 提常量后测试可注入
     name = jobs.create()
-    r = scanner.scan_flatbed(name)
-    assert r == "started", "异步化后应返回 started，实际 %r" % r
-    st = _wait_terminal(name)
+    try:
+        scanner.scan_flatbed(name)
+        raise AssertionError("超时必须抛 RuntimeError")
+    except RuntimeError as e:
+        assert "超时" in str(e), e
+    st = scanner.get_state(name)
     assert st["state"] == "error", "P1：TimeoutExpired 后不得永久卡 scanning，实际 %s" % st
-    assert "超时" in st.get("msg", ""), "错误信息应含超时字样，实际 %s" % st
     lk = jobs.job_lock(name)
     assert lk.acquire(blocking=False), "P1：异常收尾必须释放 job_lock"
     lk.release()
@@ -157,9 +149,12 @@ def test_flatbed_oserror_state_error(monkeypatch):
     _reset()
     monkeypatch.setattr(scanner, "SCANIMAGE", "/nonexistent/scanimage")   # OSError 路径
     name = jobs.create()
-    r = scanner.scan_flatbed(name)
-    assert r == "started", "异步化后应返回 started，实际 %r" % r
-    st = _wait_terminal(name)
+    try:
+        scanner.scan_flatbed(name)
+        raise AssertionError("OSError 必须抛 RuntimeError")
+    except RuntimeError:
+        pass
+    st = scanner.get_state(name)
     assert st["state"] == "error", "P1：OSError 后 state 必须落 error，实际 %s" % st
     lk = jobs.job_lock(name)
     assert lk.acquire(blocking=False)

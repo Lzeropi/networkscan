@@ -162,73 +162,26 @@ function updateDeviceOptions(selectedDev) {
   }
 }
 
-/* 任务页：平板扫一页（v1.51-tmp02 异步化：POST 立即返回，轮询状态，409 自动重试） */
+/* 任务页：平板扫一页（v1.51-tmp03 同步：POST 等 scanimage 完成返回文件名，无轮询） */
 async function scanPage(job) {
   const b = document.getElementById("btnScan");
   b.disabled = true;
   const figId = addScanningPlaceholder(job);
-  setStatus("正在扫描，请稍候…");
-
-  // POST /scan → started 或 busy(409)
-  let started = false;
-  for (let retry = 0; retry < 30; retry++) {
-    try {
-      const r = await fetch(`/api/jobs/${job}/scan`, { method: "POST" });
-      const d = await r.json();
-      if (r.ok) { started = true; break; }
-      if (r.status === 409) {
-        // 设备忙，等 1s 重试
-        await new Promise(res => setTimeout(res, 1000));
-        continue;
-      }
-      throw new Error(d.msg || "扫描失败");
-    } catch (e) {
-      removePlaceholder(figId);
-      setStatus("扫描失败：" + e.message, true);
-      b.disabled = false;
-      return;
-    }
-  }
-  if (!started) {
+  setStatus("正在扫描，请稍候（约需 8–10 秒）…");
+  try {
+    const r = await fetch(`/api/jobs/${job}/scan`, { method: "POST" });
+    const d = await r.json();
+    if (!r.ok) throw new Error(d.msg || "扫描失败");
+    // scanimage 完成，POST 返回文件名 → 切转换中占位
+    switchToConverting(figId, d.file);
+    setStatus("扫描完成，正在后台转换为 PNG…");
+    b.disabled = false;               // 立即恢复按钮，可以继续扫描下一页
+    pollThumbReady(job, d.file);       // 轮询缩略图就绪（PIL 0.6s，通常 1 次命中）
+  } catch (e) {
     removePlaceholder(figId);
-    setStatus("设备忙，请稍后重试", true);
+    setStatus("扫描失败：" + e.message, true);
     b.disabled = false;
-    return;
   }
-
-  // 轮询状态
-  const t0 = Date.now();
-  const pollStatus = async () => {
-    try {
-      const s = await (await fetch(`/api/jobs/${job}/status`)).json();
-      if (s.state === "done" && s._file) {
-        // 扫描+转换完成，切缩略图
-        switchToConverting(figId, s._file);
-        setStatus("扫描完成：" + s._file);
-        pollThumbReady(job, s._file);
-        b.disabled = false;
-        return;
-      }
-      if (s.state === "error") {
-        removePlaceholder(figId);
-        setStatus("扫描失败：" + (s.msg || "未知错误"), true);
-        b.disabled = false;
-        return;
-      }
-      // scanning 中，继续等
-      if (Date.now() - t0 > 120000) {
-        removePlaceholder(figId);
-        setStatus("扫描超时", true);
-        b.disabled = false;
-        return;
-      }
-      setStatus((s.msg || "扫描中…") + `（已用 ${Math.round((Date.now() - t0) / 1000)}秒）`);
-      setTimeout(pollStatus, 500);
-    } catch (e) {
-      setTimeout(pollStatus, 1000);
-    }
-  };
-  pollStatus();
 }
 
 function addScanningPlaceholder(job) {

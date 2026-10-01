@@ -113,13 +113,16 @@ def test_params_exception_no_lock_leak(tmp_path, monkeypatch):
     def boom(_job):
         raise jobs.JobError("simulated meta corrupted")
 
-    # v1.51-tmp02：异步化后 _params 异常在 worker 内捕获，scan_flatbed 返回 started
+    # v1.51-tmp03：同步模式——_params 异常 → scan_flatbed 抛异常，双锁已释放
     monkeypatch.setattr(scanner, "_params", boom)
-    r = scanner.scan_flatbed(name)
-    assert r == "started", "scan_flatbed 应返回 started（异步）"
-    st = _wait_state(name)
-    assert st.get("state") == "error" or st.get("state") != "scanning", \
-        "_params 异常后不得残留 scanning"
+    try:
+        scanner.scan_flatbed(name)
+        raise AssertionError("_params 异常应抛出")
+    except Exception:
+        pass
+    st = scanner.get_state(name)
+    assert st.get("state") == "error", \
+        "_params 异常后应落 error，实际 %s" % st.get("state")
     ok1 = scanner.scan_lock.acquire(blocking=False)
     if ok1: scanner.scan_lock.release()
     assert ok1, "_params 异常后 scan_lock 必须可获取"
@@ -243,21 +246,28 @@ def test_two_scans_same_job(tmp_path):
         t1 = threading.Thread(target=run, args=("a",), daemon=True)
         t2 = threading.Thread(target=run, args=("b",), daemon=True)
         t1.start()
-        time.sleep(0.1)   # 第一次拿 jlock+scan_lock 启 worker
-        t2.start()        # 第二次：jlock 被持 → 阻塞等 → 但 scan_flatbed 先 acquire jlock
+        time.sleep(0.1)   # 第一次持 jlock+scan_lock 跑 scanimage
+        t2.start()        # 第二次：jlock 阻塞排队 → 第一次转换完释放 jlock 后接续
         t1.join(timeout=15)
         t2.join(timeout=15)
-    # v1.51-tmp02：异步——第一次 started，第二次 busy（scan_lock 持有）
+    # v1.51-tmp03：同步——两次扫描被 jlock 串行，都返回文件名（两次独立成页）
     vals = sorted(out.values())
-    assert "started" in vals, "第一次扫描应 started，实际 %s" % out
-    assert "busy" in vals, "第二次扫描应 busy，实际 %s" % out
-    _wait_state(name)
+    assert len(vals) == 2 and all(v.startswith("p") for v in vals), \
+        "两次扫描应各返回文件名，实际 %s" % out
+    assert vals[0] != vals[1], "两次扫描文件名不得重复，实际 %s" % out
     ok1 = scanner.scan_lock.acquire(blocking=False)
     if ok1: scanner.scan_lock.release()
     assert ok1, "扫描结束后 scan_lock 必须可获取"
-
-    # v1.51-tmp02：异步化后同任务双扫被 scan_lock 串行
-    # 第一块已覆盖 started/busy 不变量，第二块（同时发起无间隔）结果相同，省略
+    # jlock 由 convert_worker 后台释放（PIL+thumb+meta ~0.6s），轮询等待
+    lk = jobs.job_lock(name)
+    deadline = time.time() + 10
+    while time.time() < deadline:
+        if lk.acquire(blocking=False):
+            lk.release()
+            break
+        time.sleep(0.1)
+    else:
+        assert False, "扫描结束后 job_lock 必须可获取（等 convert_worker 释放）"
 
 
 # ---------- 性能优化：probe 预热 _resolve_device 缓存 ----------
