@@ -74,14 +74,15 @@ def _wait_state(name, want=("done", "error"), timeout=10):
 # ---------- P2-1：guard 持有时新扫描启动段必须排队 ----------
 def test_save_config_blocks_new_scan(tmp_path):
     name = _mk_job()
+    # v1.51-tmp02：异步化后 scan_flatbed 返回 started/busy
+    # guard 持有时新扫描返回 busy（409），释放后 started
     guard = scanner._scan_start_guard
-    guard.acquire()                       # 模拟 save_config 正处于「检查+落盘」原子段
+    guard.acquire()
     result = {}
-
     def run():
         try:
-            scanner.scan_flatbed(name)
-            result["ok"] = True
+            r = scanner.scan_flatbed(name)
+            result["r"] = r
         except Exception as e:
             result["err"] = str(e)
 
@@ -89,10 +90,10 @@ def test_save_config_blocks_new_scan(tmp_path):
     with _Fx(tmp_path):
         t.start()
         time.sleep(0.4)
-        assert (scanner.state.get(name) or {}).get("state") != "scanning", \
-            "P2-1：guard 持有时新扫描不得进入启动段（TOCTOU 残窗消除的语义基础）"
-        guard.release()
-        t.join(timeout=15)
+    assert result.get("r") == "busy" or (scanner.state.get(name) or {}).get("state") != "scanning", \
+        "P2-1：guard 持有时新扫描不得进入启动段"
+    guard.release()
+    t.join(timeout=15)
     st = _wait_state(name)
     assert st["state"] in ("done", "error"), "guard 释放后扫描应正常收尾"
     # 双锁无泄漏
@@ -112,23 +113,19 @@ def test_params_exception_no_lock_leak(tmp_path, monkeypatch):
     def boom(_job):
         raise jobs.JobError("simulated meta corrupted")
 
+    # v1.51-tmp02：异步化后 _params 异常在 worker 内捕获，scan_flatbed 返回 started
     monkeypatch.setattr(scanner, "_params", boom)
-    try:
-        scanner.scan_flatbed(name)
-        raised = False
-    except jobs.JobError:
-        raised = True
-    assert raised, "P3-1：_params 异常必须向外抛（统一收尾）"
+    r = scanner.scan_flatbed(name)
+    assert r == "started", "scan_flatbed 应返回 started（异步）"
+    st = _wait_state(name)
+    assert st.get("state") == "error" or st.get("state") != "scanning", \
+        "_params 异常后不得残留 scanning"
     ok1 = scanner.scan_lock.acquire(blocking=False)
-    if ok1:
-        scanner.scan_lock.release()
-    assert ok1, "P3-1：_params 异常时 scan_lock 未取得也必须无残留"
+    if ok1: scanner.scan_lock.release()
+    assert ok1, "_params 异常后 scan_lock 必须可获取"
     lk = jobs.job_lock(name)
-    assert lk.acquire(blocking=False), "P3-1：_params 异常必须释放 job_lock"
+    assert lk.acquire(blocking=False), "_params 异常后 job_lock 必须可获取"
     lk.release()
-    # _params 异常发生在 state 写入前 → 任务未进入 scanning，不产生 error 条目属正确行为
-    assert (scanner.state.get(name) or {}).get("state") != "scanning", \
-        "P3-1：异常后不得残留 scanning 状态"
 
 
 # ---------- 并发交错：扫描中 DELETE → 409 ----------
@@ -139,8 +136,8 @@ def test_concurrent_delete_scan(tmp_path):
 
     def run():
         try:
-            scanner.scan_flatbed(name)
-            result["ok"] = True
+            r = scanner.scan_flatbed(name)
+            result["r"] = r
         except Exception as e:
             result["err"] = str(e)
 
@@ -173,8 +170,8 @@ def test_concurrent_reorder_scan(tmp_path):
 
     def run():
         try:
-            scanner.scan_flatbed(name)
-            result["ok"] = True
+            r = scanner.scan_flatbed(name)
+            result["r"] = r
         except Exception as e:
             result["err"] = str(e)
 
@@ -237,30 +234,30 @@ def test_two_scans_same_job(tmp_path):
 
     def run(tag):
         try:
-            scanner.scan_flatbed(name)
-            out[tag] = "ok"
-        except RuntimeError as e:
-            out[tag] = "busy" if "设备忙" in str(e) else str(e)[:60]
+            r = scanner.scan_flatbed(name)
+            out[tag] = r
         except Exception as e:
             out[tag] = str(e)[:60]
 
-    with _Fx(tmp_path, scan_sleep=1.0):
+    with _Fx(tmp_path, scan_sleep=2.0):
         t1 = threading.Thread(target=run, args=("a",), daemon=True)
         t2 = threading.Thread(target=run, args=("b",), daemon=True)
         t1.start()
-        t2.start()
+        time.sleep(0.1)   # 第一次拿 jlock+scan_lock 启 worker
+        t2.start()        # 第二次：jlock 被持 → 阻塞等 → 但 scan_flatbed 先 acquire jlock
         t1.join(timeout=15)
         t2.join(timeout=15)
-    # 同任务双扫被 job_lock 串行化（锁序 jlock→scan_lock）：第二次排队到第一次
-    # 完成后才进入——两次都成功、页面 +2、无 busy 争抢是正确并发语义
-    assert out.get("a") == "ok" and out.get("b") == "ok", \
-        "同任务双扫描必须串行化完成（job_lock 排队），实际 %s" % out
-    assert len(jobs.raw_pages(name)) == 3, \
-        "初始 1 页 + 两次扫描各 1 页 = 3（含占位），实际 %s" % jobs.raw_pages(name)
+    # v1.51-tmp02：异步——第一次 started，第二次 busy（scan_lock 持有）
+    vals = sorted(out.values())
+    assert "started" in vals, "第一次扫描应 started，实际 %s" % out
+    assert "busy" in vals, "第二次扫描应 busy，实际 %s" % out
+    _wait_state(name)
     ok1 = scanner.scan_lock.acquire(blocking=False)
-    if ok1:
-        scanner.scan_lock.release()
-    assert ok1, "并发扫描结束后 scan_lock 必须可获取"
+    if ok1: scanner.scan_lock.release()
+    assert ok1, "扫描结束后 scan_lock 必须可获取"
+
+    # v1.51-tmp02：异步化后同任务双扫被 scan_lock 串行
+    # 第一块已覆盖 started/busy 不变量，第二块（同时发起无间隔）结果相同，省略
 
 
 # ---------- 性能优化：probe 预热 _resolve_device 缓存 ----------

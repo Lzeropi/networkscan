@@ -162,25 +162,103 @@ function updateDeviceOptions(selectedDev) {
   }
 }
 
-/* 任务页：平板扫一页（后端扫描完即返回，转换在后台进行） */
+/* 任务页：平板扫一页（v1.51-tmp02 异步化：POST 立即返回，轮询状态，409 自动重试） */
 async function scanPage(job) {
   const b = document.getElementById("btnScan");
   b.disabled = true;
-  setStatus("正在扫描，请稍候（约需 10–30 秒）…");
-  try {
-    const r = await fetch(`/api/jobs/${job}/scan`, { method: "POST" });
-    const d = await r.json();
-    if (!d.ok) throw new Error(d.msg || "扫描失败");
-    // 扫描完成，先添加占位图（显示"正在转换"）
-    addThumbPlaceholder(job, d.file);
-    setStatus("扫描完成，正在后台转换为 PNG…");
-    b.disabled = false;               // 立即恢复按钮，可以继续扫描下一页
-    // 轮询缩略图是否就绪（转换完成）
-    pollThumbReady(job, d.file);
-  } catch (e) {
-    setStatus("扫描失败：" + e.message, true);
-    b.disabled = false;
+  const figId = addScanningPlaceholder(job);
+  setStatus("正在扫描，请稍候…");
+
+  // POST /scan → started 或 busy(409)
+  let started = false;
+  for (let retry = 0; retry < 30; retry++) {
+    try {
+      const r = await fetch(`/api/jobs/${job}/scan`, { method: "POST" });
+      const d = await r.json();
+      if (r.ok) { started = true; break; }
+      if (r.status === 409) {
+        // 设备忙，等 1s 重试
+        await new Promise(res => setTimeout(res, 1000));
+        continue;
+      }
+      throw new Error(d.msg || "扫描失败");
+    } catch (e) {
+      removePlaceholder(figId);
+      setStatus("扫描失败：" + e.message, true);
+      b.disabled = false;
+      return;
+    }
   }
+  if (!started) {
+    removePlaceholder(figId);
+    setStatus("设备忙，请稍后重试", true);
+    b.disabled = false;
+    return;
+  }
+
+  // 轮询状态
+  const t0 = Date.now();
+  const pollStatus = async () => {
+    try {
+      const s = await (await fetch(`/api/jobs/${job}/status`)).json();
+      if (s.state === "done" && s._file) {
+        // 扫描+转换完成，切缩略图
+        switchToConverting(figId, s._file);
+        setStatus("扫描完成：" + s._file);
+        pollThumbReady(job, s._file);
+        b.disabled = false;
+        return;
+      }
+      if (s.state === "error") {
+        removePlaceholder(figId);
+        setStatus("扫描失败：" + (s.msg || "未知错误"), true);
+        b.disabled = false;
+        return;
+      }
+      // scanning 中，继续等
+      if (Date.now() - t0 > 120000) {
+        removePlaceholder(figId);
+        setStatus("扫描超时", true);
+        b.disabled = false;
+        return;
+      }
+      setStatus((s.msg || "扫描中…") + `（已用 ${Math.round((Date.now() - t0) / 1000)}秒）`);
+      setTimeout(pollStatus, 500);
+    } catch (e) {
+      setTimeout(pollStatus, 1000);
+    }
+  };
+  pollStatus();
+}
+
+function addScanningPlaceholder(job) {
+  const wall = document.getElementById("wall");
+  const empty = document.getElementById("empty");
+  if (empty) empty.remove();
+  const fig = document.createElement("figure");
+  fig.className = "scanning";
+  fig.innerHTML =
+    '<a><div class="scan-placeholder"><div class="scan-line"></div>' +
+    '<span class="scan-text">扫描中…</span></div></a>' +
+    '<figcaption><span>正在扫描</span></figcaption>';
+  wall.appendChild(fig);
+  const c = document.getElementById("pgcount");
+  if (c) c.textContent = wall.querySelectorAll("figure").length;
+  return fig;
+}
+
+function switchToConverting(fig, png) {
+  fig.className = "converting";
+  fig.dataset.name = png;
+  fig.id = "fig_" + png.replace(".", "_");
+  const a = fig.querySelector("a");
+  a.innerHTML = '<div class="convert-placeholder"><div class="spinner"></div>' +
+    '<span class="convert-text">正在转换…</span></div>';
+  fig.querySelector("figcaption").innerHTML = '<span>' + png + ' · 转换中</span>';
+}
+
+function removePlaceholder(fig) {
+  if (fig && fig.parentNode) fig.parentNode.removeChild(fig);
 }
 
 function addThumbPlaceholder(job, png) {

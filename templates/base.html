@@ -9,7 +9,7 @@
 </head>
 <body>
 <header>
-  <h1>🖨️ 网络扫描仪</h1>
+  <h1>🖨️ 网络扫描仪 <span class="ver-badge">v{{ ver }}</span></h1>
   <nav>
     {% block nav %}<a href="/manual">操作手册</a>{% endblock %}
     {% if authed %}<a href="/logout">退出登录</a>{% endif %}

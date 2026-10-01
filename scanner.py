@@ -111,13 +111,27 @@ def cleanup_tmp_pnms():
     return removed
 
 
+def _pnm_to_png(src, dst):
+    """PNM→PNG：PIL 优先（ARM32 0.6s vs ImageMagick 11s），PIL 失败回退 ImageMagick。
+    v1.51-tmp01：实测 203 ARM32 ImageMagick subprocess fork+exec 开销巨大（11s），
+    PIL 同操作 0.6s（快 18x）。PIL 原生支持 PBM/PGM/PPM（scanimage --format pnm 输出）。
+    回退保安全网：PIL 偶遇异常格式 → ImageMagick 兜底 → 仍失败由调用方保留 PNM 源。"""
+    try:
+        with Image.open(src) as im:
+            im.save(dst)
+    except Exception:
+        subprocess.run([CONVERT, src, dst], stderr=subprocess.PIPE,
+                       timeout=CONVERT_CMD_TIMEOUT, check=True)
+
+
 def _convert_pnms(job, start, root=None):
     """把 ADF batch 产出的 .pnm 全部转成 .png；成功才删源（v1.14.1 P1-4：失败保留供重试）。
     v1.14.2（#3）：返回 (成功数, 失败文件列表)——scanimage 返回码 0 不代表转换全部成功，
     调用方据此判定，部分失败不再被误报为 done。
     v1.15（#1）：root 传扫描启动时的根快照——转换期间管理员改存储路径时，
     本批 PNM 仍归档到启动时的旧根，任务数据不再分裂（TOCTOU 后果消除）。
-    root=None 时沿用 validate 现取（含名校验/symlink 拒），供非 worker 调用。"""
+    root=None 时沿用 validate 现取（含名校验/symlink 拒），供非 worker 调用。
+    v1.51-tmp01：PIL 转换优先（_pnm_to_png），ImageMagick 回退。"""
     p = os.path.join(root, job) if root else jobs.validate(job)
     ok, failed = 0, []
     for f in os.listdir(p):
@@ -126,12 +140,11 @@ def _convert_pnms(job, start, root=None):
             src = os.path.join(p, f)
             dst = os.path.join(p, f[:-4] + ".png")
             try:
-                subprocess.run([CONVERT, src, dst], stderr=subprocess.PIPE,
-                               timeout=CONVERT_CMD_TIMEOUT, check=True)
+                _pnm_to_png(src, dst)
                 os.remove(src)              # 转换成功才删 PNM（v1.14.1）
                 ok += 1
-            except (subprocess.CalledProcessError, OSError):
-                failed.append(f)           # 失败保留 PNM 源数据，不再误删（v1.14.1 P1-4）
+            except Exception:
+                failed.append(f)           # 失败保留 PNM 源数据（v1.14.1 P1-4）
     return ok, failed
 
 
@@ -149,62 +162,49 @@ def _mk_thumb(job, fname, root=None):
 
 
 def scan_flatbed(job):
-    """平板单页扫描：scanimage 输出 PNM 到 /tmp，扫描阶段持有两把锁，
-    扫描成功后由后台线程完成 convert+缩略图。
+    """平板单页扫描（v1.51-tmp02 异步化）：主线程拿双锁→启 worker→立即返回 started。
+    POST /scan 不再同步等 scanimage 完成——点击即返回，设备后台扫描+转换。
+    连续点击：scan_lock busy → 返回 busy（409）→ 前端自动重试，设备不停转。
 
-    v1.14.7：锁取得后立即进入统一 finally 生命周期；next_page_no/mkstemp
-    等初始化步骤发生异常时也必须释放 scan_lock + job_lock，不能留下永久 busy。
-    v1.15.1：_params 移入锁生命周期（ChatGPT 建议 P3-1）；启动闸门使「快照+写
-    state」与 save_config 的「检查+落盘」互斥，保存配置真正原子（P2-1）。
+    锁序与 ADF 一致：jlock→scan_lock，主线程获取、worker 释放。
+    前端轮询 GET /status 获取 state（scanning→done/error）+ file 名。
     """
-    global _scan_start_time, _scan_job
-
     jlock = jobs.job_lock(job)
-    scan_acquired = False
-    handoff = False
-    tmp = None
-    out = None
-    fname = None
-    st = None
+    if not jlock.acquire(blocking=False):
+        return "busy"
+    if not scan_lock.acquire(blocking=False):
+        jlock.release()
+        return "busy"
 
-    jlock.acquire()
-    try:
-        p = _params(job)   # v1.15.1（P3-1）：移入锁生命周期——异常统一收尾，未来加逻辑不需重找 finally
-        if not scan_lock.acquire(blocking=False):
-            busy_job = _scan_job or ""
-            elapsed = int(time.time() - _scan_start_time) if _scan_start_time else 0
-            raise RuntimeError("设备忙，%s 正在扫描（已用 %d 秒），请稍后再试" % (busy_job, elapsed))
+    def worker():
+        global _scan_start_time, _scan_job
+        st = state.setdefault(job, {})
         scan_acquired = True
-
-        # v1.15（#1）：锁内立即快照存储根——worker 全程用快照，扫描期间改根不再分裂
-        # 任务数据（保存线程穿过检查窗 → 本批完整落旧根，无数据损坏）。
-        # v1.15.1（P2-1）：启动闸门——[快照+写 state] 与 save_config「检查+落盘」
-        # 原子互斥，保存瞬间不再穿插新扫描，409 判定完整；guard 仅毫秒级，不阻塞扫描 body。
-        with _scan_start_guard:
-            root = get_scan_root()
-            st = state.setdefault(job, {})
-            st.update(state="scanning", msg="平板扫描中…")
-
-        # 从取得两把锁开始，所有可能抛异常的初始化与扫描代码都在 finally 保护内。
-        n = jobs.next_page_no(job, root)
-        fname = f"p{n:03d}.png"
-        out = os.path.join(root, job, fname)
-
-        # v1.14.6：mkstemp 唯一化中转文件名——旧版可预测的 /tmp/scanweb_{job}_{n}.pnm 可被
-        # 本地其他 shell 用户预创建同名 symlink，扫描写入跟随链接覆盖任意可写文件
-        _fd, tmp = tempfile.mkstemp(prefix=f"scanweb_{job}_{n:03d}_", suffix=".pnm")
-        os.close(_fd)
-
-        # 预占位：先创建空的 .png 占位文件，前端能看到"正在转换"状态
+        tmp = None
+        out = None
+        fname = None
         try:
-            open(out, "wb").close()
-        except OSError:
-            pass
+            with _scan_start_guard:
+                root = get_scan_root()
+                p = _params(job)
+                _scan_start_time = time.time()
+                _scan_job = job
+                st.update(state="scanning", msg="平板扫描中…")
 
-        scan_error = None
-        try:
-            _scan_start_time = time.time()
-            _scan_job = job
+            n = jobs.next_page_no(job, root)
+            fname = f"p{n:03d}.png"
+            out = os.path.join(root, job, fname)
+
+            _fd, tmp = tempfile.mkstemp(prefix=f"scanweb_{job}_{n:03d}_", suffix=".pnm")
+            os.close(_fd)
+
+            # 预占位
+            try:
+                open(out, "wb").close()
+            except OSError:
+                pass
+
+            scan_error = None
             try:
                 with open(tmp, "wb") as fh:
                     subprocess.run(_base_cmd(p), stdout=fh, stderr=subprocess.PIPE,
@@ -218,70 +218,50 @@ def scan_flatbed(job):
                 scan_error = "扫描失败：%s" % str(e)[:250]
             except Exception as e:
                 scan_error = "扫描异常：%s" % str(e)[:250]
-        finally:
-            _scan_job = None
-            _scan_start_time = None
-            scan_lock.release()
-            scan_acquired = False
 
-        if scan_error:
-            _rm(tmp)
-            tmp = None
-            _rm(out)
-            st.update(state="error", msg=scan_error)
-            raise RuntimeError(scan_error)
+            if scan_error:
+                _rm(tmp); tmp = None
+                _rm(out)
+                st.update(state="error", msg=scan_error)
+                st["_file"] = None
+                return
 
-        def _convert_worker():
-            nonlocal tmp
+            # PIL 转换 + 缩略图 + meta（worker 内完成，仍持双锁——转换仅 0.6s）
             try:
-                subprocess.run([CONVERT, tmp, out], stderr=subprocess.PIPE,
-                               timeout=CONVERT_CMD_TIMEOUT, check=True)
+                _pnm_to_png(tmp, out)
+                _rm(tmp); tmp = None
                 _mk_thumb(job, fname, root)
                 meta = jobs.load(job, root)
                 meta["pages"] = len(jobs.pages(job, root))
                 jobs.save(job, meta, root)
                 st.update(state="done", msg="扫描完成：%s" % fname)
-                _rm(tmp)
-                tmp = None
+                st["_file"] = fname
             except Exception:
                 bak = tmp
                 try:
                     dst = os.path.join(root, job, fname[:-4] + ".pnm")
                     os.replace(tmp, dst)
-                    bak = dst
-                    tmp = None
+                    bak = dst; tmp = None
                 except OSError:
                     pass
                 st.update(state="error",
-                          msg="后台转换失败：%s，原始数据已保留（%s），可用 convert 手动重转" % (fname, bak))
-            finally:
-                jlock.release()
-
-        try:
-            threading.Thread(target=_convert_worker, daemon=True).start()
-            handoff = True
-        except BaseException:
-            _rm(tmp)
-            tmp = None
-            _rm(out)
-            st.update(state="error", msg="后台转换线程启动失败")
-            raise
-
-        return fname
-
-    except BaseException as e:
-        if st is not None and st.get("state") == "scanning":
-            st.update(state="error", msg="扫描初始化失败：%s" % str(e)[:250])
-        raise
-    finally:
-        if scan_acquired:
-            scan_lock.release()
-            _scan_job = None
-            _scan_start_time = None
-        if not handoff:
+                          msg="转换失败：%s，原始数据已保留（%s）" % (fname, bak))
+                st["_file"] = None
+        except Exception as e:
+            st.update(state="error", msg=str(e)[:300])
+            st["_file"] = None
             if tmp:
                 _rm(tmp)
+            if out:
+                _rm(out)
+        finally:
+            _scan_job = None
+            _scan_start_time = None
+            scan_lock.release()
             jlock.release()
+
+    threading.Thread(target=worker, daemon=True).start()
+    return "started"
 
 
 def scan_adf(job):

@@ -54,11 +54,9 @@ def test_flatbed_busy_releases_joblock():
     name = jobs.create()
     assert scanner.scan_lock.acquire(blocking=False)
     try:
-        try:
-            scanner.scan_flatbed(name)
-            raise AssertionError("设备忙必须抛 RuntimeError")
-        except RuntimeError as e:
-            assert "设备忙" in str(e)
+        # v1.51-tmp02：异步化后 busy 返回 "busy" 而非抛异常
+        r = scanner.scan_flatbed(name)
+        assert r == "busy", "设备忙应返回 busy，实际 %s" % r
         lk = jobs.job_lock(name)
         assert lk.acquire(blocking=False), "P0-2：忙路径必须立即释放 job_lock，不得泄漏"
         lk.release()

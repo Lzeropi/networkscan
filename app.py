@@ -18,7 +18,7 @@ import device_probe
 import jobs
 import scanner
 import time
-from config import BIND, CONVERT, MAX_PDF_MEM, MAX_PDF_PAGES, PORT, SCANIMAGE, SECRET, TOKEN
+from config import BIND, CONVERT, MAX_PDF_MEM, MAX_PDF_PAGES, PORT, SCANIMAGE, SECRET, TOKEN, VERSION
 from config import get_scan_root
 
 app = Flask(__name__)
@@ -94,7 +94,7 @@ def logout():
 
 @app.context_processor
 def inject():
-    return {"authed": bool(TOKEN)}
+    return {"authed": bool(TOKEN), "ver": VERSION}
 
 
 @app.errorhandler(jobs.JobError)
@@ -150,10 +150,11 @@ def api_create():
 
 @app.post("/api/jobs/<job>/scan")
 def api_scan(job):
-    try:
-        return jsonify(ok=True, file=scanner.scan_flatbed(job))
-    except Exception as e:
-        return jsonify(ok=False, msg=str(e)[:300]), 500
+    # v1.51-tmp02：异步化——立即返回 started/busy，不等 scanimage
+    r = scanner.scan_flatbed(job)
+    if r == "busy":
+        return jsonify(ok=False, msg="设备忙，请稍后再试"), 409
+    return jsonify(ok=True, msg="started")
 
 
 @app.post("/api/jobs/<job>/adf")
