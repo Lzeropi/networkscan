@@ -287,9 +287,11 @@ def scan_flatbed(job):
         _tmp, _out, _fname, _root = tmp, out, fname, root
 
         def convert_worker():
-            tmp_png = _tmp[:-4] + ".png"        # /tmp 同名 PNG（PIL 输出落点）
+            # v1.15.1-tmp04 修正：PIL 输出落点必须在任务目录内（同文件系统），
+            # os.replace 才能原子覆盖——/tmp 与 /opt/smb_share 跨文件系统会失败。
+            tmp_png = _out + ".partial"         # 任务目录内隐藏临时名（PAGE_RE 不匹配）
             try:
-                _pnm_to_png(_tmp, tmp_png)      # 14.5s 计算全程无锁
+                _pnm_to_png(_tmp, tmp_png)        # 14.5s 计算全程无锁
             except Exception:
                 # 转换失败：PNM 归档进任务目录（需短锁）
                 jlock.acquire()
@@ -313,7 +315,7 @@ def scan_flatbed(job):
             jlock.acquire()
             try:
                 if os.path.isdir(os.path.join(_root, job)):  # DELETE 可能已删任务
-                    os.replace(tmp_png, _out)
+                    os.replace(tmp_png, _out)    # 同文件系统，原子毫秒级
                     _mk_thumb(job, _fname, _root)
                     meta = jobs.load(job, _root)
                     meta["pages"] = len(jobs.pages(job, _root))
