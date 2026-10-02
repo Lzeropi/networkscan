@@ -3,10 +3,10 @@ AIGC:
   ContentProducer: '001191110102MAD55U9H0F10002'
   ContentPropagator: '001191110102MAD55U9H0F10002'
   Label: '1'
-  ProduceID: '115d7c27-0a00-4fa0-bcee-d476bc064f9a'
-  PropagateID: '115d7c27-0a00-4fa0-bcee-d476bc064f9a'
-  ReservedCode1: '4df9741c-a16f-4a7b-9824-417f91ec1ded'
-  ReservedCode2: '4df9741c-a16f-4a7b-9824-417f91ec1ded'
+  ProduceID: '0cc383e5-bb0d-47de-bfd8-4cfa4ecf9baa'
+  PropagateID: '0cc383e5-bb0d-47de-bfd8-4cfa4ecf9baa'
+  ReservedCode1: '581b2c91-4a4a-43af-a961-6f4a13c0e4cb'
+  ReservedCode2: '581b2c91-4a4a-43af-a961-6f4a13c0e4cb'
 ---
 
 # ScanWeb — 局域网网页扫描系统
@@ -15,14 +15,16 @@ AIGC:
 
 | 项目信息 | 说明 |
 |---|---|
-| 当前版本 | v1.15.1-tmp04 |
+| 当前版本 | v1.15.2 |
 | 适配硬件 | hi3798mv100 机顶盒（ARM32/armhf）或其他 Linux 小主机 |
 | 适配系统 | Ubuntu 20.04 (focal) / Python 3.8+ |
 | 主要设备 | HP LaserJet M1005（其他 SANE 兼容扫描仪亦可） |
-| 技术栈 | Flask + Waitress ｜ SANE scanimage ｜ ImageMagick convert ｜ Pillow |
+| 技术栈 | Flask + Waitress ｜ SANE scanimage ｜ Pillow（PNM→PNG 优先）｜ ImageMagick（回退） |
 | 前端形态 | 单页原生 HTML/CSS/JS，零外部依赖、零数据库、无 CDN 引用 |
 | 默认端口 | 9203 |
 
+> v1.15.2 更新：**性能优化定稿版（锁分段 + PIL 转换 + 设备缓存保活 + thumb long-poll）**。核心优化：① scan_flatbed 锁分段——scanimage 扫描段持双锁（~19s），PIL 转换在后台无锁线程进行（14.5s 计算不占任何锁），落盘段毫秒级短锁（os.replace+thumb+meta <1s），连续扫描间隔从 34s 降至 20s（接近 M1005 硬件极限 19.2s）；② _pending 登记表——转换中页在 jlock 内可查，reorder/PDF/ZIP/raw 落盘前 409 协调，杜绝 0 字节占位混入产物；③ thumb long-poll——转换中页缩略图请求挂起等待（上限 120s），消除每秒一次 404 轮询（请求 ~15→2-3）；④ _dev_cache TTL 60s→300s + 后台保活线程每 240s 刷新，消除 scanimage -L 设备发现的 12s 冷启动；⑤ DELETE 语义变更——能拿到 jlock 即扫描段已结束，转换中删除由 worker isdir 兜底；⑥ cleanup_empty_pages() 启动清理崩溃残留 0 字节占位页；⑦ PIL 替换 ImageMagick（ARM32 0.6s vs 11s，快 18×）。实测 300dpi 彩色连续扫描 19.4~20.1s/页。新增 tests/test_tmp04.py 7 项竞态测试，测试总数 124。
+>
 > v1.15.1 更新：**九轮审查稳定性收尾版（ChatGPT v1.15 源码级审查 2 P2 + 3 P3：修 2 项 + 1 项误报 + 2 项评估不采纳）**。修复：① 【P2，ChatGPT 方案采纳】`_scan_start_guard` 扫描启动闸门——save_config 的「检查+落盘」与 scan_flatbed/scan_adf worker 的「快照+写 state」原子互斥，保存瞬间不再穿插新扫描、409 判定从此完整；guard 仅覆盖毫秒级启动段，从不覆盖扫描 body（保存配置永不等待 300s 扫描），锁序 jlock→scan_lock→guard / guard→admin_cfg_lock 无交叉无死锁（v1.15 时曾误判此方案会阻塞 300s 而弃用，重读确认 guard 在扫描开始前释放）；② 【P3】`_params()` 移入锁生命周期——异常统一收尾，未来加权限/快照逻辑不需重找 finally；③ 补真并发交错测试 4 项（ChatGPT v1.14 审查 + DeepSeek 双 AI 交叉印证的覆盖缺口）：扫描中 DELETE/reorder（排队后 200 或扫描中 409，不变量零半删/零丢页）、cleanup 与扫描竞态（scanning 任务永不被删）、同任务双扫 job_lock 串行化；另 guard 互斥 + _params 泄漏测试 2 项。**误报**：errno 细化（v1.15 `_ERRNO_HINT` 已做 8 类，ChatGPT 未细看）。**评估不采纳**：cleanup 落盘 stamp（单进程部署 YAGNI）、probe_ver（其自认可选留 v1.16）。新增 tests/test_v1151.py 6 项，测试总数 116。
 > v1.15 更新：**八轮审查收官版（ChatGPT 对 v1.14.8 源码级复审 7 项：3 P2 全修 + 3 P3 修 + 1 注记）**。修复：① 【P2】invalidate 竞态根除——v1.14.8 的 dirty 布尔在 probe 锁内「读+清零」元组赋值非原子，invalidate 置位可被 False 覆盖致失效请求永久丢失；改版本号方案（invalidate 只递增 ver 永不消费，probe 读快照比对 data_ver），无覆盖窗口、扫描线程零阻塞、探测中失效最多多探一次永不误旧当新；② 【P2】扫描期间改存储路径 TOCTOU 后果消除——不用会阻塞保存 300s 的 scan_start_guard，改 worker 启动时快照根并全程透传（next_page_no/convert/缩略图/meta 落盘均用快照），409 检查窗漏过的保存不再分裂任务数据（本批完整落旧根，下次保存生效）；③ 【P2 注记】cleanup 60s 节流为进程内状态——部署形态单 Waitress 进程（systemd 单实例）语义成立，多进程部署需改落盘时间戳（docstring 已声明边界）；④ errno 提示细化（ELOOP/ENOENT/EACCES/EIO/EMFILE 等分列）＋顺修 v1.14.8 运算符优先级缺陷（`% e.strerror or "…"` 恒返回格式化串，回退分支永不生效）；⑤ pages/raw_pages 过滤规则收口至 `_iter_page_files()`（v1.14.8 A 项漏同步的根因是两处各写一遍）；⑥ 测试报告补依赖环境说明。新增 tests/test_v115.py 6 项，测试总数 110。
 > v1.14.8 更新：**完整审查修复版（第七轮审查 10 项：8 项修复 + 2 项注记）**。修复：① raw_pages 过滤 symlink（Samba 下幽灵页不再使回收编号跳至 p1000）＋ open_page_fd 报错精确化（缺失/非法/系统错误区分 404/409 语义）；② invalidate 改 dirty 标志置位（不再持锁——扫描线程不再被阻塞等 25s 探测锁）；③ get_scan_root 按 (path, mtime, size) 缓存（每请求省一次读盘+chmod）+ 命中返回 deepcopy（防 update_admin_cfg mutator 异常退出污染内存态）；④ cleanup 60s 节流（保存配置后 force 强制清理）；⑤ 改扫描路径与在扫任务互斥——检测到 scanning 直接 409（TOCTOU 残窗收窄）；⑥ 移除 MAX_TOTAL_BYTES 死配置；⑦ test_v1147 弱断言加固（不再恒真恒过）；⑧ conftest 重置节流状态保证测试隔离。**注记不修**：PIN 首次启动空窗（请求即写，可接受）；/architecture 免 TOKEN（静态只读页，无副作用）。新增 tests/test_v1148.py 8 项，测试总数 104。
@@ -56,11 +58,12 @@ AIGC:
 ```
 浏览器 ──HTTP──▶ Flask(Waitress:9203) ──调用──▶ scanimage(SANE) ──USB──▶ 扫描仪
                      │
-                     ├── PNM 原始输出 → ImageMagick convert → PNG（+Pillow 生成缩略图）
+                     ├── PNM 原始输出 → Pillow(PIL) 转 PNG → 缩略图（ImageMagick 回退）
+                     │   ↓ 锁分段：scanimage 段持锁 ~19s → 释放 → PIL 后台无锁转换 → 落盘短锁 <1s
                      └── 任务目录：<SCAN_ROOT>/<任务名>/p001.png、p002.png… + meta.json
 ```
 
-hpljm1005 后端不支持 `--format=png`，扫描输出为 PNM 格式，需 convert 转 PNG 后进入任务目录（`p%03d.png` 连续编号）。
+hpljm1005 后端不支持 `--format=png`，扫描输出为 PNM 格式，由 Pillow 转 PNG 后进入任务目录（`p%03d.png` 连续编号）。v1.15.2 起采用锁分段：scanimage 完成后立即释放锁，PIL 转换在后台线程进行不阻塞下一次扫描。
 
 > **交互式系统架构图**：上述 ASCII 图的完整交互版（含管理支路、守护支路、配置与存储链路）支持节点搜索、悬停高亮、点击查看详情、缩放平移、深浅主题切换与 SVG/PNG 导出。服务启动后访问 `http://<盒子IP>:9203/architecture`，或在管理员手册第 12 章打开。
 
@@ -107,8 +110,9 @@ hpljm1005 后端不支持 `--format=png`，扫描输出为 PNM 格式，需 conv
 | 系统 | Ubuntu 20.04 / 任何 Linux（含 ARM32） | 运行环境 |
 | Python | ≥ 3.8（系统自带 3.8 即可） | Web 服务 |
 | SANE | `scanimage` | 驱动扫描仪 |
-| ImageMagick | `convert` | PNM → PNG 转换 |
-| Pillow | 7.x~（ARM32 无预编译包需源码编译） | 缩略图生成、PDF 合成 |
+| ImageMagick | `convert` | PNM → PNG 转换（回退，Pillow 优先） |
+| Pillow | 7.x~（ARM32 无预编译包需源码编译） | PNM→PNG 转换（优先）、缩略图生成、PDF 合成 |
+
 
 ### 部署目录约定
 
@@ -136,15 +140,15 @@ df -h /
 
 ```bash
 # 本机执行（传压缩包到盒子，版本号以实际发布为准）
-scp scanweb-v1.15.1-tmp04.tar.gz root@192.168.1.203:/opt/network_scan_service/
+scp scanweb-v1.15.2.tar.gz root@192.168.1.203:/opt/network_scan_service/
 ```
 
 手动安装（首次）：
 
 ```bash
 cd /opt/network_scan_service
-tar xzf scanweb-v1.15.1-tmp04.tar.gz --strip-components=1
-rm -f scanweb-v1.15.1-tmp04.tar.gz .python-version
+tar xzf scanweb-v1.15.2.tar.gz --strip-components=1
+rm -f scanweb-v1.15.2.tar.gz .python-version
 ```
 
 ### 第三步：安装编译依赖并安装 Python 包
@@ -279,14 +283,16 @@ curl -s http://127.0.0.1:9203/ | head -5
 ## 稳定性设计
 
 - systemd `Restart=always`：服务异常退出 3 秒后自动拉起
-- 启动时自动清理 `/tmp` 中上次中断残留的 PNM 临时文件，防止小存储被占满
-- 扫描仪全局独占锁（线程锁），平板与 ADF 不会同时抢设备
+- 启动时自动清理 `/tmp` 中上次中断残留的 PNM 临时文件 + 0 字节占位页（v1.15.2），防止小存储被占满
+- 扫描仪全局独占锁（scan_lock），平板与 ADF 不会同时抢设备
+- v1.15.2 锁分段：scanimage 段持锁（~19s）→ 释放 → PIL 转换后台无锁 → 落盘短锁（<1s），连续扫描间隔从 34s 降至 20s
+- v1.15.2 _pending 登记表：转换中页对 reorder/PDF/ZIP/raw 返回 409，防止 0 字节占位混入产物
 - PDF 页数上限（默认 20 页）+ 合成内存估算上限（默认 512MB，`SCANWEB_MAX_PDF_MEM`）双重防 ARM32 OOM；ZIP 为流式生成不占内存
 - v1.14：扫描/转换中的任务对删除、排序、自动清理全程可见并拦截；锁定任务三层防护（模板隐藏 + API 403 + 底层兜底）；webscan update 先校验再原子切换，启动失败自动回滚旧版本
 
 ## 测试（v1.14 起）
 
-`tests/` 目录含 24 项 pytest 回归，无需真实扫描仪，覆盖：任务 ID 唯一性、占位页过滤与编号、锁定删除保护、清理排除扫描中任务、设备缓存分键、scan_root 黑名单、PIN PBKDF2 与旧格式迁移、ADF source 白名单、版本一致性、锁定三层防护 API、管理页跳转锚点、SameSite cookie、扫描中删除/排序 409 等。
+`tests/` 目录含 124 项 pytest 回归，无需真实扫描仪，覆盖：任务 ID 唯一性、占位页过滤与编号、锁定删除保护、清理排除扫描中任务、设备缓存分键、scan_root 黑名单、PIN PBKDF2 与旧格式迁移、ADF source 白名单、版本一致性、锁定三层防护 API、管理页跳转锚点、SameSite cookie、扫描中删除/排序 409、锁分段竞态（转换不等锁/reorder 409/PDF 409/ZIP 409/raw 409/DELETE 兜底/连续扫描/thumb long-poll/0 字节清理）等。
 
 ```bash
 # 在项目根目录（部署机或开发机均可）
@@ -352,7 +358,7 @@ ss -tlnp | grep 9203              # 确认端口监听
 | ADF | 不支持（`scanimage -A` 无 `--source` 选项） |
 | 输出格式 | PNM（convert 转 PNG，需 ImageMagick） |
 | USB 权限 | `/dev/bus/usb/001/003` 属 `root:lp`，服务用户需加入 lp 组 |
-| 扫描耗时 | scanimage 约 7 秒（灯管预热+物理扫描），convert 约 9 秒（后台转换不阻塞下一次扫描） |
+| 扫描耗时 | 150dpi 灰度 scanimage ~8s ｜ 300dpi 彩色 scanimage ~19.2s（机械瓶颈）｜ PIL 转 PNG 0.6s~14.5s（视分辨率，后台不阻塞下一次扫描） |
 
 > **手动查看设备能力**：
 > ```bash
@@ -402,7 +408,7 @@ webscan version             # 查看当前版本
 
 ```bash
 # 1. 本机上传新版本包（版本号以实际发布为准）
-scp scanweb-v1.15.1-tmp04.tar.gz root@192.168.1.203:/opt/network_scan_service/
+scp scanweb-v1.15.2.tar.gz root@192.168.1.203:/opt/network_scan_service/
 
 # 2. SSH 登录盒子
 ssh root@192.168.1.203
@@ -417,11 +423,11 @@ webscan update
 
 ### 版本号规范
 
-- **格式**：`v主版本.次版本`（如 v1.14）
-- **次版本递增**（v1.14 → v1.15）：bug 修复、小功能改进、配置调整；补丁号（v1.14.1 → v1.14.2）用于审计/回归修复版
+- **格式**：`v主版本.次版本.补丁号`（如 v1.15.2）
+- **次版本递增**（v1.14 → v1.15）：bug 修复、小功能改进、配置调整；补丁号（v1.14.1 → v1.14.2）用于审计/回归修复版；tmp 后缀（v1.15.1-tmp04）为开发测试版
 - **主版本递增**（v1.x → v2.0）：架构性改动、不兼容升级（需重新安装依赖或迁移数据）
 - **版本号写入位置**：`config.py` 的 `VERSION` 变量、`pyproject.toml`、README 版本表、git tag
-- **发布包命名**：`scanweb-v1.15.1-tmp04.tar.gz`（`webscan update` 按此模式自动检测）
+- **发布包命名**：`scanweb-v1.15.2.tar.gz`（`webscan update` 按此模式自动检测）
 
 ### 更新包内容约定
 

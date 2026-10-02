@@ -327,6 +327,8 @@ figcaption a{padding:2px 8px;font-size:13px}
 
 /* ---------- v1.10 管理页 ---------- */
 .admin-bar{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:14px;flex-wrap:wrap;gap:8px}
+/* ---------- v1.10 管理页 ---------- */
+.admin-bar{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:14px;flex-wrap:wrap;gap:8px}
 .ver-badge{display:inline-block;background:var(--acc);color:#fff;font-size:12px;font-weight:600;border-radius:10px;padding:2px 10px;vertical-align:middle;margin-left:6px}
 .pin-gate{position:fixed;inset:0;background:rgba(30,60,120,.28);backdrop-filter:blur(3px);display:flex;align-items:center;justify-content:center;z-index:99}
 .pin-card{width:320px;text-align:center;padding:26px 22px}

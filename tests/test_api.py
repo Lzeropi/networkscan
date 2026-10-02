@@ -47,7 +47,7 @@ def test_index_ok():
 
 def test_admin_status_version():
     r = client.get("/api/admin/status")
-    assert r.get_json()["version"] == "1.15.1-tmp04"
+    assert r.get_json()["version"] == "1.15.2"
 
 
 # ---------- 新1 锁定任务三层防护 ----------
@@ -105,11 +105,11 @@ def test_admin_page_has_jobs_manage_anchor():
     assert b'id="jobs-manage"' in client.get("/admin").get_data()
 
 
-# ---------- #1 扫描中排序拦截（DELETE 语义 v1.15.1-tmp04 已变：jlock 才是扫描段标志） ----------
+# ---------- #1 扫描中排序拦截（DELETE 语义 v1.15.2 已变：jlock 才是扫描段标志） ----------
 def test_scanning_job_delete_409():
     name = _mk_job()
     scanner.state[name] = {"state": "scanning", "msg": "扫描中"}
-    # v1.15.1-tmp04：DELETE 不再凭 state 拒绝——能拿 jlock 即扫描段已结束；
+    # v1.15.2：DELETE 不再凭 state 拒绝——能拿 jlock 即扫描段已结束；
     # 伪造 state（jlock 空闲）→ DELETE 直接成功（转换中删除由 convert_worker 兜底）
     r = client.delete("/api/jobs/" + name)
     assert r.status_code == 200, "无锁占用时 DELETE 应成功，实际 %s" % r.status_code

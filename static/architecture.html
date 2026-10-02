@@ -3,581 +3,115 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>ScanWeb v1.15.1 系统架构</title>
+<title>ScanWeb 系统架构</title>
 <style>
-/* ===== CSS 变量：深色主题（默认） ===== */
-:root[data-theme="dark"] {
-  --bg: #0f0f1a;
-  --bg-canvas: #141428;
-  --bg-node: #1a1a2e;
-  --bg-panel: #16213e;
-  --text: #e0e0e0;
-  --text-dim: #8888aa;
-  --text-bright: #ffffff;
-  --border: #2a2a4a;
-  --grid-line: #1a1a3a;
-  --connection: #4a4a6a;
-  --highlight: #e94560;
-  --hover-glow: rgba(233,69,96,0.3);
-  --dim-opacity: 0.2;
-  --kind-frontend-bg: #1a1a2e; --kind-frontend-border: #e94560;
-  --kind-backend-bg: #16213e;  --kind-backend-border: #06d6a0;
-  --kind-database-bg: #0d1b2a; --kind-database-border: #48bfe3;
-  --kind-cache-bg: #1a1a2e;    --kind-cache-border: #f5a623;
-  --kind-queue-bg: #1a1a2e;    --kind-queue-border: #a78bfa;
-  --kind-external-bg: #2d1b2e; --kind-external-border: #ec4899;
-  --kind-service-bg: #16213e;  --kind-service-border: #06d6a0;
-  --kind-gateway-bg: #1a1a2e;  --kind-gateway-border: #f72585;
-  --boundary-border: #4a4a6a;
-  --boundary-bg: rgba(74,74,106,0.08);
-  --toolbar-bg: #141428;
-  --toolbar-border: #2a2a4a;
-  --btn-bg: #1a1a2e;
-  --btn-hover: #2a2a4a;
-}
-/* ===== CSS 变量：浅色主题 ===== */
-:root[data-theme="light"] {
-  --bg: #f8f9fa;
-  --bg-canvas: #ffffff;
-  --bg-node: #ffffff;
-  --bg-panel: #f0f4ff;
-  --text: #1a1a2e;
-  --text-dim: #6b7280;
-  --text-bright: #0f0f1a;
-  --border: #e0e0e8;
-  --grid-line: #f0f0f4;
-  --connection: #9ca3af;
-  --highlight: #3b82f6;
-  --hover-glow: rgba(59,130,246,0.15);
-  --dim-opacity: 0.3;
-  --kind-frontend-bg: #f0f4ff; --kind-frontend-border: #3b82f6;
-  --kind-backend-bg: #f0fdf4;  --kind-backend-border: #22c55e;
-  --kind-database-bg: #fefce8; --kind-database-border: #eab308;
-  --kind-cache-bg: #fff7ed;    --kind-cache-border: #f97316;
-  --kind-queue-bg: #faf5ff;    --kind-queue-border: #8b5cf6;
-  --kind-external-bg: #fdf2f8; --kind-external-border: #ec4899;
-  --kind-service-bg: #f0fdf4; --kind-service-border: #14b8a6;
-  --kind-gateway-bg: #fef2f2; --kind-gateway-border: #ef4444;
-  --boundary-border: #cbd5e1;
-  --boundary-bg: rgba(203,213,225,0.1);
-  --toolbar-bg: #ffffff;
-  --toolbar-border: #e0e0e8;
-  --btn-bg: #f8f9fa;
-  --btn-hover: #e8e8f0;
-}
-/* ===== 全局 ===== */
-* { margin:0; padding:0; box-sizing:border-box; }
-body {
-  font-family: -apple-system, "PingFang SC", "Microsoft YaHei", "Noto Sans CJK SC", sans-serif;
-  background: var(--bg); color: var(--text); height:100vh; overflow:hidden;
-  user-select: none;
-}
-/* ===== 工具栏 ===== */
-#toolbar {
-  position: fixed; top:0; left:0; right:0; height:52px; z-index:100;
-  background: var(--toolbar-bg); border-bottom: 1px solid var(--toolbar-border);
-  display: flex; align-items: center; gap:12px; padding: 0 16px;
-}
-#toolbar h1 { font-size:15px; font-weight:600; color:var(--text-bright); white-space:nowrap; }
-#toolbar .spacer { flex:1; }
-#search-box {
-  width:200px; padding:6px 12px; border:1px solid var(--border); border-radius:6px;
-  background: var(--bg-node); color: var(--text); font-size:13px; outline:none;
-}
-#search-box:focus { border-color: var(--highlight); }
-.tb-btn {
-  padding:6px 14px; border:1px solid var(--border); border-radius:6px;
-  background: var(--btn-bg); color: var(--text); font-size:13px; cursor:pointer;
-  transition: background .15s;
-}
-.tb-btn:hover { background: var(--btn-hover); }
-.tb-btn.active { border-color: var(--highlight); color: var(--highlight); }
-/* ===== 画布 ===== */
-#canvas-wrap {
-  position: fixed; top:52px; left:0; right:0; bottom:0; overflow:auto;
-  background: var(--bg-canvas);
-  background-image: linear-gradient(var(--grid-line) 1px, transparent 1px),
-                    linear-gradient(90deg, var(--grid-line) 1px, transparent 1px);
-  background-size: 40px 40px;
-}
-#canvas-inner {
-  position: relative; min-width:100%; min-height:100%; padding:48px;
-  transform-origin: 0 0;
-}
-/* ===== 边界容器 ===== */
-.boundary {
-  position: absolute; border: 2px dashed var(--boundary-border);
-  border-radius: 12px; background: var(--boundary-bg); padding: 24px 16px 16px;
-  pointer-events: none;
-}
-.boundary-label {
-  position: absolute; top: -10px; left: 16px; padding: 2px 12px;
-  background: var(--bg-canvas); font-size: 12px; color: var(--text-dim);
-  border-radius: 4px; pointer-events: none;
-}
-/* ===== 节点 ===== */
-.node {
-  position: absolute; min-width: 140px; max-width: 220px;
-  padding: 12px 16px; border-radius: 8px; border: 2px solid;
-  background: var(--bg-node); cursor: pointer; text-align: center;
-  transition: box-shadow .15s, opacity .2s, transform .15s;
-  z-index: 10;
-}
-.node .node-icon { font-size: 20px; margin-bottom: 4px; }
-.node .node-label { font-size: 13px; font-weight: 600; color: var(--text-bright); }
-.node .node-kind { font-size: 11px; color: var(--text-dim); margin-top: 2px; text-transform: uppercase; }
-.node[data-kind="frontend"]  { border-color: var(--kind-frontend-border); background: var(--kind-frontend-bg); }
-.node[data-kind="backend"]   { border-color: var(--kind-backend-border);  background: var(--kind-backend-bg); }
-.node[data-kind="database"]  { border-color: var(--kind-database-border); background: var(--kind-database-bg); border-radius: 8px; }
-.node[data-kind="cache"]     { border-color: var(--kind-cache-border);    background: var(--kind-cache-bg); }
-.node[data-kind="queue"]     { border-color: var(--kind-queue-border);    background: var(--kind-queue-bg); }
-.node[data-kind="external"]  { border-color: var(--kind-external-border); background: var(--kind-external-bg); }
-.node[data-kind="service"]   { border-color: var(--kind-service-border);  background: var(--kind-service-bg); }
-.node[data-kind="gateway"]   { border-color: var(--kind-gateway-border);  background: var(--kind-gateway-bg); }
-.node:hover { box-shadow: 0 0 16px var(--hover-glow); transform: translateY(-2px); }
-.node.highlighted { box-shadow: 0 0 20px var(--hover-glow); border-width: 3px; }
-.node.dimmed { opacity: var(--dim-opacity); }
-.node.matched { animation: pulse 1s ease-in-out infinite; }
-@keyframes pulse { 0%,100%{box-shadow:0 0 8px var(--highlight)} 50%{box-shadow:0 0 24px var(--highlight)} }
-/* ===== SVG 连线 ===== */
-#svg-layer {
-  position: absolute; top:0; left:0; width:100%; height:100%;
-  pointer-events: none; z-index: 5; overflow: visible;
-}
-.conn-path {
-  fill: none; stroke: var(--connection); stroke-width: 2;
-  stroke-dasharray: 10 8;
-  animation: flow 1.6s linear infinite;
-  transition: stroke .2s, stroke-width .2s, opacity .2s;
-}
-.conn-path.highlight {
-  stroke: var(--highlight); stroke-width: 3;
-  stroke-dasharray: 14 8;
-  animation-duration: .9s;
-}
-.conn-path.dimmed { opacity: var(--dim-opacity); animation-play-state: paused; }
-@keyframes flow {
-  from { stroke-dashoffset: 0; }
-  to   { stroke-dashoffset: -36; }
-}
-.conn-label {
-  fill: var(--text-dim); font-size: 11px; text-anchor: middle;
-  transition: opacity .2s;
-}
-.conn-label.dimmed { opacity: var(--dim-opacity); }
-.conn-label.highlight { fill: var(--highlight); font-weight: 600; }
-/* ===== 详情面板 ===== */
-#detail-panel {
-  position: fixed; top:52px; right:0; bottom:0; width:320px; z-index:50;
-  background: var(--bg-panel); border-left: 1px solid var(--border);
-  transform: translateX(100%); transition: transform .25s; padding: 20px;
-  overflow-y: auto;
-}
-#detail-panel.open { transform: translateX(0); }
-#detail-panel .dp-title { font-size:16px; font-weight:700; color:var(--text-bright); margin-bottom:12px; }
-#detail-panel .dp-kind { font-size:12px; color:var(--text-dim); text-transform:uppercase; margin-bottom:16px; }
-#detail-panel .dp-desc { font-size:13px; line-height:1.6; color:var(--text); margin-bottom:16px; }
-#detail-panel .dp-section { margin-bottom:16px; }
-#detail-panel .dp-section h3 { font-size:12px; color:var(--text-dim); margin-bottom:6px; text-transform:uppercase; }
-#detail-panel .dp-rel { display:flex; align-items:center; gap:6px; font-size:13px; padding:4px 0; }
-#detail-panel .dp-rel .arrow { color:var(--text-dim); }
-#detail-panel .dp-close { position:absolute; top:12px; right:16px; cursor:pointer; font-size:20px; color:var(--text-dim); }
-#detail-panel .dp-close:hover { color:var(--text-bright); }
-/* ===== 图例（右下角可折叠，不遮挡左中部节点，v1.14.1） ===== */
-#legend {
-  position: fixed; bottom:16px; right:16px; z-index:40;
-  background: var(--toolbar-bg); border:1px solid var(--toolbar-border);
-  border-radius: 8px; padding: 10px 14px; font-size: 11px;
-  cursor: pointer; user-select: none; max-width: 320px;
-}
-#legend .lg-title { font-weight:600; margin-bottom:6px; color:var(--text-dim); }
-#legend .lg-item { display:inline-flex; align-items:center; gap:4px; margin-right:12px; }
-#legend .lg-dot { width:10px; height:10px; border-radius:3px; border:2px solid; }
-#legend.collapsed .lg-body { display:none; }
-#legend.collapsed .lg-title { margin-bottom:0; }
-
+:root[data-theme="dark"]{--bg:#0d1117;--fg:#e6edf3;--card:#161b22;--border:#30363d;--line:#58a6ff;--dim:#484f58;--glow:rgba(88,166,255,.6);--node-bg:#1c2128;--accent:#58a6ff;--green:#3fb950;--orange:#d29922;--purple:#bc8cff;--pink:#f778ba;--cyan:#39c5cf}
+:root[data-theme="light"]{--bg:#f6f8fa;--fg:#1f2328;--card:#fff;--border:#d0d7de;--line:#0969da;--dim:#656d76;--glow:rgba(9,105,218,.4);--node-bg:#fff;--accent:#0969da;--green:#1a7f37;--orange:#9a6700;--purple:#8250df;--pink:#cf222e;--cyan:#1b7c83}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--bg);color:var(--fg);font-family:-apple-system,"PingFang SC","Microsoft YaHei","Noto Sans CJK SC",sans-serif;overflow:hidden;height:100vh}
+#toolbar{position:fixed;top:0;left:0;right:0;height:48px;display:flex;align-items:center;gap:12px;padding:0 16px;background:var(--card);border-bottom:1px solid var(--border);z-index:100}
+#toolbar h2{font-size:14px;font-weight:600;white-space:nowrap}
+#toolbar input,#toolbar button{background:var(--node-bg);border:1px solid var(--border);color:var(--fg);border-radius:6px;padding:4px 10px;font-size:13px;cursor:pointer}
+#toolbar input{width:160px}
+#toolbar button:hover{border-color:var(--accent)}
+#canvas{position:absolute;top:48px;left:0;right:0;bottom:0;overflow:auto;cursor:grab}
+#canvas:active{cursor:grabbing}
+#canvas-inner{position:relative;width:100%;min-height:100%;transform-origin:0 0;transition:transform .15s ease}
+.layer{display:flex;justify-content:center;gap:120px;padding:40px 0;position:relative}
+.node{width:180px;min-height:72px;background:var(--node-bg);border:2px solid var(--border);border-radius:10px;padding:10px 14px;display:flex;flex-direction:column;justify-content:center;align-items:center;text-align:center;cursor:pointer;transition:all .2s;position:relative;z-index:10;box-shadow:0 2px 8px rgba(0,0,0,.15)}
+.node:hover{border-color:var(--accent);box-shadow:0 0 16px var(--glow);transform:translateY(-2px)}
+.node.dimmed{opacity:.25}
+.node.matched{border-color:var(--green);box-shadow:0 0 16px rgba(63,185,80,.5)}
+.node .icon{font-size:22px;margin-bottom:4px}
+.node .label{font-size:13px;font-weight:600}
+.node .detail{font-size:11px;color:var(--dim);margin-top:2px;line-height:1.4}
+.node[data-kind="frontend"]{border-color:var(--pink)}
+.node[data-kind="backend"]{border-color:var(--accent)}
+.node[data-kind="service"]{border-color:var(--green)}
+.node[data-kind="external"]{border-color:var(--orange)}
+.node[data-kind="database"]{border-color:var(--cyan)}
+.node[data-kind="cache"]{border-color:var(--orange)}
+.node[data-kind="queue"]{border-color:var(--purple)}
+.boundary{border:2px dashed var(--border);border-radius:14px;padding:24px 40px;margin:0 auto;position:relative;display:flex;gap:120px}
+.boundary-label{position:absolute;top:-10px;left:20px;background:var(--bg);padding:0 8px;font-size:11px;color:var(--dim);font-weight:600;white-space:nowrap}
+svg#conn{position:absolute;top:0;left:0;width:100%;height:100%;pointer-events:none;z-index:5}
+.conn-path{fill:none;stroke:var(--line);stroke-width:2;opacity:.5;transition:opacity .2s,stroke .2s;stroke-dasharray:6 4;animation:flow 2s linear infinite}
+.conn-path.highlight{opacity:1;stroke:var(--accent);stroke-width:2.5;animation:flow .6s linear infinite}
+.conn-label{font-size:10px;fill:var(--dim);font-weight:500}
+@keyframes flow{to{stroke-dashoffset:-20}}
+#detail{position:fixed;bottom:16px;right:16px;width:280px;background:var(--card);border:1px solid var(--border);border-radius:10px;padding:14px;z-index:200;display:none;box-shadow:0 4px 16px rgba(0,0,0,.3)}
+#detail.show{display:block}
+#detail h3{font-size:14px;margin-bottom:8px}
+#detail .row{font-size:12px;color:var(--dim);margin:4px 0}
+#detail .row b{color:var(--fg)}
+#detail .close{position:absolute;top:8px;right:12px;cursor:pointer;color:var(--dim);font-size:16px}
+.legend{position:fixed;bottom:16px;left:16px;background:var(--card);border:1px solid var(--border);border-radius:8px;padding:8px 12px;font-size:11px;z-index:50;display:flex;gap:10px;flex-wrap:wrap;max-width:340px}
+.legend span{display:flex;align-items:center;gap:4px}
+.legend i{width:10px;height:10px;border-radius:50%;display:inline-block}
 </style>
 </head>
 <body>
 <div id="toolbar">
-  <h1 id="diagram-title">架构图</h1>
-  <div class="spacer"></div>
-  <input type="text" id="search-box" placeholder="搜索节点..." />
-  <button class="tb-btn" id="btn-theme" onclick="toggleTheme()">☀ 浅色</button>
-  <button class="tb-btn" id="btn-export-svg" onclick="exportSVG()">导出 SVG</button>
-  <button class="tb-btn" id="btn-export-png" onclick="exportPNG()">导出 PNG</button>
-  <button class="tb-btn" id="btn-reset" onclick="resetView()">重置视图</button>
+  <h2>ScanWeb 架构 (v1.15.2)</h2>
+  <input id="search" placeholder="搜索节点…" type="text">
+  <button onclick="resetView()">复位</button>
+  <button onclick="toggleTheme()" id="themeBtn">☀️</button>
 </div>
-
-<div id="canvas-wrap" onwheel="handleWheel(event)" onmousedown="startPan(event)">
-  <div id="canvas-inner">
-    <svg id="svg-layer"></svg>
-    <!-- 节点和边界由 JS 动态生成 -->
-  </div>
+<div id="canvas"><div id="canvas-inner">
+<div class="layer">
+  <div class="node" data-kind="frontend" data-id="browser" data-label="浏览器" data-detail="HTML/CSS/JS 零依赖"><div class="icon">🖥️</div><div class="label">浏览器</div><div class="detail">HTTP 请求 ~2-3 次/扫描</div></div>
 </div>
-
-<div id="detail-panel">
-  <span class="dp-close" onclick="closeDetail()">✕</span>
-  <div class="dp-title" id="dp-title"></div>
-  <div class="dp-kind" id="dp-kind"></div>
-  <div class="dp-desc" id="dp-desc"></div>
-  <div class="dp-section" id="dp-connections"></div>
-  <div class="dp-section" id="dp-metadata"></div>
+<div class="layer">
+  <div class="node" data-kind="backend" data-id="flask" data-label="Flask + Waitress" data-detail="8线程 / 端口 9203"><div class="icon">⚙️</div><div class="label">Flask + Waitress</div><div class="detail">8线程 / 端口 9203</div></div>
 </div>
-
-<div id="legend" onclick="this.classList.toggle('collapsed')">
-  <div class="lg-title">组件类型 ▾</div>
-  <div class="lg-body">
-    <span class="lg-item"><span class="lg-dot" style="border-color:var(--kind-frontend-border)"></span>前端</span>
-    <span class="lg-item"><span class="lg-dot" style="border-color:var(--kind-gateway-border)"></span>网关</span>
-    <span class="lg-item"><span class="lg-dot" style="border-color:var(--kind-backend-border)"></span>后端</span>
-    <span class="lg-item"><span class="lg-dot" style="border-color:var(--kind-cache-border)"></span>缓存</span>
-    <span class="lg-item"><span class="lg-dot" style="border-color:var(--kind-database-border)"></span>数据库</span>
-    <span class="lg-item"><span class="lg-dot" style="border-color:var(--kind-external-border)"></span>外部</span>
-  </div>
+<div class="boundary">
+  <div class="boundary-label">扫描段（持 scan_lock + jlock ~19s）</div>
+  <div class="node" data-kind="service" data-id="scanimage" data-label="scanimage" data-detail="SANE 驱动"><div class="icon">🔧</div><div class="label">scanimage</div><div class="detail">scanimage -d / 19.2s 彩色</div></div>
+  <div class="node" data-kind="external" data-id="m1005" data-label="HP M1005" data-detail="USB 扫描仪"><div class="icon">🔗</div><div class="label">HP M1005</div><div class="detail">USB / 300dpi 彩色</div></div>
 </div>
-
+<div class="layer">
+  <div class="node" data-kind="backend" data-id="pil" data-label="PIL 转换" data-detail="PNM→PNG 后台无锁 14.5s"><div class="icon">⚙️</div><div class="label">PIL 转换</div><div class="detail">后台无锁 / .partial 落盘</div></div>
+</div>
+<div class="layer">
+  <div class="node" data-kind="database" data-id="storage" data-label="任务目录" data-detail="p001.png + meta.json"><div class="icon">🗄️</div><div class="label">任务目录</div><div class="detail">p001.png + meta.json + .thumbs/</div></div>
+</div>
+<div class="layer">
+  <div class="node" data-kind="cache" data-id="devcache" data-label="_dev_cache" data-detail="设备名缓存 300s"><div class="icon">⚡</div><div class="label">_dev_cache</div><div class="detail">设备名缓存 300s</div></div>
+  <div class="node" data-kind="service" data-id="refresher" data-label="保活线程" data-detail="每 240s 刷新"><div class="icon">🔧</div><div class="label">保活线程</div><div class="detail">每 240s 刷新缓存</div></div>
+  <div class="node" data-kind="queue" data-id="pending" data-label="_pending 登记表" data-detail="转换中 409 协调"><div class="icon">📨</div><div class="label">_pending</div><div class="detail">转换中页 409 协调</div></div>
+</div>
+<svg id="conn"></svg>
+</div></div>
+<div class="legend">
+  <span><i style="background:var(--pink)"></i>前端</span>
+  <span><i style="background:var(--accent)"></i>后端</span>
+  <span><i style="background:var(--green)"></i>服务</span>
+  <span><i style="background:var(--orange)"></i>外部/缓存</span>
+  <span><i style="background:var(--cyan)"></i>存储</span>
+  <span><i style="background:var(--purple)"></i>协调</span>
+</div>
+<div id="detail"><span class="close" onclick="document.getElementById('detail').classList.remove('show')">×</span><h3 id="d-title"></h3><div id="d-body"></div></div>
 <script>
-/* ===== JSON IR 数据（示例：电商架构） ===== */
-const IR = {"diagram_type": "architecture", "meta": {"title": "ScanWeb v1.15.1 系统架构", "locale": "zh-CN", "theme": "dark", "preset": "signal-flow"}, "components": [{"id": "browser", "label": "浏览器 Web UI", "kind": "frontend", "description": "局域网内手机/平板/电脑直接访问，零安装。index（新建任务）/ job（扫描·排序·下载）/ admin（管理）三页。v1.14.2：admin.js api() 写操作统一自动携带 X-CSRF-Token（CSRF 链路闭环）；测试扫描改「已启动+轮询终态」"}, {"id": "waitress", "label": "Waitress :9203", "kind": "gateway", "description": "生产级 WSGI 服务器，8 线程并发。Session cookie SameSite=Lax + HttpOnly（v1.14）。8 线程并发安全：v1.14.2 admin_config 进程级写锁 + 唯一临时文件（并发保存不丢配置）"}, {"id": "app", "label": "app.py 主路由", "kind": "backend", "description": "页面 + 任务 API + ZIP 流式下载 + PDF 合成（内存上限 512MB）。v1.14.2：ZIP 全程持任务锁 + cancel event；v1.14.3：PDF/raw/thumb 下载持任务锁（期间删除/排序排队）、ZIP 满队列断开 worker 0.5s 退出、FNAME_RE p\d+（p1000 全链路可访问）、reorder 事务化（先重编号成功再删，失败反向恢复）"}, {"id": "admin_bp", "label": "admin.py 管理蓝图", "kind": "backend", "description": "PIN 认证（PBKDF2 200k + 旧格式自动迁移 + IP 防暴力 + TTL 清理）、CSRF token 校验（前端自动携带闭环）；v1.14.3：配置保存走 update_admin_cfg 原子事务（锁内 load→改→save，并发改不同字段不丢更新）；testscan 返回 started 语义 v1.14.8（G/F）：有任务扫描中改存储路径直接 409；cleanup 60s 节流（保存策略后 force 立即执行）。"}, {"id": "scanner", "label": "scanner.py 扫描核心", "kind": "backend", "description": "scan_lock 设备独占 + job_lock 任务生命周期锁。v1.14.2 锁顺序统一 job_lock→scan_lock（ADF 主线程双锁到手才启 worker，started 即持锁，TOCTOU 窗口彻底闭合）；ADF 转换完整性判定（部分失败报 error）；转换失败 PNM 移任务目录存活重启；设备解析失败自动失效探测缓存 v1.14.7：scan_flatbed 初始化异常双锁泄漏根治（统一 try/finally）。 v1.15（#1）：worker 启动时快照存储根并全程透传（转换/缩略图/meta 落快照根）——409 检查窗漏过的路径修改不再使在扫任务分裂。 v1.15.1（P2-1）：_scan_start_guard 启动闸门——快照+写 state 与 save_config「检查+落盘」原子互斥（409 判定完整，guard 毫秒级不阻塞扫描）；（P3-1）_params 移入锁生命周期。"}, {"id": "jobsm", "label": "jobs.py 任务管理", "kind": "backend", "description": "任务创建/元数据/页列表/物理排序重编号。页码模型 p\d+（超 999 页可识别，数字序）；任务 ID 24bit + 碰撞重试；v1.14.3：delete() 公共入口自持锁（新调用点天然安全）+ 删除统一清理 scanner.state v1.14.8（A）：raw_pages 过滤 symlink 页（幽灵链接不再使编号跳 p1000）＋ open_page_fd 报错精确化（404/409 语义区分）。 v1.15（#5）：页面枚举收口 _iter_page_files（pages/raw_pages 不再各写过滤规则）；(#1) validate/load/save/pages/next_page_no 支持 root 快照透传——扫描期间改存储路径不再分裂任务数据；(#4) errno 提示细化。"}, {"id": "dp", "label": "device_probe.py 设备探测", "kind": "service", "description": "公共探测模块：正则兼容 反引号/单引号/无引号 三种后端风格（HP/爱普生/佳能/airscan 全兼容）；5min 缓存 + v1.14.2 invalidate() 失效钩子（scanner 解析失败自动重探，双缓存一致性） v1.15（#2）：dirty 布尔改版本号——invalidate 只递增 ver（只增不消费，无覆盖窗口），probe 读快照比对 data_ver，失效永不丢失且扫描线程零阻塞。"}, {"id": "config", "label": "config.py 配置中心", "kind": "service", "description": "环境变量（端口/存储路径/页数与内存上限）+ admin_config.json 运行配置（PIN/别名/默认值/清理策略，0600）；v1.14.3：update_admin_cfg 原子事务根治 lost update；VERSION 1.14.3 v1.14.8（E/J）：get_scan_root 按 (path,mtime,size) 缓存省每请求读盘+chmod，命中返回 deepcopy 防 mutator 异常污染内存态；MAX_TOTAL_BYTES 死配置移除。"}, {"id": "fs", "label": "文件存储 scan_root", "kind": "database", "description": "每任务一个目录：meta.json + pNNN.png 页面 + .thumbs 缩略图。零数据库，Samba 可直接共享给局域网"}, {"id": "scanimage", "label": "SANE scanimage", "kind": "external", "description": "扫描命令行工具，持锁执行（平板单页 300s 超时 / ADF 批量 3600s），短设备名自动解析完整名"}, {"id": "convert", "label": "ImageMagick convert", "kind": "external", "description": "PNM→PNG 转换（hpljm1005 后端不支持直接输出 PNG），后台线程执行不阻塞扫描仪"}, {"id": "scanner_dev", "label": "USB 扫描仪", "kind": "external", "description": "HP LaserJet M1005（或其他 SANE 兼容设备），即插即用，前端下拉自动发现新设备"}, {"id": "systemd", "label": "systemd + webscan CLI", "kind": "service", "description": "Restart=always 自愈；webscan update 回滚不变量 + flock 互斥；v1.14.3：rollback switched 阶段守卫——切换前失败不再误删唯一旧版，保留项必放回（本地双场景演练 8/8）"}], "boundaries": [{"id": "lan", "label": "局域网客户端", "members": ["browser"]}, {"id": "box", "label": "盒子主机（hi3798mv100 / Ubuntu 20.04）", "members": ["waitress", "app", "admin_bp", "scanner", "jobsm", "dp", "config", "fs", "scanimage", "convert", "scanner_dev", "systemd"]}], "connections": [{"from": "browser", "to": "waitress", "label": "HTTP :9203（写请求自动带 CSRF token）", "highlight": true}, {"from": "waitress", "to": "app", "label": "WSGI", "highlight": true}, {"from": "waitress", "to": "admin_bp", "label": "Blueprint"}, {"from": "app", "to": "scanner", "label": "scan / status", "highlight": true}, {"from": "app", "to": "jobsm", "label": "任务 CRUD"}, {"from": "app", "to": "dp", "label": "probe()"}, {"from": "admin_bp", "to": "scanner", "label": "testscan（started）/ state 轮询"}, {"from": "admin_bp", "to": "jobsm", "label": "列表 / 锁定"}, {"from": "admin_bp", "to": "dp", "label": "probe(refresh)"}, {"from": "admin_bp", "to": "config", "label": "配置读写", "highlight": true}, {"from": "scanner", "to": "jobsm", "label": "pages / save"}, {"from": "scanner", "to": "scanimage", "label": "subprocess 持锁", "highlight": true}, {"from": "scanner", "to": "convert", "label": "PNM→PNG"}, {"from": "jobsm", "to": "fs", "label": "meta / 页面"}, {"from": "scanimage", "to": "scanner_dev", "label": "USB SANE", "highlight": true}, {"from": "convert", "to": "fs", "label": "写 PNG"}, {"from": "config", "to": "fs", "label": "admin_config.json"}, {"from": "systemd", "to": "waitress", "label": "启停 / 自愈"}]};
-
-/* ===== 布局配置（v1.14.1：加大间距防遮挡） ===== */
-const LAYER_ORDER = ['frontend','gateway','service','backend','cache','queue','database','external'];
-const NODE_W = 180, NODE_H = 72, GAP_X = 120, GAP_Y = 160, MARGIN = 64;
-
-/* ===== 状态 ===== */
-let nodePositions = {};
-let scale = 1, panX = 0, panY = 0;
-let isPanning = false, panStart = { x:0, y:0, px:0, py:0 };
-let canvasW = 0, canvasH = 0;   // v1.14.1：画布内容尺寸，用于居中
-
-/* ===== 图标映射 ===== */
-const KIND_ICONS = {
-  frontend:'🖥️', backend:'⚙️', database:'🗄️', cache:'⚡',
-  queue:'📨', external:'🔗', service:'🔧', gateway:'🚪'
-};
-
-/* ===== 渲染入口 ===== */
-function render() {
-  document.getElementById('diagram-title').textContent = IR.meta.title;
-  document.documentElement.setAttribute('data-theme', IR.meta.theme || 'dark');
-  layoutNodes();
-  renderBoundaries();
-  renderNodes();
-  renderConnections();
-  updateTransform();
-}
-
-/* ===== 自动布局：按 kind 分层（v1.14.1 后记录画布尺寸供居中） ===== */
-function layoutNodes() {
-  nodePositions = {};
-  const layers = {};
-  IR.components.forEach(c => {
-    const layerIdx = LAYER_ORDER.indexOf(c.kind);
-    const key = layerIdx >= 0 ? layerIdx : 99;
-    if (!layers[key]) layers[key] = [];
-    layers[key].push(c);
-  });
-  const sortedKeys = Object.keys(layers).sort((a,b)=>a-b);
-  sortedKeys.forEach((key, rowIdx) => {
-    const layer = layers[key];
-    layer.forEach((comp, colIdx) => {
-      nodePositions[comp.id] = {
-        x: MARGIN + colIdx * (NODE_W + GAP_X),
-        y: MARGIN + rowIdx * (NODE_H + GAP_Y),
-        w: NODE_W,
-        h: NODE_H
-      };
-    });
-  });
-  // 计算画布内容包围盒（含节点尺寸）
-  const xs = Object.values(nodePositions).map(p => p.x + p.w);
-  const ys = Object.values(nodePositions).map(p => p.y + p.h);
-  canvasW = (xs.length ? Math.max(...xs) : MARGIN * 2) + MARGIN;
-  canvasH = (ys.length ? Math.max(...ys) : MARGIN * 2) + MARGIN;
-  document.getElementById('canvas-inner').style.minWidth = canvasW + 'px';
-  document.getElementById('canvas-inner').style.minHeight = canvasH + 'px';
-}
-
-/* ===== 渲染边界 ===== */
-function renderBoundaries() {
-  const canvas = document.getElementById('canvas-inner');
-  if (!IR.boundaries) return;
-  IR.boundaries.forEach(b => {
-    const members = b.members.map(id => nodePositions[id]).filter(Boolean);
-    if (members.length === 0) return;
-    const minX = Math.min(...members.map(m=>m.x)) - 20;
-    const minY = Math.min(...members.map(m=>m.y)) - 20;
-    const maxX = Math.max(...members.map(m=>m.x+m.w)) + 20;
-    const maxY = Math.max(...members.map(m=>m.y+m.h)) + 20;
-    const div = document.createElement('div');
-    div.className = 'boundary';
-    div.style.cssText = `left:${minX}px;top:${minY}px;width:${maxX-minX}px;height:${maxY-minY}px;`;
-    div.innerHTML = `<span class="boundary-label">${b.label}</span>`;
-    canvas.insertBefore(div, document.getElementById('svg-layer'));
-  });
-}
-
-/* ===== 渲染节点 ===== */
-function renderNodes() {
-  const canvas = document.getElementById('canvas-inner');
-  IR.components.forEach(c => {
-    const pos = nodePositions[c.id];
-    if (!pos) return;
-    const div = document.createElement('div');
-    div.className = 'node';
-    div.id = 'node-' + c.id;
-    div.dataset.kind = c.kind;
-    div.dataset.id = c.id;
-    div.style.cssText = `left:${pos.x}px;top:${pos.y}px;width:${pos.w}px;`;
-    div.innerHTML = `
-      <div class="node-icon">${KIND_ICONS[c.kind]||'📦'}</div>
-      <div class="node-label">${c.label}</div>
-      <div class="node-kind">${c.kind}</div>`;
-    div.addEventListener('mouseenter', () => highlightNode(c.id));
-    div.addEventListener('mouseleave', () => clearHighlight());
-    div.addEventListener('click', () => showDetail(c.id));
-    canvas.appendChild(div);
-  });
-}
-
-/* ===== 渲染连线 ===== */
-function renderConnections() {
-  const svg = document.getElementById('svg-layer');
-  svg.innerHTML = '';
-  const defs = document.createElementNS('http://www.w3.org/2000/svg','defs');
-  defs.innerHTML = `<marker id="arrow" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
-    <polygon points="0 0, 10 3.5, 0 7" fill="var(--connection)" /></marker>
-    <marker id="arrow-hl" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
-    <polygon points="0 0, 10 3.5, 0 7" fill="var(--highlight)" /></marker>`;
-  svg.appendChild(defs);
-
-  IR.connections.forEach((conn, idx) => {
-    const from = nodePositions[conn.from];
-    const to = nodePositions[conn.to];
-    if (!from || !to) return;
-    const x1 = from.x + from.w/2, y1 = from.y + from.h;
-    const x2 = to.x + to.w/2, y2 = to.y;
-    const midY = (y1 + y2) / 2;
-    const d = `M ${x1} ${y1} C ${x1} ${midY}, ${x2} ${midY}, ${x2} ${y2}`;
-
-    const path = document.createElementNS('http://www.w3.org/2000/svg','path');
-    path.setAttribute('d', d);
-    path.setAttribute('class', 'conn-path' + (conn.highlight ? ' highlight' : ''));
-    path.setAttribute('marker-end', conn.highlight ? 'url(#arrow-hl)' : 'url(#arrow)');
-    path.id = 'conn-' + idx;
-    if (conn.style === 'dashed') path.setAttribute('stroke-dasharray', '6,4');
-    svg.appendChild(path);
-
-    if (conn.label) {
-      const text = document.createElementNS('http://www.w3.org/2000/svg','text');
-      text.setAttribute('x', (x1+x2)/2);
-      text.setAttribute('y', midY - 4);
-      text.setAttribute('class', 'conn-label' + (conn.highlight ? ' highlight' : ''));
-      text.textContent = conn.label;
-      svg.appendChild(text);
-    }
-  });
-}
-
-/* ===== 交互：Hover 高亮 ===== */
-function highlightNode(id) {
-  const related = new Set([id]);
-  IR.connections.forEach(c => {
-    if (c.from === id) related.add(c.to);
-    if (c.to === id) related.add(c.from);
-  });
-  document.querySelectorAll('.node').forEach(n => {
-    if (related.has(n.dataset.id)) n.classList.add('highlighted');
-    else n.classList.add('dimmed');
-  });
-  document.querySelectorAll('.conn-path, .conn-label').forEach((el, i) => {
-    const conn = IR.connections[Math.floor(i/1)];
-    // 简化：高亮与该节点相关的连线
-  });
-  IR.connections.forEach((c, i) => {
-    const path = document.getElementById('conn-' + i);
-    if (!path) return;
-    if (c.from === id || c.to === id) { path.classList.remove('dimmed'); path.classList.add('highlight'); }
-    else { path.classList.add('dimmed'); }
-  });
-}
-function clearHighlight() {
-  document.querySelectorAll('.node').forEach(n => { n.classList.remove('highlighted','dimmed'); });
-  document.querySelectorAll('.conn-path').forEach(p => {
-    p.classList.remove('dimmed');
-    if (!IR.connections[parseInt(p.id.replace('conn-',''))]?.highlight) p.classList.remove('highlight');
-  });
-  document.querySelectorAll('.conn-label').forEach(l => { l.classList.remove('dimmed'); });
-}
-
-/* ===== 交互：详情面板 ===== */
-function showDetail(id) {
-  const comp = IR.components.find(c => c.id === id);
-  if (!comp) return;
-  document.getElementById('dp-title').textContent = comp.label;
-  document.getElementById('dp-kind').textContent = comp.kind;
-  document.getElementById('dp-desc').textContent = comp.description || '无描述';
-
-  const upstream = IR.connections.filter(c => c.to === id).map(c => {
-    const src = IR.components.find(x => x.id === c.from);
-    return `<div class="dp-rel"><span>←</span><span style="color:var(--highlight)">${src?.label||c.from}</span><span class="arrow">→</span><span>${c.label||''}</span></div>`;
-  }).join('');
-  const downstream = IR.connections.filter(c => c.from === id).map(c => {
-    const tgt = IR.components.find(x => x.id === c.to);
-    return `<div class="dp-rel"><span>${c.label||''}</span><span class="arrow">→</span><span style="color:var(--highlight)">${tgt?.label||c.to}</span></div>`;
-  }).join('');
-  document.getElementById('dp-connections').innerHTML = `
-    <h3>上游依赖</h3>${upstream||'<div style="color:var(--text-dim)">无</div>'}
-    <h3 style="margin-top:12px">下游调用</h3>${downstream||'<div style="color:var(--text-dim)">无</div>'}`;
-
-  if (comp.metadata) {
-    const meta = Object.entries(comp.metadata).map(([k,v]) => `<div style="font-size:13px"><strong>${k}:</strong> ${v}</div>`).join('');
-    document.getElementById('dp-metadata').innerHTML = `<h3>元数据</h3>${meta}`;
-  } else {
-    document.getElementById('dp-metadata').innerHTML = '';
-  }
-  document.getElementById('detail-panel').classList.add('open');
-}
-function closeDetail() { document.getElementById('detail-panel').classList.remove('open'); }
-
-/* ===== 交互：搜索 ===== */
-document.getElementById('search-box').addEventListener('input', function(e) {
-  const q = e.target.value.toLowerCase().trim();
-  if (!q) { document.querySelectorAll('.node').forEach(n => n.classList.remove('matched')); return; }
-  IR.components.forEach(c => {
-    const el = document.getElementById('node-' + c.id);
-    if (!el) return;
-    if (c.label.toLowerCase().includes(q) || c.kind.toLowerCase().includes(q) || c.id.toLowerCase().includes(q)) {
-      el.classList.add('matched');
-    } else {
-      el.classList.remove('matched');
-    }
-  });
-});
-
-/* ===== 交互：缩放平移 ===== */
-function handleWheel(e) {
-  e.preventDefault();
-  const delta = e.deltaY > 0 ? 0.9 : 1.1;
-  scale = Math.max(0.5, Math.min(3, scale * delta));
-  updateTransform();
-}
-function startPan(e) {
-  if (e.target.closest('.node') || e.target.closest('.boundary')) return;
-  isPanning = true;
-  panStart = { x: e.clientX, y: e.clientY, px: panX, py: panY };
-  document.addEventListener('mousemove', doPan);
-  document.addEventListener('mouseup', endPan);
-}
-function doPan(e) {
-  if (!isPanning) return;
-  panX = panStart.px + (e.clientX - panStart.x);
-  panY = panStart.py + (e.clientY - panStart.y);
-  updateTransform();
-}
-function endPan() { isPanning = false; document.removeEventListener('mousemove', doPan); document.removeEventListener('mouseup', endPan); }
-function updateTransform() {
-  document.getElementById('canvas-inner').style.transform = `translate(${panX}px,${panY}px) scale(${scale})`;
-}
-function resetView() {
-  // v1.14.1：回到 fit 适配居中态
-  fitView();
-  updateTransform();
-}
-
-/* v1.14.1：自适应适配 + 居中——按内容尺寸与视口计算缩放和偏移，保证全部内容可见且居中 */
-function fitView() {
-  const vw = document.getElementById('canvas-wrap').clientWidth;
-  const vh = document.getElementById('canvas-wrap').clientHeight;
-  const s = Math.min(1, (vw - 40) / canvasW, (vh - 40) / canvasH);
-  scale = Math.max(0.5, s);
-  panX = (vw - canvasW * scale) / 2;
-  panY = (vh - canvasH * scale) / 2;
-}
-
-/* v1.14.1：水平垂直居中——按画布内容尺寸与视口计算偏移 */
-function centerView() {
-  const vw = document.getElementById('canvas-wrap').clientWidth;
-  const vh = document.getElementById('canvas-wrap').clientHeight;
-  panX = Math.max(0, (vw - canvasW * scale) / 2);
-  panY = Math.max(0, (vh - canvasH * scale) / 2);
-}
-
-/* ===== 交互：主题切换 ===== */
-function toggleTheme() {
-  const cur = document.documentElement.getAttribute('data-theme');
-  const next = cur === 'dark' ? 'light' : 'dark';
-  document.documentElement.setAttribute('data-theme', next);
-  document.getElementById('btn-theme').textContent = next === 'dark' ? '☀ 浅色' : '🌙 深色';
-  renderConnections(); // 重绘连线以更新箭头颜色
-}
-
-/* ===== 导出：SVG ===== */
-function exportSVG() {
-  const svg = document.getElementById('svg-layer');
-  const serializer = new XMLSerializer();
-  const svgStr = serializer.serializeToString(svg);
-  const blob = new Blob(['<?xml version="1.0"?>\n', svgStr], { type: 'image/svg+xml' });
-  downloadBlob(blob, (IR.meta.title || 'archify') + '.svg');
-}
-
-/* ===== 导出：PNG ===== */
-function exportPNG() {
-  const canvas = document.getElementById('canvas-inner');
-  const rect = canvas.getBoundingClientRect();
-  const w = rect.width, h = rect.height;
-  const pngCanvas = document.createElement('canvas');
-  pngCanvas.width = w * 2; pngCanvas.height = h * 2; // 2x 分辨率
-  const ctx = pngCanvas.getContext('2d');
-  ctx.fillStyle = getComputedStyle(document.body).backgroundColor;
-  ctx.fillRect(0, 0, pngCanvas.width, pngCanvas.height);
-  // 绘制节点
-  IR.components.forEach(c => {
-    const pos = nodePositions[c.id]; if (!pos) return;
-    const el = document.getElementById('node-' + c.id); if (!el) return;
-    const style = getComputedStyle(el);
-    const x = pos.x * 2, y = pos.y * 2, w2 = pos.w * 2;
-    ctx.fillStyle = style.backgroundColor;
-    ctx.strokeStyle = style.borderColor;
-    ctx.lineWidth = 3;
-    ctx.beginPath();
-    ctx.roundRect(x, y, w2, NODE_H * 2, 8);
-    ctx.fill(); ctx.stroke();
-    ctx.fillStyle = style.color;
-    ctx.font = 'bold 24px sans-serif';
-    ctx.textAlign = 'center';
-    ctx.fillText(c.label, x + w2/2, y + NODE_H * 2 / 2 + 8);
-  });
-  // 绘制连线
-  ctx.strokeStyle = '#4a4a6a';
-  ctx.lineWidth = 3;
-  IR.connections.forEach(conn => {
-    const from = nodePositions[conn.from], to = nodePositions[conn.to];
-    if (!from || !to) return;
-    const x1 = (from.x + from.w/2)*2, y1 = (from.y + from.h)*2;
-    const x2 = (to.x + to.w/2)*2, y2 = (to.y)*2;
-    const midY = (y1+y2)/2;
-    ctx.beginPath();
-    ctx.moveTo(x1, y1);
-    ctx.bezierCurveTo(x1, midY, x2, midY, x2, y2);
-    ctx.stroke();
-  });
-  pngCanvas.toBlob(blob => downloadBlob(blob, (IR.meta.title||'archify')+'.png'), 'image/png');
-}
-
-/* ===== 工具函数 ===== */
-function downloadBlob(blob, filename) {
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url; a.download = filename; a.click();
-  URL.revokeObjectURL(url);
-}
-
-/* ===== 初始化（v1.14.1：初始视图自动适配+居中） ===== */
-render();
-fitView();
-updateTransform();
+const EDGES=[{from:"browser",to:"flask",label:"HTTP"},{from:"flask",to:"scanimage",label:"scan_lock"},{from:"scanimage",to:"m1005",label:"USB"},{from:"scanimage",to:"pil",label:"PNM 释放锁"},{from:"pil",to:"storage",label:"PNG落盘 短锁"},{from:"flask",to:"devcache",label:"设备解析"},{from:"refresher",to:"devcache",label:"保活刷新"},{from:"flask",to:"pending",label:"409协调"},{from:"pil",to:"pending",label:"登记/清除"}];
+const NODEINFO={browser:{kind:"frontend",detail:"HTML/CSS/JS 零依赖",conns:["flask"]},flask:{kind:"backend",detail:"8线程 / 端口 9203",conns:["scanimage","devcache","pending"]},scanimage:{kind:"service",detail:"SANE 驱动 / scanimage -d",conns:["m1005","pil"]},m1005:{kind:"external",detail:"USB 扫描仪 / 300dpi 彩色 19.2s",conns:[]},pil:{kind:"backend",detail:"PNM→PNG 后台无锁 14.5s",conns:["storage","pending"]},storage:{kind:"database",detail:"p001.png + meta.json + .thumbs/",conns:[]},devcache:{kind:"cache",detail:"设备名缓存 300s",conns:[]},refresher:{kind:"service",detail:"每 240s 刷新缓存",conns:["devcache"]},pending:{kind:"queue",detail:"转换中页 409 协调",conns:[]}};
+function nodeEl(id){return document.querySelector('.node[data-id="'+id+'"]')}
+function nodeCenter(id){const n=nodeEl(id);if(!n)return null;const c=document.getElementById('canvas-inner');const r=n.getBoundingClientRect();const cr=c.getBoundingClientRect();return{x:r.left-cr.left+r.width/2,y:r.top-cr.top+r.height/2}}
+function drawConn(){const svg=document.getElementById('conn');svg.innerHTML='';const cw=document.getElementById('canvas-inner').scrollWidth;const ch=document.getElementById('canvas-inner').scrollHeight;svg.setAttribute('width',Math.max(cw,window.innerWidth));svg.setAttribute('height',Math.max(ch,window.innerHeight));EDGES.forEach(e=>{const f=nodeCenter(e.from),t=nodeCenter(e.to);if(!f||!t)return;const path=document.createElementNS('http://www.w3.org/2000/svg','path');const dy=t.y-f.y;path.setAttribute('d','M'+f.x+','+f.y+' C'+f.x+','+(f.y+dy*.4)+' '+t.x+','+(t.y-dy*.4)+' '+t.x+','+t.y);path.setAttribute('class','conn-path');path.setAttribute('data-from',e.from);path.setAttribute('data-to',e.to);svg.appendChild(path);const tx=document.createElementNS('http://www.w3.org/2000/svg','text');tx.setAttribute('x',(f.x+t.x)/2);tx.setAttribute('y',(f.y+t.y)/2);tx.setAttribute('class','conn-label');tx.setAttribute('text-anchor','middle');tx.textContent=e.label;svg.appendChild(tx)})}
+function highlight(id){document.querySelectorAll('.node').forEach(n=>{const nid=n.dataset.id;const rel=new Set([id]);EDGES.forEach(e=>{if(e.from===id)rel.add(e.to);if(e.to===id)rel.add(e.from)});n.classList.toggle('dimmed',!rel.has(nid)&&nid!==id)});document.querySelectorAll('.conn-path').forEach(p=>{p.classList.toggle('highlight',p.dataset.from===id||p.dataset.to===id)})}
+function clearHL(){document.querySelectorAll('.node').forEach(n=>n.classList.remove('dimmed'));document.querySelectorAll('.conn-path').forEach(p=>p.classList.remove('highlight'))}
+document.querySelectorAll('.node').forEach(n=>{n.addEventListener('click',()=>{const id=n.dataset.id;const info=NODEINFO[id];document.getElementById('d-title').textContent=n.dataset.label;document.getElementById('d-body').innerHTML='<div class="row"><b>类型:</b> '+info.kind+'</div><div class="row"><b>说明:</b> '+info.detail+'</div><div class="row"><b>连接:</b> '+(info.conns.length?info.conns.join(', '):'无')+'</div>';document.getElementById('detail').classList.add('show')});n.addEventListener('mouseenter',()=>highlight(n.dataset.id));n.addEventListener('mouseleave',()=>clearHL())});
+document.getElementById('search').addEventListener('input',e=>{const q=e.target.value.toLowerCase().trim();if(!q){document.querySelectorAll('.node').forEach(n=>n.classList.remove('matched'));return}document.querySelectorAll('.node').forEach(n=>{const m=n.dataset.label.toLowerCase().includes(q)||n.dataset.id.toLowerCase().includes(q)||n.dataset.detail.toLowerCase().includes(q);n.classList.toggle('matched',m)})});
+let scale=1,ox=0,oy=0,isDrag=false,dx=0,dy=0;
+function applyTF(){document.getElementById('canvas-inner').style.transform='translate('+ox+'px,'+oy+'px) scale('+scale+')'}
+document.getElementById('canvas').addEventListener('wheel',e=>{e.preventDefault();scale=Math.max(.4,Math.min(2.5,scale*(e.deltaY>0?.9:1.1)));applyTF()});
+document.getElementById('canvas').addEventListener('mousedown',e=>{if(e.target.closest('.node'))return;isDrag=true;dx=e.clientX-ox;dy=e.clientY-oy});
+document.getElementById('canvas').addEventListener('mousemove',e=>{if(!isDrag)return;ox=e.clientX-dx;oy=e.clientY-dy;applyTF()});
+document.addEventListener('mouseup',()=>isDrag=false);
+function fitView(){const inner=document.getElementById('canvas-inner');const cw=inner.scrollWidth,ch=inner.scrollHeight;const vw=window.innerWidth,vh=window.innerHeight-48;scale=Math.min(vw/cw*.85,vh/ch*.85,1);ox=(vw-cw*scale)/2;oy=0;applyTF()}
+function resetView(){scale=1;ox=0;oy=0;applyTF();setTimeout(fitView,50)}
+function toggleTheme(){const d=document.documentElement;d.dataset.theme=d.dataset.theme==='dark'?'light':'dark';document.getElementById('themeBtn').textContent=d.dataset.theme==='dark'?'☀️':'🌙'}
+setTimeout(()=>{drawConn();fitView()},100);
+window.addEventListener('resize',()=>{drawConn();fitView()});
 </script>
 </body>
 </html>

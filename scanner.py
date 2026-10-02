@@ -170,7 +170,7 @@ def _pnm_to_png(src, dst):
     回退保安全网：PIL 偶遇异常格式 → ImageMagick 兜底 → 仍失败由调用方保留 PNM 源。"""
     try:
         with Image.open(src) as im:
-            im.save(dst)
+            im.save(dst, format="PNG")    # v1.15.1-tmp04：显式 PNG（.partial 扩展名 PIL 认不出）
     except Exception:
         subprocess.run([CONVERT, src, dst], stderr=subprocess.PIPE,
                        timeout=CONVERT_CMD_TIMEOUT, check=True)

@@ -415,11 +415,17 @@ def raw(job, fname):
 def thumb(job, fname):
     if not FNAME_RE.fullmatch(fname) or not fname.endswith(".jpg"):
         abort(404)
-    # v1.14.4（P1）：同 raw——拒 symlink + containment；B2 fd snapshot 同 raw
+# v1.14.4（P1）：同 raw——拒 symlink + containment；B2 fd snapshot 同 raw
     try:
         base = jobs.path(job)
     except jobs.JobError:
         abort(404)
+    png_name = fname[:-4] + ".png"
+    # v1.15.1-tmp04：转换中页挂起等待（long-poll，不持锁）——前端 1 次请求
+    # 等转换完成直接 200，不再产生每秒一次的 404 轮询。上限 120s 防异常挂死。
+    deadline = time.time() + 120
+    while scanner.has_pending(job, png_name) and time.time() < deadline:
+        time.sleep(0.5)
     with jobs.job_lock(job):
         try:
             f = jobs.open_page_fd(base, os.path.join(".thumbs", fname))

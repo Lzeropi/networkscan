@@ -1,4 +1,4 @@
-# tests/test_tmp04.py — v1.15.1-tmp04 锁分段验证
+# tests/test_tmp04.py — v1.15.2 锁分段验证
 # 转换不再持 jlock：连续扫描不等转换、转换中 reorder/PDF/ZIP/raw 409、
 # 转换中 DELETE 兜底、pending 登记生命周期、0 字节占位页启动清理
 import os
@@ -179,6 +179,25 @@ def test_back_to_back_scans_no_convert_wait(monkeypatch, tmp_path):
     assert not scanner.has_pending(name)
     st = scanner.get_state(name)
     assert st["state"] == "done", st
+
+
+# ---------- thumb 转换中 long-poll：一次请求等转换完成，无 404 轮询 ----------
+def test_thumb_longpoll_waits_for_convert(monkeypatch, tmp_path):
+    name = _mk_job()
+    monkeypatch.setattr(scanner, "SCANIMAGE",
+                        _fake_script(str(tmp_path) + "/scan.sh",
+                                     "#!/bin/sh\nsleep 0.2\nexit 0\n"))
+    monkeypatch.setattr(scanner, "_pnm_to_png", _SlowFx(monkeypatch, sleep=1.0))
+    scanner.scan_flatbed(name)          # 转换中（1s）
+    assert scanner.has_pending(name, "p002.png")
+
+    c = app_mod.app.test_client()
+    t0 = time.time()
+    r = c.get("/job/" + name + "/thumb/p002.jpg")
+    dt = time.time() - t0
+    assert r.status_code == 200, "转换中请求 thumb 必须挂起等到完成返回 200，实际 %s" % r.status_code
+    assert dt >= 0.8, "应等待转换完成（≥0.8s），实际 %.2fs——未挂起？" % dt
+    assert len(r.data) > 0, "thumb 必须有效"
 
 
 # ---------- 0 字节占位页启动清理 ----------
