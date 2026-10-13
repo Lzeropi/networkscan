@@ -3,10 +3,10 @@ AIGC:
   ContentProducer: '001191110102MAD55U9H0F10002'
   ContentPropagator: '001191110102MAD55U9H0F10002'
   Label: '1'
-  ProduceID: '0cc383e5-bb0d-47de-bfd8-4cfa4ecf9baa'
-  PropagateID: '0cc383e5-bb0d-47de-bfd8-4cfa4ecf9baa'
-  ReservedCode1: '581b2c91-4a4a-43af-a961-6f4a13c0e4cb'
-  ReservedCode2: '581b2c91-4a4a-43af-a961-6f4a13c0e4cb'
+  ProduceID: '7963a747-503b-4892-8d4e-47d2804229cf'
+  PropagateID: '7963a747-503b-4892-8d4e-47d2804229cf'
+  ReservedCode1: 'd7d7e36b-ad77-4c1a-9574-65d0d720aeeb'
+  ReservedCode2: 'd7d7e36b-ad77-4c1a-9574-65d0d720aeeb'
 ---
 
 # ScanWeb — 局域网网页扫描系统
@@ -15,7 +15,7 @@ AIGC:
 
 | 项目信息 | 说明 |
 |---|---|
-| 当前版本 | v1.15.2 |
+| 当前版本 | v1.16.0 |
 | 适配硬件 | hi3798mv100 机顶盒（ARM32/armhf）或其他 Linux 小主机 |
 | 适配系统 | Ubuntu 20.04 (focal) / Python 3.8+ |
 | 主要设备 | HP LaserJet M1005（其他 SANE 兼容扫描仪亦可） |
@@ -23,6 +23,8 @@ AIGC:
 | 前端形态 | 单页原生 HTML/CSS/JS，零外部依赖、零数据库、无 CDN 引用 |
 | 默认端口 | 9203 |
 
+> v1.16.0 更新：**正式发布版（ChatGPT + DeepSeek 共五轮审查定稿，196 项回归 + 真机 300dpi 彩色实测通过）**。新功能：① 输出格式可选 png/jpg/webp + 任务页参数修改 API（PUT /api/jobs/<job>/params，单参数即时保存、设备能力白名单校验，扫描中可改对下次扫描生效）；② 转换队列化——常驻 worker FIFO 串行 + 有界水位（MAX_PENDING_PNM=4，超限拒扫防无限堆积），重启恢复归档；③ ADF 批量入队——扫描段结束即释放双锁（转换期 reorder 不被阻塞）、done 判定看 pending 收敛、换设备 source 兼容校验；④ ZIP 打包 / PDF 合成实时进度——按钮显示「打包中 n/m」，进度按 {job:{zip,pdf}} 隔离，并发互不覆盖。修复：⑤ ChatGPT 第四轮审查 8 项（tmp05）；⑥ ADF 批次 >4 页撞 PNM 水位的永久死锁根治（DeepSeek 实测复现：先入队后释锁 → 落盘需被自持的 jlock → 死锁；改释锁后再入队，反向验证防回归）；⑦ 进度登记按 kind 隔离（原单条扁平记录被 ZIP/PDF 并发覆盖致按钮卡死，用户实测报障）；⑧ jobs 删除统一清进度残留 + O_NOFOLLOW 防 PIL symlink 读穿；⑨ 按 109 项代码级审查修 11 项（api_testscan busy 检查、dl_zip Response 构造顺序、jobs.save 线程 ID、api_delete TOCTOU 403、fd 泄漏防护、_JobLock refs 保护等）。新增 tests/test_v16t01~t09.py 72 项，测试总数 196。
+> 
 > v1.15.2 更新：**性能优化定稿版（锁分段 + PIL 转换 + 设备缓存保活 + thumb long-poll）**。核心优化：① scan_flatbed 锁分段——scanimage 扫描段持双锁（~19s），PIL 转换在后台无锁线程进行（14.5s 计算不占任何锁），落盘段毫秒级短锁（os.replace+thumb+meta <1s），连续扫描间隔从 34s 降至 20s（接近 M1005 硬件极限 19.2s）；② _pending 登记表——转换中页在 jlock 内可查，reorder/PDF/ZIP/raw 落盘前 409 协调，杜绝 0 字节占位混入产物；③ thumb long-poll——转换中页缩略图请求挂起等待（上限 120s），消除每秒一次 404 轮询（请求 ~15→2-3）；④ _dev_cache TTL 60s→300s + 后台保活线程每 240s 刷新，消除 scanimage -L 设备发现的 12s 冷启动；⑤ DELETE 语义变更——能拿到 jlock 即扫描段已结束，转换中删除由 worker isdir 兜底；⑥ cleanup_empty_pages() 启动清理崩溃残留 0 字节占位页；⑦ PIL 替换 ImageMagick（ARM32 0.6s vs 11s，快 18×）。实测 300dpi 彩色连续扫描 19.4~20.1s/页。新增 tests/test_tmp04.py 7 项竞态测试，测试总数 124。
 >
 > v1.15.1 更新：**九轮审查稳定性收尾版（ChatGPT v1.15 源码级审查 2 P2 + 3 P3：修 2 项 + 1 项误报 + 2 项评估不采纳）**。修复：① 【P2，ChatGPT 方案采纳】`_scan_start_guard` 扫描启动闸门——save_config 的「检查+落盘」与 scan_flatbed/scan_adf worker 的「快照+写 state」原子互斥，保存瞬间不再穿插新扫描、409 判定从此完整；guard 仅覆盖毫秒级启动段，从不覆盖扫描 body（保存配置永不等待 300s 扫描），锁序 jlock→scan_lock→guard / guard→admin_cfg_lock 无交叉无死锁（v1.15 时曾误判此方案会阻塞 300s 而弃用，重读确认 guard 在扫描开始前释放）；② 【P3】`_params()` 移入锁生命周期——异常统一收尾，未来加权限/快照逻辑不需重找 finally；③ 补真并发交错测试 4 项（ChatGPT v1.14 审查 + DeepSeek 双 AI 交叉印证的覆盖缺口）：扫描中 DELETE/reorder（排队后 200 或扫描中 409，不变量零半删/零丢页）、cleanup 与扫描竞态（scanning 任务永不被删）、同任务双扫 job_lock 串行化；另 guard 互斥 + _params 泄漏测试 2 项。**误报**：errno 细化（v1.15 `_ERRNO_HINT` 已做 8 类，ChatGPT 未细看）。**评估不采纳**：cleanup 落盘 stamp（单进程部署 YAGNI）、probe_ver（其自认可选留 v1.16）。新增 tests/test_v1151.py 6 项，测试总数 116。
@@ -58,12 +60,12 @@ AIGC:
 ```
 浏览器 ──HTTP──▶ Flask(Waitress:9203) ──调用──▶ scanimage(SANE) ──USB──▶ 扫描仪
                      │
-                     ├── PNM 原始输出 → Pillow(PIL) 转 PNG → 缩略图（ImageMagick 回退）
+                     ├── PNM 原始输出 → Pillow(PIL) 转 PNG/JPEG/WebP → 缩略图统一 JPEG（ImageMagick 仅 PNG 回退）
                      │   ↓ 锁分段：scanimage 段持锁 ~19s → 释放 → PIL 后台无锁转换 → 落盘短锁 <1s
-                     └── 任务目录：<SCAN_ROOT>/<任务名>/p001.png、p002.png… + meta.json
+                     └── 任务目录：<SCAN_ROOT>/<任务名>/p001.{png|jpg|webp}、p002… + meta.json
 ```
 
-hpljm1005 后端不支持 `--format=png`，扫描输出为 PNM 格式，由 Pillow 转 PNG 后进入任务目录（`p%03d.png` 连续编号）。v1.15.2 起采用锁分段：scanimage 完成后立即释放锁，PIL 转换在后台线程进行不阻塞下一次扫描。
+hpljm1005 后端不支持 `--format=png`，扫描输出为 PNM 格式，由 Pillow 转为目标格式后进入任务目录（`p%03d.{format}` 连续编号，格式可选 png/jpg/webp）。v1.15.2 起采用锁分段：scanimage 完成后立即释放锁，PIL 转换在后台线程进行不阻塞下一次扫描。
 
 > **交互式系统架构图**：上述 ASCII 图的完整交互版（含管理支路、守护支路、配置与存储链路）支持节点搜索、悬停高亮、点击查看详情、缩放平移、深浅主题切换与 SVG/PNG 导出。服务启动后访问 `http://<盒子IP>:9203/architecture`，或在管理员手册第 12 章打开。
 
@@ -140,15 +142,15 @@ df -h /
 
 ```bash
 # 本机执行（传压缩包到盒子，版本号以实际发布为准）
-scp scanweb-v1.15.2.tar.gz root@192.168.1.203:/opt/network_scan_service/
+scp scanweb-v1.16.0.tar.gz root@192.168.1.203:/opt/network_scan_service/
 ```
 
 手动安装（首次）：
 
 ```bash
 cd /opt/network_scan_service
-tar xzf scanweb-v1.15.2.tar.gz --strip-components=1
-rm -f scanweb-v1.15.2.tar.gz .python-version
+tar xzf scanweb-v1.16.0.tar.gz --strip-components=1
+rm -f scanweb-v1.16.0.tar.gz .python-version
 ```
 
 ### 第三步：安装编译依赖并安装 Python 包
@@ -292,7 +294,7 @@ curl -s http://127.0.0.1:9203/ | head -5
 
 ## 测试（v1.14 起）
 
-`tests/` 目录含 124 项 pytest 回归，无需真实扫描仪，覆盖：任务 ID 唯一性、占位页过滤与编号、锁定删除保护、清理排除扫描中任务、设备缓存分键、scan_root 黑名单、PIN PBKDF2 与旧格式迁移、ADF source 白名单、版本一致性、锁定三层防护 API、管理页跳转锚点、SameSite cookie、扫描中删除/排序 409、锁分段竞态（转换不等锁/reorder 409/PDF 409/ZIP 409/raw 409/DELETE 兜底/连续扫描/thumb long-poll/0 字节清理）等。
+`tests/` 目录含 196 项 pytest 回归（v1.16.0 实测全绿，无需真实扫描仪），覆盖：任务 ID 唯一性、占位页过滤与编号、锁定删除保护、清理排除扫描中/转换中任务、设备缓存分键、scan_root 黑名单、PIN PBKDF2 与旧格式迁移、ADF source 白名单、版本一致性、锁定三层防护 API、管理页跳转锚点、SameSite cookie、扫描中删除/排序 409、锁分段竞态、转换队列化、ADF 批量入队、tmp03/tmp04 审查修复回归，以及 T04 审查修复 + tmp07 DeepSeek 审查修复（ADF 超水位死锁/dl_zip 锁泄漏/state 重建/ImageMagick 安全副本）+ ZIP/PDF 打包进度提示（按 kind 隔离，并发互不覆盖）等。
 
 ```bash
 # 在项目根目录（部署机或开发机均可）
@@ -408,7 +410,7 @@ webscan version             # 查看当前版本
 
 ```bash
 # 1. 本机上传新版本包（版本号以实际发布为准）
-scp scanweb-v1.15.2.tar.gz root@192.168.1.203:/opt/network_scan_service/
+scp scanweb-v1.16.0.tar.gz root@192.168.1.203:/opt/network_scan_service/
 
 # 2. SSH 登录盒子
 ssh root@192.168.1.203
@@ -427,7 +429,7 @@ webscan update
 - **次版本递增**（v1.14 → v1.15）：bug 修复、小功能改进、配置调整；补丁号（v1.14.1 → v1.14.2）用于审计/回归修复版；tmp 后缀（v1.15.1-tmp04）为开发测试版
 - **主版本递增**（v1.x → v2.0）：架构性改动、不兼容升级（需重新安装依赖或迁移数据）
 - **版本号写入位置**：`config.py` 的 `VERSION` 变量、`pyproject.toml`、README 版本表、git tag
-- **发布包命名**：`scanweb-v1.15.2.tar.gz`（`webscan update` 按此模式自动检测）
+- **发布包命名**：`scanweb-v1.16.0.tar.gz`（`webscan update` 按此模式自动检测）
 
 ### 更新包内容约定
 

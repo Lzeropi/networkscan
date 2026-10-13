@@ -6,6 +6,7 @@
   <h2>{{ job }}</h2>
   <p class="meta">创建：{{ meta.created }} ｜ {{ meta.params.get('dpi', '150') }}dpi ·
      {% set mode_cn = {'Color':'彩色','Gray':'灰度','Lineart':'黑白'}.get(meta.params.get('mode', 'Gray'), meta.params.get('mode', 'Gray')) %}{{ mode_cn }}{% if meta.params.get('crop') %} · A4裁边{% endif %} ｜
+     {% set fmt_cn = {'png':'PNG','jpg':'JPEG','webp':'WebP'}.get(meta.params.get('format', 'png'), 'PNG') %}{{ fmt_cn }} ｜
      {% if meta.params.get('source') == 'adf' %}连续进纸{% else %}平板{% endif %}
      ｜ 共 <span id="pgcount">{{ pairs|length }}</span> 页{% if meta.locked %} ｜ 🔒 已锁定保护{% endif %}</p>
   <div class="actions">
@@ -13,12 +14,62 @@
     {% if meta.params.get('source') == 'adf' %}
     <button id="btnAdf" onclick="startAdf('{{ job }}')">开始连续扫描（ADF）</button>
     {% endif %}
-    <a class="btn" href="/job/{{ job }}/download.zip">⬇ 打包 ZIP</a>
-    <a class="btn" href="/job/{{ job }}/download.pdf">⬇ 合成 PDF</a>
+    <a class="btn" id="btnZip" href="/job/{{ job }}/download.zip" onclick="dlWithProgress('{{ job }}','zip',this.href,this);return false;">⬇ 打包 ZIP</a>
+    <a class="btn" id="btnPdf" href="/job/{{ job }}/download.pdf" onclick="dlWithProgress('{{ job }}','pdf',this.href,this);return false;">⬇ 合成 PDF</a>
     <button class="btn" id="btnQr" onclick="showQr('{{ job }}')" title="手机扫码直达本任务页">📱 扫码取件</button>
     {% if not meta.locked %}<button class="danger" onclick="delJob('{{ job }}')">删除任务</button>{% endif %}
   </div>
   <p id="status" class="status"></p>
+  <details class="adv" id="jobParamsBox" data-job="{{ job }}">
+    <summary>扫描参数（修改后对下一次扫描生效，已扫页面不受影响）</summary>
+    <fieldset id="jobParamsFieldset">
+      <div class="row">
+        <div class="dd-group">
+          <span class="dd-label">设备</span>
+          <div class="dropdown" data-name="jp_device" id="jpDevDropdown">
+            <button type="button" class="dd-toggle">{{ meta.params.get('device', '') or '加载中…' }}<span class="dd-caret"></span></button>
+            <div class="dd-menu" id="jpDevMenu"></div>
+            <input type="hidden" name="jp_device" value="{{ meta.params.get('device', '') }}">
+          </div>
+          <button type="button" class="btn" onclick="reprobe(this, function(){ loadJobParams('{{ job }}', jobParamsFromDom()) })" title="探测失败或设备列表为空时，点此强制重新探测（约需数秒）">重新探测</button>
+        </div>
+        <div class="dd-group">
+          <span class="dd-label">分辨率</span>
+          <div class="dropdown" data-name="jp_dpi">
+            <button type="button" class="dd-toggle">{{ meta.params.get('dpi', '150') }}<span class="dd-caret"></span></button>
+            <div class="dd-menu" id="jpDpiMenu"></div>
+            <input type="hidden" name="jp_dpi" value="{{ meta.params.get('dpi', '150') }}">
+          </div>
+          <span class="dd-unit">dpi</span>
+        </div>
+        <div class="dd-group">
+          <span class="dd-label">色彩</span>
+          <div class="dropdown" data-name="jp_mode">
+            {% set cur_mode = meta.params.get('mode', 'Gray') %}
+            {% set cur_mode_cn = {'Color':'彩色','Gray':'灰度','Lineart':'黑白'}.get(cur_mode, cur_mode) %}
+            <button type="button" class="dd-toggle">{{ cur_mode_cn }}<span class="dd-caret"></span></button>
+            <div class="dd-menu" id="jpModeMenu"></div>
+            <input type="hidden" name="jp_mode" value="{{ cur_mode }}">
+          </div>
+        </div>
+        <div class="dd-group">
+          <span class="dd-label">输出格式</span>
+          {% set cur_fmt = meta.params.get('format', 'png') %}
+          <div class="dropdown" data-name="jp_format">
+            <button type="button" class="dd-toggle">{{ {'png':'PNG','jpg':'JPEG','webp':'WebP'}.get(cur_fmt, 'PNG') }}<span class="dd-caret"></span></button>
+            <div class="dd-menu">
+              <button type="button" class="dd-item{% if cur_fmt == 'png' %} selected{% endif %}" data-value="png" title="无损压缩，适合归档/凭证，彩色约 4MB/页">PNG</button>
+              <button type="button" class="dd-item{% if cur_fmt == 'jpg' %} selected{% endif %}" data-value="jpg" title="体积小速度快（约 0.2MB/页），日常流转推荐">JPEG</button>
+              <button type="button" class="dd-item{% if cur_fmt == 'webp' %} selected{% endif %}" data-value="webp" title="体积最小，老浏览器或微信内置浏览器可能不显示">WebP</button>
+            </div>
+            <input type="hidden" name="jp_format" value="{{ cur_fmt }}">
+          </div>
+        </div>
+        <label class="crop-label"><input type="checkbox" id="jpCrop" name="jp_crop"{% if meta.params.get('crop') %} checked{% endif %} onchange="saveJobField('{{ job }}','jp_crop',this.checked)"> 按 A4 尺寸裁边</label>
+      </div>
+      <p class="hint">选定即保存，对下一次扫描生效，已扫页面不受影响；同一任务允许混合格式（打包 ZIP/PDF 均兼容）；扫描或转换期间修改不影响当前进行中的页面。</p>
+    </fieldset>
+  </details>
 </section>
 <section>
   <div class="section-title">
@@ -54,5 +105,5 @@
   </div>
 </div>
 <div id="scanBusyBar" class="card warn" style="display:none;margin-bottom:14px"></div>
-<script>initJobPage(); initReorderDrag(); checkScanStatus();</script>
+<script>initJobPage(); initReorderDrag(); initDropdowns(); checkScanStatus(); loadJobParams('{{ job }}', {{ (meta.params or {})|tojson }});</script>
 {% endblock %}

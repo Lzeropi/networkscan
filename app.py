@@ -3,8 +3,11 @@ import os
 import queue as q
 import re
 import shutil
+import subprocess
 import sys
+import tempfile
 import threading
+import time
 import zipfile
 from urllib.parse import quote
 
@@ -17,7 +20,6 @@ import admin
 import device_probe
 import jobs
 import scanner
-import time
 from config import BIND, CONVERT, MAX_PDF_MEM, MAX_PDF_PAGES, PORT, SCANIMAGE, SECRET, TOKEN, VERSION
 from config import get_scan_root
 
@@ -35,7 +37,7 @@ def _security_headers(resp):
     resp.headers["X-Content-Type-Options"] = "nosniff"
     resp.headers.setdefault("Referrer-Policy", "same-origin")
     return resp
-FNAME_RE = re.compile(r"p\d+\.(png|jpg)")   # v1.14.3（P2-3）：与 jobs.PAGE_RE 同步 p\d+——p1000 页面 raw/thumb 不再 404
+FNAME_RE = re.compile(r"p\d+\.(png|jpg|webp)")   # v1.16.0-tmp01：格式可选；v1.14.3（P2-3）与 jobs.PAGE_RE 同步 p\d+
 ZIP_QUEUE_MAXSIZE = 16   # v1.14.3（P2）：提为常量供测试注入（满队列断开场景）
 
 
@@ -135,17 +137,108 @@ def architecture():
 
 
 # ---------------- API ----------------
+def _validate_scan_params(dpi, mode, fmt, source=None):
+    """v1.16.0-tmp04（P2-8，审查报告）：创建任务/修改参数共享的基本校验
+    （设备能力级校验仍由各入口按探测结果做）。返回错误消息或空串。
+    v1.16.0-tmp05（T04-07，审查报告）：新增 source 枚举校验——创建接口不再
+    接受任意来源字符串落盘（fail-closed）。"""
+    if fmt not in scanner.VALID_FORMAT:
+        return "不支持的输出格式：%s" % str(fmt)[:30]
+    if dpi not in scanner.VALID_DPI or mode not in scanner.VALID_MODE:
+        return "参数超出支持范围"
+    if source is not None and source not in ("flatbed", "adf"):
+        return "不支持的扫描来源：%s" % str(source)[:30]
+    return ""
+
+
 @app.post("/api/jobs")
 def api_create():
+    form = request.form
+    # v1.16.0-tmp04（P2-8）：非法参数在创建时即拒（fail-closed），不再落盘后扫描才报错
+    # v1.16.0-tmp05（T04-07，审查报告）：source 枚举校验（flatbed/adf）
+    source = form.get("source", "flatbed")
+    err = _validate_scan_params(form.get("dpi", "150"), form.get("mode", "Gray"),
+                                form.get("format", "png"), source)
+    if err:
+        return jsonify(ok=False, msg=err), 400
+    # v1.16.0-tmp05（T04-07）：device 有值时必须在探测列表（不存在即拒 400，
+    # 不落盘无效任务）；空 device 保留默认设备回退语义
+    device = form.get("device", "").strip()
+    if device:
+        devs, _cached = device_probe.probe()
+        cap = next((x for x in devs
+                    if x["name"] == device or x["name"].startswith(device)), None)
+        if cap is None:
+            return jsonify(ok=False, msg="设备不在已探测列表：%s" % device[:60]), 400
+    # 表单布尔：checkbox 只在勾选时提交；仅认明确真值，其余一律 False（不与字符串 truthy 混淆）
+    crop = form.get("crop", "").strip().lower() in ("1", "true", "on", "yes")
     name = jobs.create(
-        request.form.get("remark", ""),
-        {         "source": request.form.get("source", "flatbed"),
-         "source_name": request.form.get("source_name", ""),
-         "dpi": request.form.get("dpi", "150"),
-         "mode": request.form.get("mode", "Gray"),
-         "device": request.form.get("device", ""),
-         "crop": bool(request.form.get("crop"))})
+        form.get("remark", ""),
+        {"source": source,
+         "source_name": form.get("source_name", ""),
+         "dpi": form.get("dpi", "150"),
+         "mode": form.get("mode", "Gray"),
+         "device": device,
+         "crop": crop,
+         "format": form.get("format", "png")})   # v1.16.0-tmp01：输出格式
     return redirect(url_for("job_page", job=name))
+
+
+@app.put("/api/jobs/<job>/params")
+def api_params(job):
+    """v1.16.0-tmp01：任务页参数修改（dpi/mode/format/crop/device）。
+    jlock 内校验+写盘原子；dpi/mode 按目标设备能力白名单校验，
+    format 白名单 fail-closed，device 须在已探测列表且能力兼容任务 source。
+
+    v1.16.0-tmp01（用户反馈改进）：扫描/转换中允许改参数——参数本来就是
+    「对下次扫描生效」语义（scan_flatbed 在 scanimage 前快照 _params），
+    转换中改 format/dpi 不影响当前正在转换的页（混合格式已支持）。
+    并发安全：PUT 与 convert_worker 落盘段都在 jlock 内读改写 meta.json
+    （load→改→save 原子），jlock 串行化保证不丢更新；扫描段持 jlock 时
+    PUT 阻塞排队，扫描完成即执行——无 409，改参数永不被拒。"""
+    d = request.get_json(silent=True)
+    # v1.16.0-tmp04（P2-8，审查报告）：JSON 根必须是对象——数组/字符串/数字/None
+    # 进入后续 d.get() 会 500，fail-closed 直接 400
+    if not isinstance(d, dict):
+        return jsonify(ok=False, msg="请求体必须是 JSON 对象"), 400
+    crop = d.get("crop", None)
+    if crop is not None and not isinstance(crop, bool):
+        return jsonify(ok=False, msg="crop 必须是布尔值"), 400   # "false" 字符串不再被误判为真
+    with jobs.job_lock(job):
+        try:
+            meta = jobs.load(job)
+        except jobs.JobError as e:
+            return jsonify(ok=False, msg=str(e)[:150]), 404
+        params = meta.setdefault("params", {})
+        new_device = str(d.get("device") or params.get("device") or "").strip()
+        new_dpi = str(d.get("dpi") or params.get("dpi") or "150").strip()
+        new_mode = str(d.get("mode") or params.get("mode") or "Gray").strip()
+        new_fmt = str(d.get("format") or params.get("format") or "png").strip()
+        # 1) format 白名单（fail-closed）
+        if new_fmt not in scanner.VALID_FORMAT:
+            return jsonify(ok=False, msg="不支持的输出格式：%s" % new_fmt[:30]), 400
+        # 2) device 存在性 + 能力校验（探测列表比对）
+        devs, _cached = device_probe.probe()
+        cap = next((x for x in devs
+                    if x["name"] == new_device or x["name"].startswith(new_device)), None)
+        if new_device and cap is None:
+            return jsonify(ok=False, msg="设备不在已探测列表：%s" % new_device[:60]), 400
+        source = params.get("source", "flatbed")
+        if cap and source != "flatbed" and not any(
+                "adf" in (s or "").lower() for s in cap.get("sources", [])):
+            return jsonify(ok=False, msg="设备 %s 不支持 ADF，无法用于本任务" % new_device[:60]), 400
+        # 3) dpi/mode 按设备能力白名单（探测失败无能力信息时放行 VALID 集合兜底）
+        if cap and cap.get("dpi_raw") and new_dpi not in cap["dpi_raw"]:
+            return jsonify(ok=False, msg="设备不支持 %s dpi" % new_dpi), 400
+        if cap and cap.get("modes") and new_mode not in cap["modes"]:
+            return jsonify(ok=False, msg="设备不支持 %s 模式" % new_mode), 400
+        if new_dpi not in scanner.VALID_DPI or new_mode not in scanner.VALID_MODE:
+            return jsonify(ok=False, msg="参数超出支持范围"), 400
+        params.update(dpi=new_dpi, mode=new_mode, format=new_fmt,
+                      crop=crop if crop is not None else bool(params.get("crop", False)),
+                      device=new_device)
+        jobs.save(job, meta)
+    return jsonify(ok=True, params=params)
 
 
 @app.post("/api/jobs/<job>/scan")
@@ -158,6 +251,9 @@ def api_scan(job):
         return jsonify(ok=False, msg=str(e)[:300]), 500
     if r == "busy":
         return jsonify(ok=False, msg="设备忙，请稍后再试"), 409
+    if r == "convert_busy":   # v1.16.0-tmp02：转换队列水位满，拒扫防无限堆积
+        return jsonify(ok=False, msg="后台转换队列已满（%d 页待处理），请等转换完成后再扫描" %
+                       scanner.MAX_PENDING_PNM), 409
     return jsonify(ok=True, file=r)
 
 
@@ -168,6 +264,8 @@ def api_adf(job):
     r = scanner.scan_adf(job)
     if r == "busy":   # v1.14.1（P1-6）：设备忙同步告知，不再异步报错
         return jsonify(ok=False, msg="设备忙，请稍后再试"), 409
+    if r == "adf_busy":   # v1.16.0-tmp05（T04-05）：同任务上一批 ADF 转换未收敛
+        return jsonify(ok=False, msg="上一批 ADF 页面仍在转换中，请等待完成后再扫描"), 409
     return jsonify(ok=True)
 
 
@@ -190,7 +288,18 @@ def api_delete(job):
     # （扫描段全程持 jlock）；转换中删除允许，convert_worker 落盘段 isdir 兜底。
     with jobs.job_lock(job):   # v1.14.1（P1-3）：锁内检查+删除原子化，消除 TOCTOU
         scanner.state.pop(job, None)
-        jobs._delete_locked(job)   # v1.14.3（P3-11）：本处已持锁，走无重入版本
+        with _pack_lock:                   # tmp06：顺带清打包进度登记
+            _pack_progress.pop(job, None)
+        try:
+            jobs._delete_locked(job)   # v1.14.3（P3-11）：本处已持锁，走无重入版本
+        except jobs.JobError as e:
+            # v1.16.0-tmp09（DeepSeek M2）：外部 is_locked 检查与 jlock 获取之间
+            # 任务被管理员锁定时，_delete_locked 抛 JobError 落到全局 404——
+            # 语义错误（任务存在且被锁），应 403
+            return jsonify(ok=False, msg=str(e)[:150]), 403
+        except OSError as e:
+            # v1.16.0-tmp01：任务目录权限异常（如历史 root 属主）时给可行动提示，不白屏 500
+            return jsonify(ok=False, msg="删除失败：任务目录权限异常（%s），请管理员修复目录权限后重试" % str(e)[:80]), 500
     jobs.release_job_lock(job)   # v1.14.2（#11）：锁已空闲，回收条目防字典长期增长
     return jsonify(ok=True)
 
@@ -245,8 +354,9 @@ def _reorder_body(job):
         if new_order == current:
             return jsonify(ok=True, msg="顺序未变化")
     # 防御：清理可能残留的临时/墓也文件（上次异常中断遗留）
+    # v1.16.0-tmp01：临时/墓也名携带页面原扩展名（png/jpg/webp）
     for f in os.listdir(base):
-        if (f.startswith("_tmp_") or f.startswith("_del_")) and f.endswith(".png"):
+        if (f.startswith("_tmp_") or f.startswith("_del_")) and f.endswith((".png", ".jpg", ".webp")):
             try:
                 os.remove(os.path.join(base, f))
             except OSError:
@@ -264,13 +374,13 @@ def _reorder_body(job):
     if is_delete:
         try:
             for i, dead_name in enumerate(to_delete):
-                grave = f"_del_{i:03d}.png"
+                grave = f"_del_{i:03d}." + dead_name.rsplit(".", 1)[-1]   # v1.16.0-tmp01：保留原 ext
                 os.rename(os.path.join(base, dead_name), os.path.join(base, grave))
                 step0.append((dead_name, grave))
-                dead_thumb = os.path.join(thumb_dir, dead_name[:-4] + ".jpg")
+                dead_thumb = os.path.join(thumb_dir, dead_name.rsplit(".", 1)[0] + ".jpg")   # v1.16.0-tmp01：rsplit 剥扩展
                 if os.path.exists(dead_thumb):
                     try:
-                        os.rename(dead_thumb, os.path.join(thumb_dir, grave[:-4] + ".jpg"))
+                        os.rename(dead_thumb, os.path.join(thumb_dir, grave.rsplit(".", 1)[0] + ".jpg"))
                     except OSError:
                         pass   # v1.14.5（C2）：缩略图是 derived cache（_mk_thumb 随时重建、前端缺失有占位 fallback）——rename 失败不回滚页面事务（v1.14.4 评估不修重申）
         except OSError:
@@ -284,11 +394,11 @@ def _reorder_body(job):
     step1 = []   # 已完成的 (旧名, 临时名)
     try:
         for i, old_name in enumerate(current):
-            tmp_name = f"_tmp_{i:03d}.png"
+            tmp_name = f"_tmp_{i:03d}." + old_name.rsplit(".", 1)[-1]   # v1.16.0-tmp01：保留原 ext
             os.rename(os.path.join(base, old_name), os.path.join(base, tmp_name))
             step1.append((old_name, tmp_name))
             # 缩略图同步（非关键数据，失败可重建，不阻塞页面重命名）
-            old_thumb = os.path.join(thumb_dir, old_name[:-4] + ".jpg")
+            old_thumb = os.path.join(thumb_dir, old_name.rsplit(".", 1)[0] + ".jpg")   # v1.16.0-tmp01：rsplit 剥扩展
             if os.path.exists(old_thumb):
                 try:
                     os.rename(old_thumb, os.path.join(thumb_dir, f"_tmp_{i:03d}.jpg"))
@@ -310,15 +420,16 @@ def _reorder_body(job):
     try:
         for i, new_name in enumerate(new_order):
             old_idx = current.index(new_name)          # 该页面在旧顺序中的位置
-            tmp_key = f"_tmp_{old_idx:03d}.png"
-            dst_name = f"p{i + 1:03d}.png"             # 新顺序第 i 位 → 文件名编号
+            _ext = new_name.rsplit(".", 1)[-1]          # v1.16.0-tmp01：ext 随页面走
+            tmp_key = f"_tmp_{old_idx:03d}.{_ext}"
+            dst_name = f"p{i + 1:03d}.{_ext}"           # 新顺序第 i 位 → 文件名编号（ext 保留）
             os.rename(os.path.join(base, tmp_key), os.path.join(base, dst_name))
             step2.append((tmp_key, dst_name))
             # 缩略图同步
             tmp_thumb = os.path.join(thumb_dir, f"_tmp_{old_idx:03d}.jpg")
             if os.path.exists(tmp_thumb):
                 try:
-                    os.rename(tmp_thumb, os.path.join(thumb_dir, dst_name[:-4] + ".jpg"))
+                    os.rename(tmp_thumb, os.path.join(thumb_dir, dst_name.rsplit(".", 1)[0] + ".jpg"))   # v1.16.0-tmp01：rsplit 剥扩展
                 except OSError:
                     pass
     except OSError:
@@ -351,13 +462,14 @@ def _finish_delete(job, base, thumb_dir, names=None, keep=0):
     待删页已改名让位，防新编号碰撞误删保留页）；names 显式时按原名删（<2 页分支，
     无 rename 即无碰撞）。仅在重命名全部成功后调用。"""
     if names is None:
-        names = [f for f in os.listdir(base) if f.startswith("_del_") and f.endswith(".png")]
+        # v1.16.0-tmp01：墓也前缀扫描覆盖全部扩展名
+        names = [f for f in os.listdir(base) if f.startswith("_del_") and f.endswith((".png", ".jpg", ".webp"))]
     for f in names:
         try:
             os.remove(os.path.join(base, f))
         except OSError:
             pass
-        old_thumb = os.path.join(thumb_dir, f[:-4] + ".jpg")
+        old_thumb = os.path.join(thumb_dir, f.rsplit(".", 1)[0] + ".jpg")   # v1.16.0-tmp01：rsplit 剥扩展
         if os.path.exists(old_thumb):
             try:
                 os.remove(old_thumb)
@@ -371,8 +483,10 @@ def _finish_delete(job, base, thumb_dir, names=None, keep=0):
 @app.get("/api/devices")
 def api_devices():
     """列出设备并探测每台设备支持的扫描模式和进纸源（scanimage -A）。
-    v1.14：探测逻辑合并到 device_probe.py，与管理页共用同一实现与缓存（#11）。"""
-    devs, _cached = device_probe.probe()
+    v1.14：探测逻辑合并到 device_probe.py，与管理页共用同一实现与缓存（#11）。
+    v1.16.0-tmp01：?refresh=1 强制重新探测——普通页「重新探测」按钮用
+    （admin API 需 PIN 登录，普通页不能复用；探测失败空数据缓存 300s 的自愈入口）。"""
+    devs, _cached = device_probe.probe(force=request.args.get("refresh") == "1")
     # 附加设备别名和按设备的扫描默认值（每次都读，可能随时改）
     try:
         from config import load_admin_cfg
@@ -390,8 +504,10 @@ def api_devices():
 # ---------------- 文件 ----------------
 @app.route("/job/<job>/raw/<fname>")
 def raw(job, fname):
-    if not FNAME_RE.fullmatch(fname) or not fname.endswith(".png"):
+    if not FNAME_RE.fullmatch(fname):
         abort(404)
+    # v1.16.0-tmp01：mimetype 按扩展名（png/jpg/webp）
+    mime = scanner.FMT_MIME.get(fname.rsplit(".", 1)[-1], "image/png")
     # v1.14.4（P1）：check_page_safe 拒 symlink + realpath containment，防链接页越权读
     try:
         base = jobs.path(job)
@@ -408,7 +524,7 @@ def raw(job, fname):
             f = jobs.open_page_fd(base, fname)
         except (jobs.JobError, OSError):
             abort(404)
-    return send_file(f, mimetype="image/png")
+    return send_file(f, mimetype=mime)   # v1.16.0-tmp04（P2-7）：用已算的按扩展名 MIME，不再固定 image/png
 
 
 @app.route("/job/<job>/thumb/<fname>")
@@ -420,11 +536,15 @@ def thumb(job, fname):
         base = jobs.path(job)
     except jobs.JobError:
         abort(404)
-    png_name = fname[:-4] + ".png"
+    stem = fname.rsplit(".", 1)[0]   # v1.16.0-tmp01：thumb 恒 .jpg；页面扩展名任意，pending 按 stem 匹配
     # v1.15.1-tmp04：转换中页挂起等待（long-poll，不持锁）——前端 1 次请求
     # 等转换完成直接 200，不再产生每秒一次的 404 轮询。上限 120s 防异常挂死。
+    # v1.16.0-tmp01：页面可能 png/jpg/webp，pending 登记的是真实页面名——
+    # 写死 "+.png" 会使 jpg/webp 任务 long-poll 失效（退化成每秒 404 轮询）。
     deadline = time.time() + 120
-    while scanner.has_pending(job, png_name) and time.time() < deadline:
+    while time.time() < deadline:
+        if not any(p.rsplit(".", 1)[0] == stem for p in scanner.pending_pages(job)):
+            break
         time.sleep(0.5)
     with jobs.job_lock(job):
         try:
@@ -434,80 +554,163 @@ def thumb(job, fname):
     return send_file(f, mimetype="image/jpeg")
 
 
+# ---------------- 打包进度（v1.16.0-tmp06 新功能） ----------------
+# PDF 合成 / ZIP 打包对多页大任务是长耗时操作（300dpi 彩色 PIL 逐页处理 + 流式压缩），
+# 此前点击按钮后页面无任何反馈。登记表供前端轮询显示「打包中 n/m」。
+# v1.16.0-tmp07（DeepSeek 排查 P3）：登记按 kind 隔离——同一任务并发 ZIP+PDF 时
+# 各自独立进度（旧版单条共用 job 键被互相覆盖，先点 ZIP 再点 PDF 后 ZIP 按钮轮询
+# 失配、永不恢复）。结构 {job: {kind: {kind,done,total,active}}}。
+_pack_progress = {}
+_pack_lock = threading.Lock()
+
+
+def _pack_prog_update(job, kind, **kw):
+    with _pack_lock:
+        rec = _pack_progress.setdefault(job, {}).setdefault(
+            kind, {"kind": kind, "done": 0, "total": 0, "active": True})
+        rec.update(kw)
+
+
+@app.get("/api/jobs/<job>/pack-progress")
+def api_pack_progress(job):
+    """打包进度查询（不持任务锁——只读内存登记，合成/打包进行中可并发响应）。
+    返回 {zip: {...}, pdf: {...}}，前端按 kind 精确取各自进度，互不干扰。"""
+    with _pack_lock:
+        src = _pack_progress.get(job) or {}
+        out = {k: dict(v) for k, v in src.items()}
+    return jsonify(out)
+
+
 @app.route("/job/<job>/download.zip")
 def dl_zip(job):
     base = jobs.path(job)
     # v1.14.2（#6）：下载全程持任务生命周期锁——期间 delete/reorder 排队等待而非产生截断/损坏包
     jlock = jobs.job_lock(job)
     jlock.acquire()
-    # v1.15.1-tmp04：转换中页是 0 字节占位，混入 ZIP 会产生损坏文件
-    if scanner.has_pending(job):
-        jlock.release()
-        return jsonify(ok=False, msg="有页面正在转换，请等待完成后再下载"), 409
-    files = [(f, os.path.join(base, f)) for f in jobs.pages(job)]
-    if not files:
-        jlock.release()
-        abort(404)
-    qu = q.Queue(maxsize=ZIP_QUEUE_MAXSIZE)   # v1.14.1（P1-8）：背压——慢客户端时压缩线程阻塞，防队列无限吃内存
-    DONE = object()
-    cancel = threading.Event()   # v1.14.2（#7）：客户端断开时唤醒 worker 退出，防 daemon 线程永久阻塞
-
-    def worker():
-        class W:
-            """非寻址流 Writer：tell 用计数器，seek 抛异常使 zipfile 走流模式。"""
-            def __init__(self):
-                self.pos = 0
-            def write(self, b):
-                # v1.14.3（P1-2）：满队列 put 超时重检 cancel——客户端断开后 worker 最多 0.5s 退出，
-                # 不再永久阻塞在无 timeout 的 put 上（v1.14.2 只给 DONE 加了 timeout，此处是漏网点）
-                while True:
-                    if cancel.is_set():
-                        raise OSError("zip cancelled")   # 消费者已断开，中止压缩
-                    try:
-                        qu.put(b, timeout=0.5)
-                        self.pos += len(b)
-                        return
-                    except q.Full:
-                        continue
-            def tell(self):
-                return self.pos
-            def seek(self, *a):
-                raise OSError("not seekable")
-            def flush(self):
-                pass
+    # v1.16.0-tmp06（DeepSeek P0）：锁移交 gen 前的任何提前返回/异常（409/404/
+    # pages 抛 JobError）都由 finally 兜底释放——旧代码手动 release 漏了
+    # jobs.pages 的异常路径（任务目录被 Samba 外部删除时锁永久泄漏）。
+    handed_to_gen = False
+    try:
+        # v1.15.1-tmp04：转换中页是 0 字节占位，混入 ZIP 会产生损坏文件
+        if scanner.has_pending(job):
+            return jsonify(ok=False, msg="有页面正在转换，请等待完成后再下载"), 409
         try:
-            with zipfile.ZipFile(W(), "w", zipfile.ZIP_DEFLATED) as zf:
-                for arc, path in files:
-                    if cancel.is_set():
-                        break
-                    zf.write(path, arcname=arc)
-        except Exception as e:
-            # v1.14.5（B3）：Samba 外部删除/替换文件会让 zipfile.write 抛错——不再静默吞，
-            # 记 stderr（journalctl 可见），消费者收到截断流后会重试。应用 job_lock 约束不了外部客户端
-            print("[zip] worker error: %s" % e, file=sys.stderr)
-        finally:
-            if not cancel.is_set():
-                try:
-                    qu.put(DONE, timeout=5)   # v1.14.2（#7）：消费者已走则不投递，防 put 永久阻塞
-                except q.Full:
+            files = [(f, os.path.join(base, f)) for f in jobs.pages(job)]
+        except jobs.JobError:
+            abort(404)
+        if not files:
+            abort(404)
+        _pack_prog_update(job, "zip", done=0, total=len(files), active=True)
+        qu = q.Queue(maxsize=ZIP_QUEUE_MAXSIZE)   # v1.14.1（P1-8）：背压——慢客户端时压缩线程阻塞，防队列无限吃内存
+        DONE = object()
+        cancel = threading.Event()   # v1.14.2（#7）：客户端断开时唤醒 worker 退出，防 daemon 线程永久阻塞
+
+        def worker():
+            class W:
+                """非寻址流 Writer：tell 用计数器，seek 抛异常使 zipfile 走流模式。"""
+                def __init__(self):
+                    self.pos = 0
+                def write(self, b):
+                    # v1.14.3（P1-2）：满队列 put 超时重检 cancel——客户端断开后 worker 最多 0.5s 退出，
+                    # 不再永久阻塞在无 timeout 的 put 上（v1.14.2 只给 DONE 加了 timeout，此处是漏网点）
+                    while True:
+                        if cancel.is_set():
+                            raise OSError("zip cancelled")   # 消费者已断开，中止压缩
+                        try:
+                            qu.put(b, timeout=0.5)
+                            self.pos += len(b)
+                            return
+                        except q.Full:
+                            continue
+                def tell(self):
+                    return self.pos
+                def seek(self, *a):
+                    raise OSError("not seekable")
+                def flush(self):
                     pass
+            try:
+                with zipfile.ZipFile(W(), "w", zipfile.ZIP_DEFLATED) as zf:
+                    for i, (arc, path) in enumerate(files, 1):
+                        if cancel.is_set():
+                            break
+                        zf.write(path, arcname=arc)
+                        _pack_prog_update(job, "zip", done=i)   # tmp06：打包进度（逐文件）
+            except Exception as e:
+                # v1.14.5（B3）：Samba 外部删除/替换文件会让 zipfile.write 抛错——不再静默吞，
+                # 记 stderr（journalctl 可见），消费者收到截断流后会重试。应用 job_lock 约束不了外部客户端
+                print("[zip] worker error: %s" % e, file=sys.stderr)
+            finally:
+                if not cancel.is_set():
+                    try:
+                        qu.put(DONE, timeout=5)   # v1.14.2（#7）：消费者已走则不投递，防 put 永久阻塞
+                    except q.Full:
+                        pass
 
-    threading.Thread(target=worker, daemon=True).start()
+        threading.Thread(target=worker, daemon=True).start()
 
-    def gen():
+        def gen():
+            try:
+                while True:
+                    chunk = qu.get()
+                    if chunk is DONE:
+                        break
+                    yield chunk
+            finally:
+                cancel.set()          # 正常结束或客户端断开（GeneratorExit）都通知 worker 停止
+                jlock.release()       # v1.14.2（#6）：流结束/中断才释放生命周期锁
+                _pack_prog_update(job, "zip", active=False)   # tmp06：完成/中断都收尾进度
+
+        # v1.16.0-tmp09（DeepSeek H2）：Response 先构造成功、再交接锁——旧序
+        # handed_to_gen=True 在构造前置位，若 Response(...) 抛异常（OOM/header
+        # 异常），gen 从未被调、finally 见 True 不释放 → jlock 永久泄漏
+        resp = Response(stream_with_context(gen()), mimetype="application/zip",
+                        headers={"Content-Disposition":
+                                 f"attachment; filename=\"scan.zip\"; filename*=UTF-8''{quote(job + '.zip')}"})
+        handed_to_gen = True
+        return resp
+    finally:
+        if not handed_to_gen:
+            jlock.release()
+            _pack_prog_update(job, "zip", active=False)
+
+
+def _webp_safe_png(base, fname):
+    """v1.16.0-tmp04（P1-3，审查报告）：webp 页安全转 PNG。
+    open_page_fd（O_NOFOLLOW + realpath 校验）打开后复制到受控临时文件，
+    ImageMagick 只接触副本——任务目录可被 Samba 写入时，symlink/路径替换
+    不再绕过安全检查。返回临时 PNG 路径（调用方用毕删除）。"""
+    fd, safe_src = tempfile.mkstemp(prefix="scanweb_pdfsrc_", suffix=".webp")
+    png = safe_src + ".png"
+    try:
+        with jobs.open_page_fd(base, fname) as src, os.fdopen(fd, "wb") as dst:
+            shutil.copyfileobj(src, dst)
+    except Exception:
         try:
-            while True:
-                chunk = qu.get()
-                if chunk is DONE:
-                    break
-                yield chunk
-        finally:
-            cancel.set()          # 正常结束或客户端断开（GeneratorExit）都通知 worker 停止
-            jlock.release()       # v1.14.2（#6）：流结束/中断才释放生命周期锁
-
-    return Response(stream_with_context(gen()), mimetype="application/zip",
-                    headers={"Content-Disposition":
-                             f"attachment; filename=\"scan.zip\"; filename*=UTF-8''{quote(job + '.zip')}"})
+            os.close(fd)
+        except OSError:
+            pass
+        for p in (png, safe_src):
+            try:
+                os.remove(p)
+            except OSError:
+                pass
+        raise
+    try:
+        subprocess.run([scanner.CONVERT, safe_src, "PNG:" + png],
+                       capture_output=True, timeout=scanner.CONVERT_CMD_TIMEOUT,
+                       check=True, cwd=tempfile.gettempdir())
+        # v1.16.0-tmp05（T04-03，审查报告）：转换成功源副本不再需要——调用方只
+        # 删除返回的 PNG，若此处不删 safe_src，重复生成 PDF 会持续泄漏 .webp
+        os.remove(safe_src)
+        return png
+    except Exception:
+        for p in (png, safe_src):
+            try:
+                os.remove(p)
+            except OSError:
+                pass
+        raise
 
 
 @app.route("/job/<job>/download.pdf")
@@ -525,19 +728,49 @@ def dl_pdf(job):
             abort(404)
         if len(files) > MAX_PDF_PAGES:
             abort(413)
-        # v1.14：按像素估算合成内存（Pillow 惰性读头不载位图），超限拒绝防 ARM 盒子 OOM（#5）
-        approx = 0
-        for f in files:
-            with jobs.open_page_fd(base, f) as fh, Image.open(fh) as im:
-                approx += im.width * im.height * 3
-        if approx > MAX_PDF_MEM:
-            abort(413)
-        imgs = []
-        for f in files:   # v1.14.1（P2-14）+ v1.14.5（P1-2）：with 显式关闭文件句柄；open_page_fd O_NOFOLLOW 防页面被外部替换为链接越权读
-            with jobs.open_page_fd(base, f) as fh, Image.open(fh) as src:
-                imgs.append(src.convert("RGB"))
-        buf = io.BytesIO()
-        imgs[0].save(buf, "PDF", save_all=True, append_images=imgs[1:])
+        # v1.16.0-tmp07：进度总量 = 页数（用户直觉），不再用估算+合成 2N 步
+        # （7 页显示 14 步对用户无意义）；估算阶段是快速内存检查、不占步数
+        _pack_prog_update(job, "pdf", done=0, total=len(files), active=True)
+        try:
+            # v1.14：按像素估算合成内存（Pillow 惰性读头不载位图），超限拒绝防 ARM 盒子 OOM（#5）
+            # v1.16.0-tmp01：webp 页经 ImageMagick 转临时 PNG 再估（盒子 Pillow 无 libwebp 解码）
+            approx = 0
+            for f in files:
+                with jobs.open_page_fd(base, f) as fh:
+                    try:
+                        with Image.open(fh) as im:
+                            approx += im.width * im.height * 3
+                    except Exception:
+                        if not f.endswith(".webp"):
+                            raise
+                        # v1.16.0-tmp04（P1-3）：安全副本转换（不再裸路径交 ImageMagick）
+                        tmp = _webp_safe_png(base, f)
+                        try:
+                            with Image.open(tmp) as im:
+                                approx += im.width * im.height * 3
+                        finally:
+                            os.remove(tmp)
+            if approx > MAX_PDF_MEM:
+                abort(413)
+            imgs = []
+            for i, f in enumerate(files, 1):   # v1.14.1（P2-14）+ v1.14.5（P1-2）：with 显式关闭文件句柄；open_page_fd O_NOFOLLOW 防页面被外部替换为链接越权读
+                if f.endswith(".webp"):
+                    # 盒子 Pillow 无 webp 解码 → ImageMagick 转临时 PNG 合成
+                    # v1.16.0-tmp04（P1-3）：安全副本转换（不再裸路径交 ImageMagick）
+                    tmp = _webp_safe_png(base, f)
+                    try:
+                        with Image.open(tmp) as src:
+                            imgs.append(src.convert("RGB"))
+                    finally:
+                        os.remove(tmp)
+                else:
+                    with jobs.open_page_fd(base, f) as fh, Image.open(fh) as src:
+                        imgs.append(src.convert("RGB"))
+                _pack_prog_update(job, "pdf", done=i)   # tmp07：合成阶段逐页推进
+            buf = io.BytesIO()
+            imgs[0].save(buf, "PDF", save_all=True, append_images=imgs[1:])
+        finally:
+            _pack_prog_update(job, "pdf", active=False)   # tmp06：413/异常/完成统一收尾
     buf.seek(0)
     return send_file(buf, mimetype="application/pdf", as_attachment=True,
                      download_name=f"{job}.pdf")
@@ -593,8 +826,12 @@ def _start_dev_cache_refresher():
 
 
 if __name__ == "__main__":
-    scanner.cleanup_tmp_pnms()           # 清理上次异常中断残留的 PNM 临时文件
+    scanner.cleanup_tmp_pnms()           # v1.16.0-tmp02：残留 PNM 按归属归档进任务目录（无主才删）
+    scanner.start_convert_worker()       # v1.16.0-tmp02：启动唯一常驻转换 worker
+    # v1.16.0-tmp05（T04-04，审查报告）：先清 0 字节占位页再恢复 PNM——
+    # 若顺序颠倒，恢复逻辑看到占位文件存在即跳过，占位随后被清，PNM 永不恢复
     scanner.cleanup_empty_pages()        # v1.15.1-tmp04：清理 0 字节占位页（转换中断残留）
+    scanner.recover_task_pnms()         # v1.16.0-tmp04（P2-9）+tmp05（T04-04）：遗留 PNM 重新入队（幂等，拒 0 字节输出）
     jobs.cleanup()                       # 启动时执行一次清理（锁定任务永不动）
     deploy_examples()                    # 输出目录为空时部署内置示例任务
     admin.start_cleanup_scheduler()      # 后台每小时检查一次

@@ -24,6 +24,16 @@ def isolated_env(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "ADMIN_CFG_PATH", str(tmp_path / "admin_config.json"))
     yield
     scanner.state.clear()
+    # v1.16.0-tmp02：清空转换队列水位与 pending（防跨用例串扰——常驻 worker 是模块级状态）
+    scanner._reset_convert_for_test()
+    # v1.16.0-tmp04：清 /tmp 测试残留 PNM——被 drain 的入队任务源文件仍留在磁盘，
+    # 不清会污染后续 cleanup_tmp_pnms/归档类测试的计数
+    import glob
+    for f in glob.glob("/tmp/scanweb_*.pnm"):
+        try:
+            os.remove(f)
+        except OSError:
+            pass
     jobs._job_locks.clear()
     jobs._cleanup_last["ts"] = 0.0   # v1.14.8（F）：重置 cleanup 节流，防跨用例串扰
     import device_probe

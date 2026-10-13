@@ -141,8 +141,8 @@ def test_jobs_root_param_validation_kept(tmp_path):
         pass
 
 
-# ---------- #1：_mk_thumb / _convert_pnms 显式 root 参数 ----------
-def test_mk_thumb_and_convert_pnms_root_param(tmp_path):
+# ---------- #1：_mk_thumb / _enqueue_pnms 显式 root 参数 ----------
+def test_mk_thumb_and_enqueue_pnms_root_param(tmp_path):
     png = _png_bytes()
     name = _mk_job(["A"])
     src_dir = os.path.join(config.get_scan_root(), name)
@@ -157,18 +157,22 @@ def test_mk_thumb_and_convert_pnms_root_param(tmp_path):
     scanner._mk_thumb(name, "p001.png", root2)
     assert os.path.exists(os.path.join(d2, ".thumbs", "p001.jpg")), \
         "#1：_mk_thumb(root) 缩略图必须落快照根"
-    fake = _fake_script(str(tmp_path / "cvt.sh"), '#!/bin/sh\ncp "$1" "$2"\n')
     old = scanner.CONVERT
-    scanner.CONVERT = fake
+    scanner.CONVERT = "/nonexistent/convert"   # PIL 打不开假 PNM → 走 CONVERT 失败分支亦可
     try:
-        ok, failed = scanner._convert_pnms(name, 1, root2)
-        assert ok == 1 and not failed, "#1：_convert_pnms(root) 应转换快照根下 PNM"
-        assert os.path.exists(os.path.join(d2, "p002.png")), "#1：PNG 必须落快照根"
-        assert not os.path.exists(os.path.join(d2, "p002.pnm")), "#1：成功后 PNM 应删除"
+        # v1.16.0-tmp03：_enqueue_pnms(root) 入队后转换落快照根（非现取根）
+        # v1.16.0-tmp05（T04-06）：返回入队页名列表
+        n = scanner._enqueue_pnms(name, 1, root2, "png")
+        assert n == ["p002.png"], "#1：应入队快照根下 1 页 PNM，实际 %r" % n
+        deadline = time.time() + 10
+        while time.time() < deadline and scanner._pending_count() > 0:
+            time.sleep(0.02)
+        # 转换失败（假 PNM + 无效 CONVERT）→ 源保留在快照根，绝不写现取根
         assert not os.path.exists(os.path.join(src_dir, "p002.png")), \
             "#1：不得写现取根（任务分裂即回归）"
     finally:
         scanner.CONVERT = old
+        scanner._reset_convert_for_test()
 
 
 # ---------- #1 核心链路：平板扫描 worker 根快照——转换期间改根，数据仍落旧根 ----------
@@ -185,7 +189,7 @@ def test_flatbed_root_snapshot_survives_change(tmp_path):
     sc = _fake_script(str(tmp_path / "scan.sh"), "#!/bin/sh\nsleep 0.2\nexit 0\n")
     # convert 慢 0.9s——保证主线程在转换完成前改根（复现 TOCTOU 窗口内保存）
     cv = _fake_script(str(tmp_path / "cvt.sh"),
-                      '#!/bin/sh\nsleep 0.9\ncp "%s/page.png" "$2"\n' % fx)
+                      '#!/bin/sh\nsleep 0.9\nt="${2#PNG:}"; cp "%s/page.png" "$t"\n' % fx)
     old_sc, old_cv = scanner.SCANIMAGE, scanner.CONVERT
     scanner.SCANIMAGE, scanner.CONVERT = sc, cv
     try:

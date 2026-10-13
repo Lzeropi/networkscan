@@ -111,8 +111,10 @@ button:disabled{opacity:.5;cursor:not-allowed}
 }
 .dd-menu.open{display:block}
 .dd-item{
+  display:block;width:100%;text-align:left;   /* v1.16.0-tmp01：重置 button 默认样式（原 button.dd-item 带灰底+边框） */
   padding:7px 12px;font-size:14px;cursor:pointer;
   white-space:nowrap;color:var(--fg);
+  background:transparent;border:0;border-radius:0;
   transition:background .1s;
 }
 .dd-item:hover{background:var(--acc-light)}

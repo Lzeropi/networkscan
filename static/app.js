@@ -73,6 +73,30 @@ function loadDevices() {
   }).catch(() => {});
 }
 
+/* v1.16.0-tmp01：手动强制重新探测（首页/任务页共用）——探测失败空数据会缓存
+   300s，此按钮是普通页自愈入口（admin API 需 PIN 登录，普通页不能复用）。
+   探测完成后调 after 重填菜单（探测缓存已热，二次请求秒回）。 */
+async function reprobe(btn, after) {
+  const old = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = "探测中…";
+  try {
+    await fetch("/api/devices?refresh=1");
+    if (after) after();
+  } catch (e) { /* 网络异常：恢复按钮，菜单保持现状 */ }
+  btn.disabled = false;
+  btn.textContent = old;
+}
+
+/* 任务页：从 hidden input 读回当前参数（onChange 即时保存，DOM 值 = 后端值） */
+function jobParamsFromDom() {
+  const v = s => ((document.querySelector(s) || {}).value) || "";
+  return { device: v('#jpDevDropdown input[type=hidden]'),
+           dpi: v('[data-name="jp_dpi"] input[type=hidden]'),
+           mode: v('[data-name="jp_mode"] input[type=hidden]'),
+           format: v('[data-name="jp_format"] input[type=hidden]') };
+}
+
 /* 根据选中设备的能力，动态填充分辨率和色彩模式 */
 function updateDeviceOptions(selectedDev) {
   const dev = selectedDev
@@ -104,13 +128,15 @@ function updateDeviceOptions(selectedDev) {
   if (adfLabel) adfLabel.style.display = adfSources.length > 0 ? "" : "none";
   if (sourceName) sourceName.value = adfSources.length > 0 ? adfSources[0] : "";
 
-  // 动态填充色彩模式（选中管理页设置的默认值或第一个）
+  // 动态填充色彩模式（v1.16.0-tmp01：能力 ∪ 管理页默认值，默认值不在能力列表也必显示）
   if (modeDropdown) {
     const modeMenu = modeDropdown.querySelector(".dd-menu");
     const modeToggle = modeDropdown.querySelector(".dd-toggle");
     const modeHidden = modeDropdown.querySelector("input[type=hidden]");
-    const modes = dev.modes || ["Gray"];
     const dv = dev.defaults || {};
+    const modes = (dev.modes && dev.modes.length) ? dev.modes.slice() : [];
+    if (dv.mode && !modes.includes(dv.mode)) modes.push(dv.mode);
+    if (!modes.length) modes = ["Gray", "Color"];   // 极端兜底
     const defaultMode = dv.mode || modes[0];
     modeMenu.innerHTML = "";
     modes.forEach(m => {
@@ -126,13 +152,15 @@ function updateDeviceOptions(selectedDev) {
     modeToggle.firstChild.textContent = MODE_CN[selMode] || selMode;
   }
 
-  // 动态填充分辨率（根据设备探测到的 DPI 列表 + 管理页默认值）
+  // 动态填充分辨率（v1.16.0-tmp01：能力 ∪ 管理页默认值，默认值不在能力列表也必显示）
   if (dpiDropdown) {
     const dpiMenu = dpiDropdown.querySelector(".dd-menu");
     const dpiToggle = dpiDropdown.querySelector(".dd-toggle");
     const dpiHidden = dpiDropdown.querySelector("input[type=hidden]");
-    const dpis = dev.dpis || ["150", "300", "600"];
     const dv = dev.defaults || {};
+    const dpis = (dev.dpis && dev.dpis.length) ? dev.dpis.slice() : [];
+    if (dv.dpi && !dpis.includes(dv.dpi)) dpis.push(dv.dpi);
+    if (!dpis.length) dpis = ["150", "300", "600"];   // 极端兜底
     const defaultDpi = dv.dpi || dpis[0];
     dpiMenu.innerHTML = "";
     dpis.forEach(d => {
@@ -166,15 +194,18 @@ function updateDeviceOptions(selectedDev) {
 async function scanPage(job) {
   const b = document.getElementById("btnScan");
   b.disabled = true;
-  const figId = addScanningPlaceholder(job);
-  setStatus("正在扫描，请稍候（约需 8–10 秒）…");
+  const figId = addScanningPlaceholder(job);   // v1.16.0-tmp01：参数区不锁定（参数对下次扫描生效，扫描中可改）
+  // 提示耗时按色彩模式分档（203 实测：彩色 CIS 扫描头机械瓶颈 11.5~19.2s；灰度/黑白 8s 上下）
+  const curMode = (document.querySelector('[data-name="jp_mode"] input[type=hidden]') || {}).value || "";
+  setStatus(curMode === "Color" ? "正在扫描，请稍候（彩色约需 10–20 秒）…"
+                                : "正在扫描，请稍候（约需 8–12 秒）…");
   try {
     const r = await fetch(`/api/jobs/${job}/scan`, { method: "POST" });
     const d = await r.json();
     if (!r.ok) throw new Error(d.msg || "扫描失败");
     // scanimage 完成，POST 返回文件名 → 切转换中占位
     switchToConverting(figId, d.file);
-    setStatus("扫描完成，正在后台转换为 PNG…");
+    setStatus("扫描完成，正在后台转换…");
     b.disabled = false;               // 立即恢复按钮，可以继续扫描下一页
     pollThumbReady(job, d.file);       // 轮询缩略图就绪（PIL 0.6s，通常 1 次命中）
   } catch (e) {
@@ -239,7 +270,7 @@ function pollThumbReady(job, png, retries) {
     setStatus("转换超时，可能需要刷新页面查看", true);
     return;
   }
-  const thumbUrl = `/job/${job}/thumb/${png.replace(".png", ".jpg")}`;
+  const thumbUrl = `/job/${job}/thumb/${png.replace(/\.(png|jpg|webp)$/, ".jpg")}`;   // v1.16.0-tmp01：thumb 统一 .jpg，与页面格式无关
   fetch(thumbUrl, { cache: "no-store" }).then(r => {
     if (r.ok) {
       // 转换完成，刷新缩略图
@@ -293,7 +324,7 @@ function addThumb(job, png) {
   if (empty) empty.remove();
   const fig = document.createElement("figure");
   fig.innerHTML =
-    `<a href="/job/${job}/raw/${png}" target="_blank"><img src="/job/${job}/thumb/${png.replace(".png", ".jpg")}"></a>` +
+    `<a href="/job/${job}/raw/${png}" target="_blank"><img src="/job/${job}/thumb/${png.replace(/\.(png|jpg|webp)$/, ".jpg")}"></a>` +
     `<figcaption><span>${png}</span><a href="/job/${job}/raw/${png}" download title="下载">⬇</a></figcaption>`;
   wall.appendChild(fig);
   const c = document.getElementById("pgcount");
@@ -321,6 +352,113 @@ function showQr(job) {
   };
   img.src = "/job/" + encodeURIComponent(job) + "/qrcode?" + Date.now();
   layer.style.display = "flex";
+}
+
+/* ---------- v1.16.0-tmp01：任务页参数区（onChange 即时生效） ---------- */
+
+let _jobName = null;   // 当前任务页名（initDropdowns 据此触发即时保存）
+
+/* 参数区初始化：拉取设备探测列表填充下拉（当前值已由模板渲染进 hidden/toggle），
+   dpi/mode 菜单项 = 设备能力列表 ∪ 任务当前值（老参数兑底仍可选）。
+   设备切换不做 dpi/mode 联动重置——保存时后端按能力白名单校验，不兼容会 400 提示。 */
+async function loadJobParams(job, params) {
+  _jobName = job;
+  let devs = [];
+  try {
+    const r = await fetch("/api/devices");
+    devs = (await r.json()).devs || [];
+  } catch (e) { /* 探测失败：菜单只剩当前值，保存仍可用 */ }
+  _devCaps = devs;
+
+  // device 为空（老任务/测试任务）时 fallback 首个探测设备的能力，避免 dpi/mode 菜单只剩当前值
+  const dev = devs.find(d => d.name === params.device) || devs.find(d => params.device && d.name.startsWith(params.device)) || devs[0];
+
+  // 设备菜单（探测失败时只展示当前设备名）
+  const devMenu = document.getElementById("jpDevMenu");
+  const devToggle = document.querySelector("#jpDevDropdown .dd-toggle");
+  if (devMenu) {
+    devMenu.innerHTML = "";
+    const list = devs.length ? devs : [{ name: params.device || "", alias: params.device || "未探测到设备" }];
+    list.forEach(x => {
+      const item = document.createElement("div");
+      item.className = "dd-item" + (x.name === params.device ? " selected" : "");
+      item.dataset.value = x.name;
+      item.textContent = x.alias || x.name;
+      devMenu.appendChild(item);
+    });
+    if (devToggle) {
+      // v1.16.0-tmp01：device 为空（老任务/测试任务）时 fallback 显示首个探测设备，避免一直停在"加载中…"
+      const label = params.device ? (dev ? (dev.alias || dev.name) : params.device)
+                                  : (devs[0] ? (devs[0].alias || devs[0].name) : "未探测到设备");
+      devToggle.firstChild.textContent = label;
+    }
+  }
+
+  // dpi 菜单：设备能力 ∪ 任务当前值 ∪ 管理页默认值（v1.16.0-tmp01：三层合并，
+  // 探测能力为空时仍可选到管理页配置的默认 dpi，不再只剩单值）
+  const dpiMenu = document.getElementById("jpDpiMenu");
+  if (dpiMenu) {
+    let dpis = dev && dev.dpis && dev.dpis.length ? dev.dpis.slice() : [];
+    const defDpi = dev && dev.defaults && dev.defaults.dpi;
+    [defDpi, params.dpi].forEach(v => {
+      if (v && !dpis.includes(String(v))) dpis.push(String(v));
+    });
+    if (!dpis.length) dpis = [params.dpi || "150"];   // 极端兜底（能力+默认+当前值全缺失）
+    dpis.sort((a, b) => a - b);
+    dpiMenu.innerHTML = "";
+    dpis.forEach(x => {
+      const item = document.createElement("div");
+      item.className = "dd-item" + (String(x) === String(params.dpi) ? " selected" : "");
+      item.dataset.value = String(x);
+      item.textContent = x;
+      dpiMenu.appendChild(item);
+    });
+  }
+
+  // mode 菜单：设备能力 ∪ 当前值 ∪ 管理页默认值（三层合并同 dpi）
+  const modeMenu = document.getElementById("jpModeMenu");
+  if (modeMenu) {
+    let modes = dev && dev.modes && dev.modes.length ? dev.modes.slice() : [];
+    const defMode = dev && dev.defaults && dev.defaults.mode;
+    [defMode, params.mode].forEach(v => {
+      if (v && !modes.includes(v)) modes.push(v);
+    });
+    if (!modes.length) modes = [params.mode || "Gray"];   // 极端兜底
+    modeMenu.innerHTML = "";
+    modes.forEach(m => {
+      const item = document.createElement("div");
+      item.className = "dd-item" + (m === params.mode ? " selected" : "");
+      item.dataset.value = m;
+      item.textContent = MODE_CN[m] || m;
+      modeMenu.appendChild(item);
+    });
+  }
+}
+
+/* v1.16.0-tmp01：单字段即时保存（onChange 触发，后端 PUT params 支持部分更新） */
+async function saveJobField(job, fieldName, value) {
+  const map = { jp_device: "device", jp_dpi: "dpi", jp_mode: "mode",
+                jp_format: "format", jp_crop: "crop" };
+  const backendName = map[fieldName];
+  if (!backendName) return;
+  const body = {};
+  body[backendName] = value;
+  // v1.16.0-tmp01：不做禁用包装——fieldset.disabled 会禁用内部 button（菜单项点不动）
+  // 且禁用窗口在扫描段持锁时被拉长；并发安全由后端 jlock 串行化保证（无 409）
+  try {
+    const r = await fetch(`/api/jobs/${job}/params`, {
+      method: "PUT", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body)
+    });
+    const d = await r.json();
+    if (d.ok) {
+      setStatus("参数已保存，下次扫描生效");
+    } else {
+      setStatus(d.msg || "保存失败", true);
+    }
+  } catch (e) {
+    setStatus("保存失败：" + e.message, true);
+  }
 }
 
 /* 任务页初始化：灯箱 */
@@ -708,38 +846,48 @@ async function saveReorder(job) {
 }
 
 /* ---------- 自定义下拉框逻辑 ---------- */
+/* v1.16.0-tmp01：改为 document 事件委托——管理页动态生成的设备卡片
+   （默认 dpi/色彩/格式）无需重新绑定即生效；_bound 防重复注册。 */
 function initDropdowns() {
+  if (initDropdowns._bound) return;
+  initDropdowns._bound = true;
+
   // mousedown 展开/收起菜单（不等到 mouseup，防止和 document click 冲突）
-  document.querySelectorAll(".dd-toggle").forEach(toggle => {
-    toggle.addEventListener("mousedown", e => {
-      e.preventDefault();
-      e.stopPropagation();
-      const menu = toggle.nextElementSibling;
-      const isOpen = menu.classList.contains("open");
-      document.querySelectorAll(".dd-menu.open").forEach(m => {
-        if (m !== menu) m.classList.remove("open");
-      });
-      menu.classList.toggle("open");
+  document.addEventListener("mousedown", e => {
+    const toggle = e.target.closest(".dd-toggle");
+    if (!toggle) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const menu = toggle.nextElementSibling;
+    if (!menu || !menu.classList.contains("dd-menu")) return;
+    const isOpen = menu.classList.contains("open");
+    document.querySelectorAll(".dd-menu.open").forEach(m => {
+      if (m !== menu) m.classList.remove("open");
     });
+    menu.classList.toggle("open");
   });
 
   // click 选项：选中并关闭
-  document.querySelectorAll(".dd-menu").forEach(menu => {
-    menu.addEventListener("click", e => {
-      const item = e.target.closest(".dd-item");
-      if (!item || item.classList.contains("hidden")) return;
-      const dd = menu.closest(".dropdown");
-      const toggle = dd.querySelector(".dd-toggle");
-      const hidden = dd.querySelector("input[type=hidden]");
-      toggle.firstChild.textContent = item.textContent;
-      hidden.value = item.dataset.value;
-      menu.querySelectorAll(".dd-item").forEach(i => i.classList.remove("selected"));
-      item.classList.add("selected");
-      menu.classList.remove("open");
-      if (hidden.name === "device") {
-        updateDeviceOptions(hidden.value);
-      }
-    });
+  document.addEventListener("click", e => {
+    const item = e.target.closest(".dd-item");
+    if (!item || item.classList.contains("hidden")) return;
+    const dd = item.closest(".dropdown");
+    const menu = item.closest(".dd-menu");
+    const toggle = dd.querySelector(".dd-toggle");
+    const hidden = dd.querySelector("input[type=hidden]");
+    toggle.firstChild.textContent = item.textContent;
+    hidden.value = item.dataset.value;
+    menu.querySelectorAll(".dd-item").forEach(i => i.classList.remove("selected"));
+    item.classList.add("selected");
+    menu.classList.remove("open");
+    if (hidden.name === "device") {
+      updateDeviceOptions(hidden.value);
+    }
+    // v1.16.0-tmp01：任务页参数区下拉选定即保存（单字段 PUT）
+    const paramsBox = dd.closest("#jobParamsBox");
+    if (paramsBox && _jobName) {
+      saveJobField(_jobName, hidden.name, hidden.value);
+    }
   });
 
   // mousedown 在页面其他地方时关闭所有菜单
@@ -764,4 +912,37 @@ async function checkScanStatus() {
       bar.style.display = "none";
     }
   } catch (e) { /* 忽略 */ }
+}
+
+/* ---------- v1.16.0-tmp06：打包下载进度（ZIP/PDF 按钮点击反馈） ----------
+   多页大任务合成/打包耗时长（300dpi 彩色 PIL 逐页 + 流式压缩），此前点击后
+   页面零反馈。现在按钮进入进度态「打包中 n/m」并轮询后端登记表，完成后恢复。
+   下载仍走 location.href 保持浏览器原生下载体验；409（转换中）/413/404 等
+   在登记前返回的场景，轮询会立即发现 active=false 并恢复按钮。 */
+async function dlWithProgress(job, kind, url, btn) {
+  const old = btn.textContent;
+  const label = kind === "pdf" ? "合成中" : "打包中";
+  btn.style.pointerEvents = "none";
+  btn.style.opacity = "0.6";
+  btn.textContent = label + "…";
+  let timer = null;
+  const stop = () => {
+    if (timer) clearInterval(timer);
+    timer = null;
+    btn.textContent = old;
+    btn.style.pointerEvents = "";
+    btn.style.opacity = "";
+  };
+  timer = setInterval(async () => {
+    let p;
+    try {
+      const r = await fetch("/api/jobs/" + job + "/pack-progress");
+      p = (await r.json())[kind];          // tmp07：按 kind 取各自进度（ZIP/PDF 并发不互相覆盖）
+    } catch (e) { return; /* 网络闪断继续轮询 */ }
+    if (!p) return;                         // 该 kind 无登记（如服务重启）——等下次
+    if (p.total > 0) btn.textContent = label + " " + p.done + "/" + p.total;
+    if (!p.active) stop();                  // 完成/中断/未开始登记
+  }, 500);
+  setTimeout(() => { if (timer) stop(); }, 300000);   // 5 分钟兜底恢复
+  location.href = url;                                // attachment 原生下载，不离开页面
 }

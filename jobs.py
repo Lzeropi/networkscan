@@ -17,7 +17,13 @@ class JobError(Exception):
 
 JOB_RE = re.compile(r"\d{8}-\d{6}[\w\-]*")
 # v1.14.2（#10）：页码模型放宽为不限 3 位——p1000+ 也能被识别，不再「看不见就覆盖」
-PAGE_RE = re.compile(r"p\d+\.png")
+PAGE_RE = re.compile(r"p\d+\.(png|jpg|webp)")   # v1.16.0-tmp01：输出格式可选 jpg/webp
+_PNM_RE = re.compile(r"p\d+\.pnm")   # v1.16.0-tmp04（P1-2）：源页占位——仅页码预留用，不进页面列表
+# v1.16.0-tmp05（T04-02，审查报告）：页码分配侧全量占位识别——含 symlink。
+# 读取/展示侧（raw_pages/pages）仍过滤 symlink，但分配侧必须把链接页也计入，
+# 否则 next_page_no 会重复分配被链接占用的页码，扫描时 open/scanimage 跟随
+# 链接覆盖外部文件（Samba 可写场景的外部文件截断风险）。
+_PAGE_ANY_RE = re.compile(r"p\d+\.(png|jpg|webp|pnm)$")
 
 
 def _page_key(f):
@@ -34,8 +40,19 @@ def safe_slug(s, maxlen=30):
 def next_page_no(job, root=None):
     """v1.14.1（P1-9）：下一页编号 = 现有最大编号 + 1（len+1 在文件空洞时会冲突）。
     v1.14.2（#10）：页码解析不再限 3 位切片，p1000+ 也能算入 max。
-    v1.15（#1）：root 传扫描启动时根快照（worker 路径），扫描期间改路径不致编号错根。"""
+    v1.15（#1）：root 传扫描启动时根快照（worker 路径），扫描期间改路径不致编号错根。
+    v1.16.0-tmp04（P1-2，审查报告）：任务目录中的 pNNN.pnm（ADF 源页/转换失败归档）
+    也占页码——防止 ADF 释放锁后同任务再扫描分配重复页码覆盖页面。
+    v1.16.0-tmp05（T04-02，审查报告）：symlink 页同样占页码（分配侧避让，
+    读取侧 raw_pages 仍过滤）——杜绝扫描输出跟随链接覆盖外部文件。"""
     nums = [_page_key(f) for f in raw_pages(job, root)]
+    base = os.path.join(root, job) if root else validate(job)
+    try:
+        for f in os.listdir(base):
+            if _PAGE_ANY_RE.fullmatch(f):
+                nums.append(int(f[1:f.index(".")]))
+    except OSError:
+        pass
     return max(nums, default=0) + 1
 
 
@@ -63,13 +80,21 @@ class _JobLock:
         return self._entry["lock"].acquire(blocking, timeout)
 
     def release(self):
-        self._entry["lock"].release()
+        # v1.16.0-tmp09（DeepSeek M4）：底层锁释放失败（未持有/双重释放）也保证
+        # refs 递减——旧版整段跳过会让 refs 永不归零，_job_locks 字典永久膨胀
+        released_ok = True
+        try:
+            self._entry["lock"].release()
+        except RuntimeError:
+            released_ok = False
         with _job_locks_guard:
             e = _job_locks.get(self._job)
             if e is self._entry:
                 e["refs"] -= 1
                 if e["refs"] <= 0:
                     _job_locks.pop(self._job, None)
+        if not released_ok:
+            raise RuntimeError("job_lock released without being held: %s" % self._job)
 
     def abandon(self):
         """未 acquire 即放弃引用（cleanup acquire(False) 失败路径）——refs-1，归零则回收。"""
@@ -206,9 +231,13 @@ def load(job, root=None):
 def save(job, meta, root=None):
     """v1.14.4（P2）：原子写——临时文件 + fsync + replace，断电/崩溃不再产半截 JSON
     （半截 meta 会让任务从 UI 直接消失）。
-    v1.15（#1）：root 可选传扫描启动时根快照（worker 路径）。"""
+    v1.15（#1）：root 可选传扫描启动时根快照（worker 路径）。
+    v1.16.0-tmp09（DeepSeek H3）：tmp 名追加线程 ID——同进程多线程并发 save
+    同一任务（ADF 批次收尾无锁段 vs 转换 worker jlock 内）曾共用同 pid 的
+    tmp 路径，两个 fd 交错写同一 inode，replace 后 meta.json 损坏。
+    与 config._save_admin_cfg_unlocked 同一模式。"""
     p = os.path.join(root or get_scan_root(), job, "meta.json")
-    tmp = "%s.tmp.%d" % (p, os.getpid())
+    tmp = "%s.tmp.%d.%d" % (p, os.getpid(), threading.get_ident())
     try:
         with open(tmp, "w", encoding="utf-8") as f:
             json.dump(meta, f, ensure_ascii=False, indent=2)
@@ -271,8 +300,9 @@ def page_pairs(job):
     p = validate(job)
     out = []
     for f in pages(job):
-        t = os.path.join(p, ".thumbs", f[:-4] + ".jpg")
-        out.append((f, f[:-4] + ".jpg" if os.path.exists(t) else None))
+        thumb = f.rsplit(".", 1)[0] + ".jpg"   # v1.16.0-tmp01：rsplit 剥扩展（[:-4] 对 .webp 会剩点）
+        t = os.path.join(p, ".thumbs", thumb)
+        out.append((f, thumb if os.path.exists(t) else None))
     return out
 
 
@@ -320,6 +350,15 @@ def _delete_locked(job):
         scanner.state.pop(job, None)
     except ImportError:
         pass
+    # v1.16.0-tmp08（DeepSeek 补充验证 5 实测证实）：打包进度登记同此收口——
+    # api_delete 有显式 pop，但 jobs.delete/cleanup 路径曾漏（实测复现残留）。
+    # 局部 import 避循环；app 未加载（纯 jobs 单测）时静默跳过。
+    try:
+        import app
+        with app._pack_lock:
+            app._pack_progress.pop(job, None)
+    except Exception:
+        pass
 
 
 def dir_size(p):
@@ -366,6 +405,10 @@ def cleanup(force=False):
             try:
                 import scanner   # v1.14：局部导入避循环；正在扫描/转换的任务不清理（#2）
                 if scanner.get_state(name)["state"] == "scanning":
+                    return False
+                # v1.16.0-tmp04（P2-5，审查报告）：锁内查 pending（原子）——转换中
+                # 任务（jlock 已释放、state=done/idle 但仍有页在转）不得被清理
+                if scanner.has_pending(name):
                     return False
                 _delete_locked(name)   # v1.14.3（P3-11）：本函数已持锁，走无重入版本
                 deleted.append(name)

@@ -26,6 +26,13 @@ def _reset():
     for name in os.listdir(_TEST_ROOT):
         shutil.rmtree(os.path.join(_TEST_ROOT, name), ignore_errors=True)
     scanner.state.clear()
+    scanner._reset_convert_for_test()
+
+
+def _wait_pending_idle(timeout=10):
+    deadline = time.time() + timeout
+    while time.time() < deadline and scanner._pending_count() > 0:
+        time.sleep(0.02)
 
 
 def _mk_job(npages=1, **meta_extra):
@@ -124,7 +131,10 @@ def test_adf_joblock_held_before_started_returns(monkeypatch):
 
 
 # ---------- #3：ADF 转换完整性——部分失败必须报 error ----------
-def test_convert_pnms_returns_failure_stats(monkeypatch):
+def test_enqueue_pnms_converts_and_keeps_failed_source(monkeypatch):
+    """v1.16.0-tmp03：_enqueue_pnms 入队（返回入队页列表）；常驻 worker 转换后
+    成功页产 PNG + 删源，失败页保留 PNM 源（数据不丢）——替代旧同步 _convert_pnms 统计。
+    v1.16.0-tmp05（T04-06）：返回列表（含批次等待所需页名）。"""
     _reset()
     name = jobs.create()
     d = os.path.join(config.get_scan_root(), name)
@@ -132,10 +142,15 @@ def test_convert_pnms_returns_failure_stats(monkeypatch):
         with open(os.path.join(d, f), "wb") as fh:
             fh.write(b"P5")
     fake = _fake_script(os.path.join(_TEST_ROOT, "_cv"),
-                        '#!/bin/sh\ncase "$1" in *p002.pnm) exit 1;; esac\n: > "$2"\nexit 0\n')
+                        '#!/bin/sh\ncase "$1" in *p002.pnm*) exit 1;; esac\nt="${2#PNG:}"; : > "$t"\nexit 0\n')
     monkeypatch.setattr(scanner, "CONVERT", fake)
-    ok, failed = scanner._convert_pnms(name, 1)
-    assert ok == 1 and failed == ["p002.pnm"], "#3：必须返回转换统计而非静默吞掉"
+    n = scanner._enqueue_pnms(name, 1, config.get_scan_root(), "png")
+    assert n == ["p001.png", "p002.png"], "应入队 2 页并返回页名列表，实际 %r" % n
+    _wait_pending_idle()
+    assert os.path.exists(os.path.join(d, "p001.png")), "成功页应产出 PNG"
+    assert not os.path.exists(os.path.join(d, "p001.pnm")), "成功页应删 PNM 源"
+    assert os.path.exists(os.path.join(d, "p002.pnm")), "失败页必须保留 PNM 源（数据不丢）"
+    assert not os.path.exists(os.path.join(d, "p002.png")), "失败页不应产出 PNG"
 
 
 def test_adf_partial_conversion_reports_error(monkeypatch):
@@ -148,7 +163,7 @@ def test_adf_partial_conversion_reports_error(monkeypatch):
         '[ -z "$pat" ] && exit 0\n'          # 加固：无 --batch（如 -L 探测调用）不落盘，防污染 cwd
         'dir=$(dirname "$pat")\n: > "$dir/p001.pnm"\n: > "$dir/p002.pnm"\nexit 0\n'))
     cv_fake = _fake_script(os.path.join(_TEST_ROOT, "_cv2"),
-                           '#!/bin/sh\ncase "$1" in *p002.pnm) exit 1;; esac\n: > "$2"\nexit 0\n')
+                           '#!/bin/sh\ncase "$1" in *p002.pnm*) exit 1;; esac\nt="${2#PNG:}"; : > "$t"\nexit 0\n')
     monkeypatch.setattr(scanner, "SCANIMAGE", scan_fake)
     monkeypatch.setattr(scanner, "CONVERT", cv_fake)
     meta = jobs.load(name)

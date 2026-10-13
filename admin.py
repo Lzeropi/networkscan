@@ -265,7 +265,8 @@ def _cmd_ver(args):
 
 
 def env_report():
-    """环境/依赖检测：Python、SANE、ImageMagick、Pillow、用户组、目录可写。"""
+    """环境/依赖检测：Python、SANE、ImageMagick、Pillow、用户组、目录可写。
+    v1.16.0-tmp03：每项附 desc 作用简述；附 pyvenv/命令路径（整体一条，前端展示）。"""
     deps = [
         {"name": "Python", "ok": True, "ver": sys.version.split()[0]},
         {"name": "Flask", "ok": True, "ver": ""},
@@ -284,6 +285,42 @@ def env_report():
         deps.append({"name": "Pillow", "ok": True, "ver": PIL.__version__})
     except Exception:
         deps.append({"name": "Pillow", "ok": False, "ver": "未安装"})
+    # v1.16.0-tmp01：可选依赖——扫码取件二维码；未装仅隐藏入口，不影响扫描
+    try:
+        import qrcode
+        deps.append({"name": "qrcode（可选·扫码取件）", "ok": True,
+                     "ver": getattr(qrcode, "__version__", "已安装")})
+    except Exception:
+        deps.append({"name": "qrcode（可选·扫码取件）", "ok": False,
+                     "ver": "未安装（任务页「扫码取件」不可用；装：pip install qrcode）"})
+    # v1.16.0-tmp03：依赖作用简述（供管理员一眼看懂每项是干什么的）
+    _DESC = {
+        "Python": "项目运行语言本体",
+        "Flask": "Web 框架：路由、页面与 API",
+        "SANE scanimage": "扫描驱动 CLI：驱动扫描仪出图（P/SANE 后端）",
+        "ImageMagick convert": "图像转换备胎：Pillow 失败/WebP 回退、PDF 合成辅助",
+        "Pillow": "图像处理主力：PNM→PNG/JPEG/WebP 转换、缩略图生成",
+        "qrcode（可选·扫码取件）": "生成任务页二维码，手机扫码直达（不装不影响扫描）",
+    }
+    for d in deps:
+        d["desc"] = _DESC.get(d["name"], "")
+    # v1.16.0-tmp03：依赖安装路径整体一条——Python 包在服务 venv，系统命令按 which 实路径
+    pyvenv = ""
+    try:
+        import flask
+        # flask 包路径剥到 venv 根：.venv/lib/pythonX.Y/site-packages/flask/__init__.py（5 层 dirname）
+        p = os.path.abspath(flask.__file__)
+        for _ in range(5):
+            p = os.path.dirname(p)
+        pyvenv = p
+    except Exception:
+        pyvenv = os.path.dirname(sys.executable)
+    import shutil as _sh
+    dep_paths = {
+        "pyvenv": pyvenv,
+        "scanimage": _sh.which(SCANIMAGE) or SCANIMAGE,
+        "convert": _sh.which(CONVERT) or CONVERT,
+    }
 
     user = ""
     groups = []
@@ -305,7 +342,8 @@ def env_report():
     return {"deps": deps, "user": user, "groups": groups,
             "scan_group_ok": scan_group_ok,
             "scan_root": sr, "scan_root_exists": sr_exists,
-            "scan_root_writable": sr_writable}
+            "scan_root_writable": sr_writable,
+            "dep_paths": dep_paths}
 
 
 # ---------------- 设备探测（v1.14：合并到 device_probe.py，与普通页共用，#11） ----------------
@@ -372,7 +410,9 @@ def api_save_config():
             # v1.14.8（G）：改路径前查有无任务在扫——在扫任务的转换 worker 用新根拼旧任务
             # 路径，PNM 归档/缩略图会失败（error 兜底不丢数据，但任务白扫）；防呆优先。
             # 检查后新扫描仍可启动（TOCTOU 残窗），但窗口从「任意时刻」收窄到「保存瞬间」
-            if any(st.get("state") == "scanning" for st in scanner.state.values()):
+            # v1.16.0-tmp06（DeepSeek P1）：state.values() 快照遍历——扫描线程的
+            # state.setdefault（新任务首扫）不在 guard 内，遍历中插键会 RuntimeError
+            if any(st.get("state") == "scanning" for st in list(scanner.state.values())):
                 raise _Reject(jsonify(ok=False, msg="有任务正在扫描/转换，请等待完成后再修改存储路径"), 409)
             if not os.path.isabs(new_root):
                 raise _Reject(jsonify(ok=False, msg="请输入绝对路径（以 / 开头）"), 400)
@@ -427,12 +467,16 @@ def api_save_config():
                     mode_ok = cap.get("modes") or []
                     dpi = str(dv.get("dpi", "150"))
                     mode = str(dv.get("mode", "Gray"))
+                    fmt = str(dv.get("format", "png"))    # v1.16.0-tmp01：默认输出格式
                     if dpi_ok and dpi not in dpi_ok:
                         dpi = dpi_ok[0]
                     if mode_ok and mode not in mode_ok:
                         mode = mode_ok[0]
+                    if fmt not in scanner.VALID_FORMAT:   # 白名单 fail-closed
+                        fmt = "png"
                     cleaned[dev_name] = {"dpi": dpi, "mode": mode,
-                                         "crop": bool(dv.get("crop", False))}
+                                         "crop": bool(dv.get("crop", False)),
+                                         "format": fmt}
                 cfg["scan_defaults"] = cleaned
 
     # v1.14.3（P1-1）：load→校验→修改→save 全程同锁原子——两个并发保存不再互相覆盖对方的修改
@@ -467,7 +511,10 @@ def api_lock(job):
     locked = bool(d.get("locked"))
     with jobs.job_lock(job):   # v1.14.1（P1-3）：防锁定写 meta 与转换写 meta 的丢失更新竞态
         jobs.set_locked(job, locked)
-    return jsonify(ok=True, locked=jobs.is_locked(job))
+        # v1.16.0-tmp09（DeepSeek L7）：locked 回读移进锁内——锁外读可能被并发
+        # 锁操作改变，返回值与刚设置的值不一致
+        now_locked = jobs.is_locked(job)
+    return jsonify(ok=True, locked=now_locked)
 
 
 @bp.delete("/api/admin/jobs/<job>")
@@ -479,7 +526,13 @@ def api_delete(job):
         # v1.15.1-tmp04：不再检查 state==scanning——能拿到 jlock 即扫描段已结束；
         # 转换中删除允许，convert_worker 落盘段 isdir 兜底。
         scanner.state.pop(job, None)
-        jobs._delete_locked(job)   # v1.14.3（P3-11）：本处已持锁，走无重入版本
+        try:
+            jobs._delete_locked(job)   # v1.14.3（P3-11）：本处已持锁，走无重入版本
+        except jobs.JobError as e:
+            # v1.16.0-tmp09（DeepSeek M2）：TOCTOU 窗口内被锁定 → 403 而非全局 404
+            return jsonify(ok=False, msg=str(e)[:150]), 403
+        except OSError as e:
+            return jsonify(ok=False, msg="删除失败：任务目录权限异常（%s）" % str(e)[:80]), 500
     jobs.release_job_lock(job)   # v1.14.2（#11）：锁已空闲，回收条目防字典长期增长
     return jsonify(ok=True)
 
@@ -496,9 +549,15 @@ def api_testscan():
     except Exception as e:
         return jsonify(ok=False, msg="创建测试任务失败：%s" % str(e)[:150]), 500
     try:
-        scanner.scan_flatbed(name)
+        r = scanner.scan_flatbed(name)
     except Exception as e:
         return jsonify(ok=False, msg="扫描失败：%s" % str(e)[:200], job=name), 500
+    # v1.16.0-tmp09（DeepSeek H1）：scan_flatbed 忙时不抛异常只返回字符串——
+    # 不检查返回值会把 busy 误报成 started，前端轮询 120s 后超时误导用户
+    if r == "busy":
+        return jsonify(ok=False, msg="设备忙，请稍后再试", job=name), 409
+    if r == "convert_busy":
+        return jsonify(ok=False, msg="后台转换队列已满，请等转换完成后再试", job=name), 409
     # v1.14.2（#16）：只报「已启动」——转换在后台异步，此前同步返回 pages 常为 0
     # 却被前端当作「测试成功」，现由前端轮询任务 state 到终态才报成败
     return jsonify(ok=True, job=name, started=True)

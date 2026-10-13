@@ -52,33 +52,37 @@ svg#conn{position:absolute;top:0;left:0;width:100%;height:100%;pointer-events:no
 </head>
 <body>
 <div id="toolbar">
-  <h2>ScanWeb 架构 (v1.15.2)</h2>
+  <h2>ScanWeb 架构 (v1.16.0)</h2>
   <input id="search" placeholder="搜索节点…" type="text">
   <button onclick="resetView()">复位</button>
+  <button onclick="exportSVG()" title="导出 SVG">SVG</button>
+  <button onclick="exportPNG()" title="导出 PNG">PNG</button>
   <button onclick="toggleTheme()" id="themeBtn">☀️</button>
 </div>
 <div id="canvas"><div id="canvas-inner">
 <div class="layer">
-  <div class="node" data-kind="frontend" data-id="browser" data-label="浏览器" data-detail="HTML/CSS/JS 零依赖"><div class="icon">🖥️</div><div class="label">浏览器</div><div class="detail">HTTP 请求 ~2-3 次/扫描</div></div>
+  <div class="node" data-kind="frontend" data-id="browser" data-label="浏览器" data-detail="HTML/CSS/JS 零依赖"><div class="icon">🖥️</div><div class="label">浏览器</div><div class="detail">HTTP ~2-3 次/扫描 · 进度轮询</div></div>
 </div>
 <div class="layer">
   <div class="node" data-kind="backend" data-id="flask" data-label="Flask + Waitress" data-detail="8线程 / 端口 9203"><div class="icon">⚙️</div><div class="label">Flask + Waitress</div><div class="detail">8线程 / 端口 9203</div></div>
 </div>
 <div class="boundary">
   <div class="boundary-label">扫描段（持 scan_lock + jlock ~19s）</div>
-  <div class="node" data-kind="service" data-id="scanimage" data-label="scanimage" data-detail="SANE 驱动"><div class="icon">🔧</div><div class="label">scanimage</div><div class="detail">scanimage -d / 19.2s 彩色</div></div>
-  <div class="node" data-kind="external" data-id="m1005" data-label="HP M1005" data-detail="USB 扫描仪"><div class="icon">🔗</div><div class="label">HP M1005</div><div class="detail">USB / 300dpi 彩色</div></div>
+  <div class="node" data-kind="service" data-id="scanimage" data-label="scanimage" data-detail="SANE 驱动 / 平板+ADF"><div class="icon">🔧</div><div class="label">scanimage</div><div class="detail">平板 / ADF 批量 · 19.2s 彩色</div></div>
+  <div class="node" data-kind="external" data-id="m1005" data-label="HP M1005" data-detail="USB 扫描仪"><div class="icon">🔗</div><div class="label">HP M1005</div><div class="detail">USB / 300dpi 彩色 · 格式可选</div></div>
 </div>
 <div class="layer">
-  <div class="node" data-kind="backend" data-id="pil" data-label="PIL 转换" data-detail="PNM→PNG 后台无锁 14.5s"><div class="icon">⚙️</div><div class="label">PIL 转换</div><div class="detail">后台无锁 / .partial 落盘</div></div>
+  <div class="node" data-kind="queue" data-id="convert_queue" data-label="转换队列" data-detail="FIFO 水位 MAX=4"><div class="icon">📨</div><div class="label">转换队列</div><div class="detail">FIFO 串行 · 超水位拒扫</div></div>
+  <div class="node" data-kind="backend" data-id="pil" data-label="PIL 转换" data-detail="PNM→png/jpg/webp"><div class="icon">⚙️</div><div class="label">PIL 转换</div><div class="detail">后台无锁 · .partial 落盘</div></div>
+  <div class="node" data-kind="queue" data-id="pending" data-label="_pending" data-detail="转换中页 409 协调"><div class="icon">📨</div><div class="label">_pending</div><div class="detail">转换中页 409 协调</div></div>
 </div>
 <div class="layer">
-  <div class="node" data-kind="database" data-id="storage" data-label="任务目录" data-detail="p001.png + meta.json"><div class="icon">🗄️</div><div class="label">任务目录</div><div class="detail">p001.png + meta.json + .thumbs/</div></div>
+  <div class="node" data-kind="database" data-id="storage" data-label="任务目录" data-detail="p001.{png|jpg|webp} + meta.json"><div class="icon">🗄️</div><div class="label">任务目录</div><div class="detail">p%03d.{fmt} + meta + .thumbs/</div></div>
+  <div class="node" data-kind="queue" data-id="pack" data-label="_pack_progress" data-detail="{job:{zip,pdf}} 隔离"><div class="icon">📨</div><div class="label">打包进度</div><div class="detail">ZIP/PDF 按 kind 隔离</div></div>
 </div>
 <div class="layer">
   <div class="node" data-kind="cache" data-id="devcache" data-label="_dev_cache" data-detail="设备名缓存 300s"><div class="icon">⚡</div><div class="label">_dev_cache</div><div class="detail">设备名缓存 300s</div></div>
   <div class="node" data-kind="service" data-id="refresher" data-label="保活线程" data-detail="每 240s 刷新"><div class="icon">🔧</div><div class="label">保活线程</div><div class="detail">每 240s 刷新缓存</div></div>
-  <div class="node" data-kind="queue" data-id="pending" data-label="_pending 登记表" data-detail="转换中 409 协调"><div class="icon">📨</div><div class="label">_pending</div><div class="detail">转换中页 409 协调</div></div>
 </div>
 <svg id="conn"></svg>
 </div></div>
@@ -92,8 +96,32 @@ svg#conn{position:absolute;top:0;left:0;width:100%;height:100%;pointer-events:no
 </div>
 <div id="detail"><span class="close" onclick="document.getElementById('detail').classList.remove('show')">×</span><h3 id="d-title"></h3><div id="d-body"></div></div>
 <script>
-const EDGES=[{from:"browser",to:"flask",label:"HTTP"},{from:"flask",to:"scanimage",label:"scan_lock"},{from:"scanimage",to:"m1005",label:"USB"},{from:"scanimage",to:"pil",label:"PNM 释放锁"},{from:"pil",to:"storage",label:"PNG落盘 短锁"},{from:"flask",to:"devcache",label:"设备解析"},{from:"refresher",to:"devcache",label:"保活刷新"},{from:"flask",to:"pending",label:"409协调"},{from:"pil",to:"pending",label:"登记/清除"}];
-const NODEINFO={browser:{kind:"frontend",detail:"HTML/CSS/JS 零依赖",conns:["flask"]},flask:{kind:"backend",detail:"8线程 / 端口 9203",conns:["scanimage","devcache","pending"]},scanimage:{kind:"service",detail:"SANE 驱动 / scanimage -d",conns:["m1005","pil"]},m1005:{kind:"external",detail:"USB 扫描仪 / 300dpi 彩色 19.2s",conns:[]},pil:{kind:"backend",detail:"PNM→PNG 后台无锁 14.5s",conns:["storage","pending"]},storage:{kind:"database",detail:"p001.png + meta.json + .thumbs/",conns:[]},devcache:{kind:"cache",detail:"设备名缓存 300s",conns:[]},refresher:{kind:"service",detail:"每 240s 刷新缓存",conns:["devcache"]},pending:{kind:"queue",detail:"转换中页 409 协调",conns:[]}};
+const EDGES=[
+{from:"browser",to:"flask",label:"HTTP / 进度轮询"},
+{from:"flask",to:"scanimage",label:"scan_lock+jlock"},
+{from:"flask",to:"scanimage",label:"ADF 批量入队"},
+{from:"scanimage",to:"m1005",label:"USB / PNM"},
+{from:"scanimage",to:"convert_queue",label:"释放双锁后入队"},
+{from:"convert_queue",to:"pil",label:"FIFO 取出"},
+{from:"pil",to:"pending",label:"登记/清除"},
+{from:"flask",to:"pending",label:"409 协调"},
+{from:"pil",to:"storage",label:"短锁落盘"},
+{from:"flask",to:"pack",label:"打包进度登记"},
+{from:"pack",to:"storage",label:"读页打包"},
+{from:"flask",to:"devcache",label:"设备解析"},
+{from:"refresher",to:"devcache",label:"保活刷新"}];
+const NODEINFO={
+browser:{kind:"frontend",detail:"HTML/CSS/JS 零依赖；扫描/打包期间轮询进度接口",conns:["flask"]},
+flask:{kind:"backend",detail:"Flask + Waitress 8线程 / 端口 9203 · 参数 PUT /api/jobs/<job>/params",conns:["scanimage","pending","pack","devcache"]},
+scanimage:{kind:"service",detail:"SANE 驱动 · 平板 / ADF 批量（扫描段结束即释放双锁）",conns:["m1005","convert_queue"]},
+m1005:{kind:"external",detail:"HP M1005 USB 扫描仪 · 300dpi 彩色 19.2s · 输出格式可选",conns:[]},
+convert_queue:{kind:"queue",detail:"常驻 worker FIFO 串行 · 有界水位 MAX_PENDING_PNM=4 · 超限拒扫防堆积",conns:["pil"]},
+pil:{kind:"backend",detail:"PNM→png/jpg/webp 后台转换 · .partial 落盘 · O_NOFOLLOW 防 symlink",conns:["pending","storage"]},
+pending:{kind:"queue",detail:"转换中页登记表 · reorder/PDF/ZIP/raw 落盘前 409 协调",conns:[]},
+storage:{kind:"database",detail:"任务目录 p%03d.{format} + meta.json + .thumbs/",conns:[]},
+pack:{kind:"queue",detail:"ZIP 打包 / PDF 合成实时进度 · 按 {job:{zip,pdf}} 隔离并发互不覆盖",conns:["storage"]},
+devcache:{kind:"cache",detail:"设备名/能力缓存 300s · 解析失败自动重探",conns:[]},
+refresher:{kind:"service",detail:"后台保活线程每 240s 刷新设备缓存",conns:["devcache"]}};
 function nodeEl(id){return document.querySelector('.node[data-id="'+id+'"]')}
 function nodeCenter(id){const n=nodeEl(id);if(!n)return null;const c=document.getElementById('canvas-inner');const r=n.getBoundingClientRect();const cr=c.getBoundingClientRect();return{x:r.left-cr.left+r.width/2,y:r.top-cr.top+r.height/2}}
 function drawConn(){const svg=document.getElementById('conn');svg.innerHTML='';const cw=document.getElementById('canvas-inner').scrollWidth;const ch=document.getElementById('canvas-inner').scrollHeight;svg.setAttribute('width',Math.max(cw,window.innerWidth));svg.setAttribute('height',Math.max(ch,window.innerHeight));EDGES.forEach(e=>{const f=nodeCenter(e.from),t=nodeCenter(e.to);if(!f||!t)return;const path=document.createElementNS('http://www.w3.org/2000/svg','path');const dy=t.y-f.y;path.setAttribute('d','M'+f.x+','+f.y+' C'+f.x+','+(f.y+dy*.4)+' '+t.x+','+(t.y-dy*.4)+' '+t.x+','+t.y);path.setAttribute('class','conn-path');path.setAttribute('data-from',e.from);path.setAttribute('data-to',e.to);svg.appendChild(path);const tx=document.createElementNS('http://www.w3.org/2000/svg','text');tx.setAttribute('x',(f.x+t.x)/2);tx.setAttribute('y',(f.y+t.y)/2);tx.setAttribute('class','conn-label');tx.setAttribute('text-anchor','middle');tx.textContent=e.label;svg.appendChild(tx)})}
@@ -110,6 +138,10 @@ document.addEventListener('mouseup',()=>isDrag=false);
 function fitView(){const inner=document.getElementById('canvas-inner');const cw=inner.scrollWidth,ch=inner.scrollHeight;const vw=window.innerWidth,vh=window.innerHeight-48;scale=Math.min(vw/cw*.85,vh/ch*.85,1);ox=(vw-cw*scale)/2;oy=0;applyTF()}
 function resetView(){scale=1;ox=0;oy=0;applyTF();setTimeout(fitView,50)}
 function toggleTheme(){const d=document.documentElement;d.dataset.theme=d.dataset.theme==='dark'?'light':'dark';document.getElementById('themeBtn').textContent=d.dataset.theme==='dark'?'☀️':'🌙'}
+function svgString(){const cw=document.getElementById('canvas-inner').scrollWidth,ch=document.getElementById('canvas-inner').scrollHeight;let s='<svg xmlns="http://www.w3.org/2000/svg" width="'+cw+'" height="'+ch+'" font-family="PingFang SC, Microsoft YaHei, Noto Sans CJK SC, sans-serif"><rect width="'+cw+'" height="'+ch+'" fill="'+(document.documentElement.dataset.theme==='dark'?'#0d1117':'#f6f8fa')+'"/>';document.querySelectorAll('.node').forEach(n=>{const r=n.getBoundingClientRect(),c=document.getElementById('canvas-inner').getBoundingClientRect();const x=r.left-c.left,y=r.top-c.top;const cs=getComputedStyle(document.documentElement);s+='<rect x="'+x+'" y="'+y+'" width="'+r.width+'" height="'+r.height+'" rx="10" fill="'+cs.getPropertyValue('--card').trim()+'" stroke="'+(n.dataset.kind==='frontend'?cs.getPropertyValue('--pink').trim():n.dataset.kind==='backend'?cs.getPropertyValue('--accent').trim():n.dataset.kind==='service'?cs.getPropertyValue('--green').trim():n.dataset.kind==='external'?cs.getPropertyValue('--orange').trim():n.dataset.kind==='database'?cs.getPropertyValue('--cyan').trim():cs.getPropertyValue('--purple').trim())+'" stroke-width="2"/><text x="'+(x+r.width/2)+'" y="'+(y+r.height/2-4)+'" text-anchor="middle" font-size="13" font-weight="600" fill="'+cs.getPropertyValue('--fg').trim()+'">'+n.dataset.label+'</text><text x="'+(x+r.width/2)+'" y="'+(y+r.height/2+14)+'" text-anchor="middle" font-size="11" fill="'+cs.getPropertyValue('--dim').trim()+'">'+n.dataset.detail+'</text>'});document.querySelectorAll('#conn path').forEach(p=>{s+=p.outerHTML.replace('class="conn-path"','stroke="'+getComputedStyle(document.documentElement).getPropertyValue('--line').trim()+'" fill="none" stroke-width="2"')});document.querySelectorAll('#conn text').forEach(t=>{s+=t.outerHTML});s+='</svg>';return s}
+function download(name,data,mime){const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([data],{type:mime}));a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(a.href),1000)}
+function exportSVG(){download('scanweb-architecture.svg',svgString(),'image/svg+xml')}
+function exportPNG(){const img=new Image();img.onload=()=>{const cw=document.getElementById('canvas-inner').scrollWidth,ch=document.getElementById('canvas-inner').scrollHeight;const cv=document.createElement('canvas');cv.width=cw;cv.height=ch;cv.getContext('2d').drawImage(img,0,0);download('scanweb-architecture.png',cv.toDataURL('image/png'),'image/png')};img.src='data:image/svg+xml;charset=utf-8,'+encodeURIComponent(svgString())}
 setTimeout(()=>{drawConn();fitView()},100);
 window.addEventListener('resize',()=>{drawConn();fitView()});
 </script>

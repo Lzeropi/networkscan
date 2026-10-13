@@ -19,6 +19,7 @@
           </div>
           <input type="hidden" name="device" value="">
         </div>
+        <button type="button" class="btn" onclick="reprobe(this, loadDevices)" title="探测失败或设备列表为空时，点此强制重新探测（约需数秒）">重新探测</button>
       </div>
       <label class="crop-label"><input type="checkbox" name="crop"> 按 A4 尺寸裁边</label>
       <button type="submit" class="primary">创建并开始</button>
@@ -49,6 +50,18 @@
             <div class="dd-menu">
             </div>
             <input type="hidden" name="mode" value="Gray">
+          </div>
+        </div>
+        <div class="dd-group">
+          <span class="dd-label">输出格式</span>
+          <div class="dropdown" data-name="format" id="fmtDropdown">
+            <button type="button" class="dd-toggle">PNG<span class="dd-caret"></span></button>
+            <div class="dd-menu">
+              <button type="button" class="dd-item selected" data-value="png" title="无损压缩，适合归档/凭证，彩色约 4MB/页">PNG</button>
+              <button type="button" class="dd-item" data-value="jpg" title="体积小速度快（约 0.2MB/页），日常流转推荐">JPEG</button>
+              <button type="button" class="dd-item" data-value="webp" title="体积最小，老浏览器或微信内置浏览器可能不显示">WebP</button>
+            </div>
+            <input type="hidden" name="format" value="png">
           </div>
         </div>
       </div>

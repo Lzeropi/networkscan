@@ -20,6 +20,14 @@ def _reset():
     for name in os.listdir(_TEST_ROOT):
         shutil.rmtree(os.path.join(_TEST_ROOT, name), ignore_errors=True)
     scanner.state.clear()
+    scanner._reset_convert_for_test()
+
+
+def _wait_pending_idle(timeout=10):
+    import time
+    deadline = time.time() + timeout
+    while time.time() < deadline and scanner._pending_count() > 0:
+        time.sleep(0.02)
 
 
 # ---------- job_lock 互斥语义（P1-3） ----------
@@ -81,22 +89,23 @@ def test_concurrent_create_unique_names():
 
 
 # ---------- 故障注入（P2-16） ----------
-def test_convert_pnms_keeps_source_on_failure(monkeypatch):
-    """convert 失败时 PNM 必须保留（P1-4），不再误删用户扫描数据。"""
+def test_enqueue_pnms_keeps_source_on_failure(monkeypatch):
+    """v1.16.0-tmp03：队列转换失败时 PNM 必须保留（P1-4），不再误删用户扫描数据。"""
     _reset()
     name = jobs.create()
     d = os.path.join(config.get_scan_root(), name)
     with open(os.path.join(d, "p001.pnm"), "wb") as f:
         f.write(b"P5 fake pnm")
-    # 注入故障：CONVERT 指向不存在的命令
+    # 注入故障：CONVERT 指向不存在的命令（PIL 打不开假 PNM → 回退 CONVERT 失败）
     monkeypatch.setattr(scanner, "CONVERT", "/nonexistent/convert")
-    scanner._convert_pnms(name, 1)
+    scanner._enqueue_pnms(name, 1, config.get_scan_root(), "png")
+    _wait_pending_idle()
     assert os.path.exists(os.path.join(d, "p001.pnm")), "转换失败必须保留 PNM 源"
     assert not os.path.exists(os.path.join(d, "p001.png")), "失败不应产出 PNG"
 
 
-def test_convert_pnms_removes_source_on_success(monkeypatch):
-    """convert 成功时 PNM 删除、PNG 产出（防止只修不删走另一个极端）。"""
+def test_enqueue_pnms_removes_source_on_success(monkeypatch):
+    """v1.16.0-tmp03：转换成功时 PNM 删除、PNG 产出（防止只修不删走另一个极端）。"""
     _reset()
     name = jobs.create()
     d = os.path.join(config.get_scan_root(), name)
@@ -105,10 +114,11 @@ def test_convert_pnms_removes_source_on_success(monkeypatch):
     # 注入假 convert：写一个目标 PNG 后退出 0
     fake = os.path.join(_TEST_ROOT, "_fake_convert")
     with open(fake, "w") as f:
-        f.write("#!/bin/sh\ncp /dev/null \"$2\" 2>/dev/null || : > \"$2\"\nexit 0\n")
+        f.write("#!/bin/sh\nt=\"${2#PNG:}\"; cp /dev/null \"$t\" 2>/dev/null || : > \"$t\"\nexit 0\n")
     os.chmod(fake, 0o755)
     monkeypatch.setattr(scanner, "CONVERT", fake)
-    scanner._convert_pnms(name, 1)
+    scanner._enqueue_pnms(name, 1, config.get_scan_root(), "png")
+    _wait_pending_idle()
     assert not os.path.exists(os.path.join(d, "p001.pnm")), "成功必须删 PNM"
     assert os.path.exists(os.path.join(d, "p001.png")), "成功必须产出 PNG"
 

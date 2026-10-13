@@ -124,18 +124,26 @@
     tb.innerHTML = "";
     (d.env.deps || []).forEach(x => {
       // v1.14.2（#13）：资源表动态字段统一转义，消除存储型 XSS 尾巴
+      // v1.16.0-tmp03：新增「作用」列（env_report 每项 desc）
       tb.insertAdjacentHTML("beforeend",
-        "<tr><td>" + esc(x.name) + "</td><td>" + (x.ok ? "✓" : "✗") + "</td><td>" + esc(x.ver || "") + "</td></tr>");
+        "<tr><td>" + esc(x.name) + "</td><td>" + (x.ok ? "✓" : "✗") + "</td><td>" + esc(x.ver || "") +
+        "</td><td>" + esc(x.desc || "") + "</td></tr>");
     });
     tb.insertAdjacentHTML("beforeend",
       "<tr><td>服务用户</td><td>" + (d.env.user ? "✓" : "?") + "</td><td>" + esc(d.env.user || "未知") +
-      "（所属组：" + esc((d.env.groups || []).join(", ")) + "）</td></tr>");
+      "（所属组：" + esc((d.env.groups || []).join(", ")) + "）</td><td>systemd 服务运行身份</td></tr>");
     tb.insertAdjacentHTML("beforeend",
       "<tr><td>扫描仪访问组 (lp/scanner)</td><td>" + (d.env.scan_group_ok ? "✓" : "✗") +
-      "</td><td>" + (d.env.scan_group_ok ? "已加入，可访问 USB 扫描设备" : "未加入 lp/scanner 组，可能无法发现设备") + "</td></tr>");
+      "</td><td>" + (d.env.scan_group_ok ? "已加入，可访问 USB 扫描设备" : "未加入 lp/scanner 组，可能无法发现设备") + "</td><td>USB 设备访问权限（缺失则探测不到扫描仪）</td></tr>");
     tb.insertAdjacentHTML("beforeend",
       "<tr><td>存储目录</td><td>" + (d.env.scan_root_writable ? "✓" : "✗") + "</td><td>" + esc(d.env.scan_root) +
-      (d.env.scan_root_writable ? "（可写）" : (d.env.scan_root_exists ? "（无写入权限！）" : "（不存在！）")) + "</td></tr>");
+      (d.env.scan_root_writable ? "（可写）" : (d.env.scan_root_exists ? "（无写入权限！）" : "（不存在！）")) + "</td><td>任务数据落盘位置（页图/缩略图/meta）</td></tr>");
+    // v1.16.0-tmp03：依赖安装路径整体一条（Python 包在服务 venv，系统命令按 which 实路径）
+    const dp = d.env.dep_paths || {};
+    $("envExtra").textContent =
+      "依赖路径：Python 包（Flask/Pillow/qrcode）装在服务 venv " + (dp.pyvenv || "未知") +
+      "；系统命令 scanimage = " + (dp.scanimage || "未找到") +
+      "、convert = " + (dp.convert || "未找到") + "。";
     // 配置回显（首次加载）
     if (!$("scanRootInput").value) $("scanRootInput").value = d.scan_root || "";
     if (document.activeElement !== $("cfgJobs")) $("cfgJobs").value = d.cleanup.max_jobs;
@@ -181,11 +189,26 @@
       const curDpi = dv.dpi || "150";
       const curMode = dv.mode || "Gray";
       const curCrop = dv.crop ? "checked" : "";
-      // DPI 选项从设备探测结果生成
+      const curFmt = dv.format || "png";   // v1.16.0-tmp01：默认输出格式
+      // DPI 选项从设备探测结果生成（v1.16.0-tmp01：原生 select → 自定义下拉，与管理页整体风格统一）
       const dpis = x.dpi_raw || ["75","100","150","200","300","600","1200"];
-      const dpiOpts = dpis.map(d => '<option value="'+esc(d)+'"'+(d===curDpi?' selected':'')+'>'+esc(d)+'</option>').join("");
-      const modeOpts = (x.modes || ["Gray","Color"]).map(m =>
-        '<option value="'+esc(m)+'"'+(m===curMode?' selected':'')+'>'+esc(MODE_CN[m]||m)+'</option>').join("");
+      const dpiItems = dpis.map(d =>
+        '<button type="button" class="dd-item'+(d===curDpi?' selected':'')+'" data-value="'+esc(d)+'">'+esc(d)+'</button>').join("");
+      const modeItems = (x.modes || ["Gray","Color"]).map(m =>
+        '<button type="button" class="dd-item'+(m===curMode?' selected':'')+'" data-value="'+esc(m)+'">'+esc(MODE_CN[m]||m)+'</button>').join("");
+      const fmtItems = ["png","jpg","webp"].map(f =>
+        '<button type="button" class="dd-item'+(f===curFmt?' selected':'')+'" data-value="'+f+'">'+(f==="jpg"?"JPEG":f.toUpperCase())+'</button>').join("");   // v1.16.0-tmp01
+// v1.16.0-tmp01：toggle 显示文字必须与菜单项一致（raw 值 "Color"/"png" 会显示英文小写）；
+      // hidden 必须存 raw 值（显示文字如"彩色"会被后端白名单清洗回退）——两值分离
+      const curModeCn = MODE_CN[curMode] || curMode;
+      const curFmtCn = curFmt === "jpg" ? "JPEG" : curFmt.toUpperCase();
+      // 自定义下拉容器：cur=显示文字，rawCur=提交值（hidden）
+      const ddBox = (field, eid, cur, items, rawCur) =>
+        '<span class="dropdown" data-adm="'+field+'_'+eid+'">' +
+        '<button type="button" class="dd-toggle">'+cur+'<span class="dd-caret"></span></button>' +
+        '<div class="dd-menu">'+items+'</div>' +
+        '<input type="hidden" value="'+esc(rawCur)+'">' +
+        '</span>';
 
       box.insertAdjacentHTML("beforeend",
         '<div class="dev-card">' +
@@ -203,28 +226,37 @@
         '<label class="hint" style="white-space:nowrap">别名</label>' +
         '<input type="text" id="alias_'+eid+'" placeholder="'+esc(x.name)+'" value="'+esc(alias)+'" style="flex:1;min-width:80px">' +
         '</div>' +
-        '<div class="cfg-grid" style="grid-template-columns:auto auto auto 1fr;gap:6px;align-items:center">' +
-        '<span class="hint" style="display:flex;align-items:center;gap:4px">默认DPI <select id="dpi_'+eid+'" style="padding:4px;border-radius:6px;border:1px solid var(--border)">'+dpiOpts+'</select></span>' +
-        '<span class="hint" style="display:flex;align-items:center;gap:4px">默认色彩 <select id="mode_'+eid+'" style="padding:4px;border-radius:6px;border:1px solid var(--border)">'+modeOpts+'</select></span>' +
-        '<span class="hint" style="display:flex;align-items:center;gap:4px"><input type="checkbox" id="crop_'+eid+'" '+curCrop+'> 裁边</span>' +
-        '<button class="primary" data-dev-save="'+esc(x.name)+'" style="white-space:nowrap">保存</button>' +
+        '<div class="cfg-row" style="flex-wrap:wrap;gap:8px 14px;align-items:center">' +   // v1.16.0-tmp01：align-items:center 防按钮被 flex 拉伸（原默认 stretch 使保存按钮高 45px）
+        '<span class="hint" style="display:inline-flex;align-items:center;gap:4px">默认DPI '+ddBox("dpi", eid, curDpi, dpiItems, curDpi)+'</span>' +
+        '<span class="hint" style="display:inline-flex;align-items:center;gap:4px">默认色彩 '+ddBox("mode", eid, curModeCn, modeItems, curMode)+'</span>' +
+        '<span class="hint" style="display:inline-flex;align-items:center;gap:4px">默认格式 '+ddBox("fmt", eid, curFmtCn, fmtItems, curFmt)+'</span>' +
+        '<span class="hint" style="display:inline-flex;align-items:center;gap:4px"><input type="checkbox" id="crop_'+eid+'" '+curCrop+'> 裁边</span>' +
+        '<button class="btn primary" data-dev-save="'+esc(x.name)+'" style="margin-left:auto;min-width:88px;text-align:center">保存</button>' +
         '</div></div></div>');
     });
     $("devCacheNote").textContent = d.cached ? "（5 分钟内使用缓存，点「重新探测」强制刷新）" : "（刚完成实时探测）";
+
+    // v1.16.0-tmp01：动态生成的自定义下拉绑定（app.js 委托版，_bound 防重复）
+    if (window.initDropdowns) initDropdowns();
 
     // 绑定保存按钮
     box.querySelectorAll("[data-dev-save]").forEach(btn => {
       btn.addEventListener("click", async () => {
         const devName = btn.dataset.devSave;
         const eid = btoa(devName).replace(/=/g, "");
+        const card = btn.closest(".dev-card");
+        const dv = card ? card.querySelector('[data-adm="dpi_'+eid+'"] input[type=hidden]') : null;
+        const mv = card ? card.querySelector('[data-adm="mode_'+eid+'"] input[type=hidden]') : null;
+        const fv = card ? card.querySelector('[data-adm="fmt_'+eid+'"] input[type=hidden]') : null;
         const alias = $("alias_" + eid).value.trim();
-        const dpi = $("dpi_" + eid).value;
-        const mode = $("mode_" + eid).value;
+        const dpi = dv ? dv.value : "150";
+        const mode = mv ? mv.value : "Gray";
+        const fmt = fv ? fv.value : "png";
         const crop = $("crop_" + eid).checked;
         // 保存别名
         if (alias) { _devAliases[devName] = alias; } else { delete _devAliases[devName]; }
         // 保存默认值
-        _devDefaults[devName] = { dpi: dpi, mode: mode, crop: crop };
+        _devDefaults[devName] = { dpi: dpi, mode: mode, crop: crop, format: fmt };
         const d = await api("/api/admin/config", {
           method: "POST",
           body: JSON.stringify({ device_alias: _devAliases, scan_defaults: _devDefaults })

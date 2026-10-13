@@ -44,13 +44,14 @@ def _png_path(tmp):
 
 class _SlowFx:
     """慢转换注入器：PIL 与 convert 双双挂起 timeout×，制造可控的『转换中』窗口。
-    实现：把 _pnm_to_png 换成先置 pending 语义不变的慢函数——直接 monkeypatch
-    _pnm_to_png 为 sleep（不真转文件），验证锁分段行为。"""
+    实现：把 _convert_pnm 换成先置 pending 语义不变的慢函数——直接 monkeypatch
+    _convert_pnm 为 sleep（不真转文件），验证锁分段行为。
+    v1.16.0-tmp01：签名随 _convert_pnm 增加 fmt 参数（默认 png，向后兼容）。"""
 
     def __init__(self, monkeypatch, sleep=1.5):
         self.sleep = sleep
 
-    def __call__(self, src, dst):
+    def __call__(self, src, dst, fmt="png"):
         time.sleep(self.sleep)
         # 复制一个合法 PNG 到 dst（保证落盘段 os.replace 成功路径可测）
         import shutil as _sh
@@ -64,7 +65,7 @@ def test_scan_returns_before_convert_ends(monkeypatch, tmp_path):
     monkeypatch.setattr(scanner, "SCANIMAGE",
                         _fake_script(str(tmp_path) + "/scan.sh",
                                      "#!/bin/sh\nsleep 0.3\nexit 0\n"))
-    monkeypatch.setattr(scanner, "_pnm_to_png", _SlowFx(monkeypatch, sleep=2.0))
+    monkeypatch.setattr(scanner, "_convert_pnm", _SlowFx(monkeypatch, sleep=2.0))
 
     t0 = time.time()
     r = scanner.scan_flatbed(name)
@@ -96,7 +97,7 @@ def test_reorder_during_convert_409(monkeypatch, tmp_path):
     monkeypatch.setattr(scanner, "SCANIMAGE",
                         _fake_script(str(tmp_path) + "/scan.sh",
                                      "#!/bin/sh\nsleep 0.2\nexit 0\n"))
-    monkeypatch.setattr(scanner, "_pnm_to_png", _SlowFx(monkeypatch, sleep=2.0))
+    monkeypatch.setattr(scanner, "_convert_pnm", _SlowFx(monkeypatch, sleep=2.0))
     scanner.scan_flatbed(name)
     assert scanner.has_pending(name), "前置：转换中"
 
@@ -119,7 +120,7 @@ def test_delete_during_convert_cleans_up(monkeypatch, tmp_path):
     monkeypatch.setattr(scanner, "SCANIMAGE",
                         _fake_script(str(tmp_path) + "/scan.sh",
                                      "#!/bin/sh\nsleep 0.2\nexit 0\n"))
-    monkeypatch.setattr(scanner, "_pnm_to_png", _SlowFx(monkeypatch, sleep=2.0))
+    monkeypatch.setattr(scanner, "_convert_pnm", _SlowFx(monkeypatch, sleep=2.0))
     scanner.scan_flatbed(name)
     assert scanner.has_pending(name)
 
@@ -141,7 +142,7 @@ def test_pdf_zip_raw_409_during_convert(monkeypatch, tmp_path):
     monkeypatch.setattr(scanner, "SCANIMAGE",
                         _fake_script(str(tmp_path) + "/scan.sh",
                                      "#!/bin/sh\nsleep 0.2\nexit 0\n"))
-    monkeypatch.setattr(scanner, "_pnm_to_png", _SlowFx(monkeypatch, sleep=2.0))
+    monkeypatch.setattr(scanner, "_convert_pnm", _SlowFx(monkeypatch, sleep=2.0))
     scanner.scan_flatbed(name)
     assert scanner.has_pending(name)
 
@@ -164,7 +165,7 @@ def test_back_to_back_scans_no_convert_wait(monkeypatch, tmp_path):
     monkeypatch.setattr(scanner, "SCANIMAGE",
                         _fake_script(str(tmp_path) + "/scan.sh",
                                      "#!/bin/sh\nsleep 0.3\nexit 0\n"))
-    monkeypatch.setattr(scanner, "_pnm_to_png", _SlowFx(monkeypatch, sleep=2.0))
+    monkeypatch.setattr(scanner, "_convert_pnm", _SlowFx(monkeypatch, sleep=2.0))
 
     scanner.scan_flatbed(name)          # 第一次：返回时转换已开始（2s）
     t0 = time.time()
@@ -187,7 +188,7 @@ def test_thumb_longpoll_waits_for_convert(monkeypatch, tmp_path):
     monkeypatch.setattr(scanner, "SCANIMAGE",
                         _fake_script(str(tmp_path) + "/scan.sh",
                                      "#!/bin/sh\nsleep 0.2\nexit 0\n"))
-    monkeypatch.setattr(scanner, "_pnm_to_png", _SlowFx(monkeypatch, sleep=1.0))
+    monkeypatch.setattr(scanner, "_convert_pnm", _SlowFx(monkeypatch, sleep=1.0))
     scanner.scan_flatbed(name)          # 转换中（1s）
     assert scanner.has_pending(name, "p002.png")
 

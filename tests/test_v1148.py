@@ -38,7 +38,10 @@ def test_raw_pages_filters_symlink():
     os.symlink("/etc/passwd", os.path.join(d, "p999.png"))
     assert "p999.png" not in jobs.raw_pages(name), "A：raw_pages 必须过滤 symlink 页"
     assert "p999.png" not in jobs.pages(name), "pages 保持过滤"
-    assert jobs.next_page_no(name) == 3, "A：幽灵页不得使编号跳到 1000"
+    # v1.16.0-tmp05（T04-02）：分配侧语义变更——symlink 页必须占页码，
+    # 否则扫描 open/scanimage 会重复分配被链接占用的页码、跟随链接覆盖外部文件。
+    # 读取侧过滤（不可见）与分配侧避让（不可覆盖）现在分离。
+    assert jobs.next_page_no(name) == 1000, "T04-02：symlink 幽灵页必须占页码防分配穿"
     # 0 字节转换中占位仍保留（防编号冲突是 raw_pages 存在意义）
     open(os.path.join(d, "p005.png"), "wb").close()
     assert "p005.png" in jobs.raw_pages(name), "0 字节占位仍计入编号防冲突"
