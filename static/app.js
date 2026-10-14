@@ -917,8 +917,9 @@ async function checkScanStatus() {
 /* ---------- v1.16.0-tmp06：打包下载进度（ZIP/PDF 按钮点击反馈） ----------
    多页大任务合成/打包耗时长（300dpi 彩色 PIL 逐页 + 流式压缩），此前点击后
    页面零反馈。现在按钮进入进度态「打包中 n/m」并轮询后端登记表，完成后恢复。
-   下载仍走 location.href 保持浏览器原生下载体验；409（转换中）/413/404 等
-   在登记前返回的场景，轮询会立即发现 active=false 并恢复按钮。 */
+   下载走隐藏 iframe 保持浏览器原生下载体验（页面不动）；409（转换中）等拒绝
+   场景后端同步写登记（active=False + msg，v1.16.1-tmp04 九轮 P1-4），
+   轮询 500ms 内发现即恢复按钮并提示原因。 */
 async function dlWithProgress(job, kind, url, btn) {
   const old = btn.textContent;
   const label = kind === "pdf" ? "合成中" : "打包中";
@@ -926,12 +927,13 @@ async function dlWithProgress(job, kind, url, btn) {
   btn.style.opacity = "0.6";
   btn.textContent = label + "…";
   let timer = null;
-  const stop = () => {
+  const stop = (hint) => {
     if (timer) clearInterval(timer);
     timer = null;
     btn.textContent = old;
     btn.style.pointerEvents = "";
     btn.style.opacity = "";
+    if (hint) setStatus(hint, true);       // tmp04：拒绝原因直接可见（不再按钮灰 5 分钟/页面跳 JSON）
   };
   timer = setInterval(async () => {
     let p;
@@ -941,8 +943,19 @@ async function dlWithProgress(job, kind, url, btn) {
     } catch (e) { return; /* 网络闪断继续轮询 */ }
     if (!p) return;                         // 该 kind 无登记（如服务重启）——等下次
     if (p.total > 0) btn.textContent = label + " " + p.done + "/" + p.total;
-    if (!p.active) stop();                  // 完成/中断/未开始登记
+    if (!p.active) stop(p.msg);             // 完成/中断/拒绝（tmp04：拒绝也登记 msg，立即恢复+提示）
   }, 500);
   setTimeout(() => { if (timer) stop(); }, 300000);   // 5 分钟兜底恢复
-  location.href = url;                                // attachment 原生下载，不离开页面
+  /* v1.16.1-tmp04（DeepSeek 九轮 P1-4）：location.href → 隐藏 iframe——
+     正常流（200+attachment）同为浏览器原生下载且页面不动；拒绝流（409 JSON）
+     渲染在不可见 iframe 内，页面不再被导航成 JSON 文本（旧行为：点按钮页面
+     直接跳走需手动后退）。 */
+  let f = document.getElementById("dl_frame");
+  if (!f) {
+    f = document.createElement("iframe");
+    f.id = "dl_frame";
+    f.style.display = "none";
+    document.body.appendChild(f);
+  }
+  f.src = url;
 }

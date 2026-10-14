@@ -146,12 +146,12 @@ def test_pack_progress_api_flow():
     c = app_mod.app.test_client()
     r = c.get("/api/jobs/" + name + "/pack-progress")
     assert r.get_json() == {}, "无打包记录时应返回空结构"
-    app_mod._pack_prog_update(name, "pdf", done=2, total=7, active=True)
+    app_mod._pack_prog_start(name, "pdf", done=2, total=7, active=True)   # v1.16.1-tmp01：登记拆 start，update 只改不建
     r = c.get("/api/jobs/" + name + "/pack-progress")
     p = r.get_json()
     assert p["pdf"]["done"] == 2 and p["pdf"]["total"] == 7 and p["pdf"]["active"] is True
     # ZIP 与 PDF 同时登记，互不覆盖（tmp07 修复的并发污染）
-    app_mod._pack_prog_update(name, "zip", done=1, total=7, active=True)
+    app_mod._pack_prog_start(name, "zip", done=1, total=7, active=True)
     r = c.get("/api/jobs/" + name + "/pack-progress")
     p = r.get_json()
     assert p["zip"]["done"] == 1 and p["pdf"]["done"] == 2, "ZIP/PDF 进度必须各自独立：%s" % p

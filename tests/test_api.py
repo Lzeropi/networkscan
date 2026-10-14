@@ -47,7 +47,10 @@ def test_index_ok():
 
 def test_admin_status_version():
     r = client.get("/api/admin/status")
-    assert r.get_json()["version"] == "1.16.0"
+    # v1.16.1-tmp06（DeepSeek 十一轮 P3-D）：动态读 config.VERSION——此前硬编码
+    # 版本号已两次漏改（tmp03→tmp04、跨版本残留），此处不再需要每次 bump 手动同步
+    assert r.get_json()["version"] == config.VERSION, \
+        "API 返回版本必须与 config.VERSION 一致"
 
 
 # ---------- 新1 锁定任务三层防护 ----------
@@ -106,7 +109,10 @@ def test_admin_page_has_jobs_manage_anchor():
 
 
 # ---------- #1 扫描中排序拦截（DELETE 语义 v1.15.2 已变：jlock 才是扫描段标志） ----------
-def test_scanning_job_delete_409():
+def test_delete_without_lock_ok():
+    """v1.15.2 起 DELETE 语义为「能拿 jlock 即删」——伪造 state=scanning 但 jlock
+    空闲时 DELETE 应直接成功（原名 test_scanning_job_delete_409 名不副实，误导
+    维护者以为"扫描中删除返回 409"，v1.16.1-tmp07 改名）。"""
     name = _mk_job()
     scanner.state[name] = {"state": "scanning", "msg": "扫描中"}
     # v1.15.2：DELETE 不再凭 state 拒绝——能拿 jlock 即扫描段已结束；

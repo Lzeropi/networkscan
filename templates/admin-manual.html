@@ -94,7 +94,7 @@ journalctl -u networkscan -n 50 --no-pager</code></pre>
   <pre><code>apt install -y sane-utils imagemagick      # scanimage + convert
 cd /opt/network_scan_service
 uv pip install --index-url https://pypi.tuna.tsinghua.edu.cn/simple \
-  flask waitress "pillow>=7.0,&lt;9" qrcode</code></pre>
+  flask waitress "pillow>=7.0,&lt;13" qrcode</code></pre>   <!-- v1.16.1-tmp03（DeepSeek 八轮 2.1）：tmp02 修了 README 6 处漏了此处，&lt;9 → &lt;13 与 pyproject 同步 -->
 
   <h3>10. 附录：服务管理（webscan 命令）</h3>
   <pre><code>webscan status              # 服务状态 + 版本 + HTTP 响应

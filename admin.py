@@ -410,9 +410,11 @@ def api_save_config():
             # v1.14.8（G）：改路径前查有无任务在扫——在扫任务的转换 worker 用新根拼旧任务
             # 路径，PNM 归档/缩略图会失败（error 兜底不丢数据，但任务白扫）；防呆优先。
             # 检查后新扫描仍可启动（TOCTOU 残窗），但窗口从「任意时刻」收窄到「保存瞬间」
-            # v1.16.0-tmp06（DeepSeek P1）：state.values() 快照遍历——扫描线程的
+            # v1.16.0-tmp06（DeepSeek P1）：state 快照遍历——扫描线程的
             # state.setdefault（新任务首扫）不在 guard 内，遍历中插键会 RuntimeError
-            if any(st.get("state") == "scanning" for st in list(scanner.state.values())):
+            # v1.16.1-tmp04（DeepSeek 九轮 P2-1）：list(values()) 仍是"迭代+追加"，
+            # 并发插键照样炸；dict() 是 CPython 原子整表浅拷贝，取到的才是稳定快照
+            if any(st.get("state") == "scanning" for st in dict(scanner.state).values()):
                 raise _Reject(jsonify(ok=False, msg="有任务正在扫描/转换，请等待完成后再修改存储路径"), 409)
             if not os.path.isabs(new_root):
                 raise _Reject(jsonify(ok=False, msg="请输入绝对路径（以 / 开头）"), 400)
@@ -522,18 +524,21 @@ def api_lock(job):
 def api_delete(job):
     if jobs.is_locked(job):
         return jsonify(ok=False, msg="任务已锁定，请先解锁再删除"), 403
-    with jobs.job_lock(job):   # v1.14.1（P1-3）：锁内检查+删除原子化
-        # v1.15.1-tmp04：不再检查 state==scanning——能拿到 jlock 即扫描段已结束；
-        # 转换中删除允许，convert_worker 落盘段 isdir 兜底。
-        scanner.state.pop(job, None)
-        try:
-            jobs._delete_locked(job)   # v1.14.3（P3-11）：本处已持锁，走无重入版本
-        except jobs.JobError as e:
-            # v1.16.0-tmp09（DeepSeek M2）：TOCTOU 窗口内被锁定 → 403 而非全局 404
-            return jsonify(ok=False, msg=str(e)[:150]), 403
-        except OSError as e:
-            return jsonify(ok=False, msg="删除失败：任务目录权限异常（%s）" % str(e)[:80]), 500
-    jobs.release_job_lock(job)   # v1.14.2（#11）：锁已空闲，回收条目防字典长期增长
+    try:
+        with jobs.job_lock(job):   # v1.14.1（P1-3）：锁内检查+删除原子化
+            # v1.15.1-tmp04：不再检查 state==scanning——能拿到 jlock 即扫描段已结束；
+            # 转换中删除允许，convert_worker 落盘段 isdir 兜底。
+            scanner.state.pop(job, None)
+            try:
+                jobs._delete_locked(job)   # v1.14.3（P3-11）：本处已持锁，走无重入版本
+            except jobs.JobError as e:
+                # v1.16.0-tmp09（DeepSeek M2）：TOCTOU 窗口内被锁定 → 403 而非全局 404
+                return jsonify(ok=False, msg=str(e)[:150]), 403
+            except OSError as e:
+                return jsonify(ok=False, msg="删除失败：任务目录权限异常（%s）" % str(e)[:80]), 500
+    finally:
+        # v1.16.1-tmp01（DeepSeek 六轮 2.3）：三路径统一兜底（与 app.py api_delete/jobs.delete 同模式）
+        jobs.release_job_lock(job)
     return jsonify(ok=True)
 
 

@@ -286,21 +286,26 @@ def api_delete(job):
         return jsonify(ok=False, msg="任务已锁定（管理员保护），不能删除"), 403
     # v1.15.1-tmp04：不再检查 state==scanning——能拿到 jlock 即扫描段已结束
     # （扫描段全程持 jlock）；转换中删除允许，convert_worker 落盘段 isdir 兜底。
-    with jobs.job_lock(job):   # v1.14.1（P1-3）：锁内检查+删除原子化，消除 TOCTOU
-        scanner.state.pop(job, None)
-        with _pack_lock:                   # tmp06：顺带清打包进度登记
-            _pack_progress.pop(job, None)
-        try:
-            jobs._delete_locked(job)   # v1.14.3（P3-11）：本处已持锁，走无重入版本
-        except jobs.JobError as e:
-            # v1.16.0-tmp09（DeepSeek M2）：外部 is_locked 检查与 jlock 获取之间
-            # 任务被管理员锁定时，_delete_locked 抛 JobError 落到全局 404——
-            # 语义错误（任务存在且被锁），应 403
-            return jsonify(ok=False, msg=str(e)[:150]), 403
-        except OSError as e:
-            # v1.16.0-tmp01：任务目录权限异常（如历史 root 属主）时给可行动提示，不白屏 500
-            return jsonify(ok=False, msg="删除失败：任务目录权限异常（%s），请管理员修复目录权限后重试" % str(e)[:80]), 500
-    jobs.release_job_lock(job)   # v1.14.2（#11）：锁已空闲，回收条目防字典长期增长
+    try:
+        with jobs.job_lock(job):   # v1.14.1（P1-3）：锁内检查+删除原子化，消除 TOCTOU
+            scanner.state.pop(job, None)
+            with _pack_lock:                   # tmp06：顺带清打包进度登记
+                _pack_progress.pop(job, None)
+            try:
+                jobs._delete_locked(job)   # v1.14.3（P3-11）：本处已持锁，走无重入版本
+            except jobs.JobError as e:
+                # v1.16.0-tmp09（DeepSeek M2）：外部 is_locked 检查与 jlock 获取之间
+                # 任务被管理员锁定时，_delete_locked 抛 JobError 落到全局 404——
+                # 语义错误（任务存在且被锁），应 403
+                return jsonify(ok=False, msg=str(e)[:150]), 403
+            except OSError as e:
+                # v1.16.0-tmp01：任务目录权限异常（如历史 root 属主）时给可行动提示，不白屏 500
+                return jsonify(ok=False, msg="删除失败：任务目录权限异常（%s），请管理员修复目录权限后重试" % str(e)[:80]), 500
+    finally:
+        # v1.16.1-tmp01（DeepSeek 六轮 2.3）：正常/403/500 三条路径统一兑底——
+        # 旧版只在正常路径调（403/500 提前 return 不经过），语义不一致；
+        # 与 jobs.delete 公共入口同模式（幂等，refs 自动回收后为 no-op 孤儿兑底）
+        jobs.release_job_lock(job)
     return jsonify(ok=True)
 
 
@@ -541,7 +546,12 @@ def thumb(job, fname):
     # 等转换完成直接 200，不再产生每秒一次的 404 轮询。上限 120s 防异常挂死。
     # v1.16.0-tmp01：页面可能 png/jpg/webp，pending 登记的是真实页面名——
     # 写死 "+.png" 会使 jpg/webp 任务 long-poll 失效（退化成每秒 404 轮询）。
-    deadline = time.time() + 120
+    # v1.16.1-tmp04（DeepSeek 九轮 P1-3）：上限 120→20s——waitress 8 线程下，
+    # ADF 多页任务浏览器并发加载 N 张缩略图会各挂 1 线程，120s 足以吊死整个
+    # 线程池（应用假死）；20s + 前端 1s 重试已兼容（pollThumbReady 非 200 即
+    # 1s 后重试），周期性释放让状态接口始终有机会插入。M1005 无 ADF 本无风险，
+    # 此为开源 ADF 设备用户的防御。
+    deadline = time.time() + 20
     while time.time() < deadline:
         if not any(p.rsplit(".", 1)[0] == stem for p in scanner.pending_pages(job)):
             break
@@ -563,21 +573,84 @@ def thumb(job, fname):
 _pack_progress = {}
 _pack_lock = threading.Lock()
 
+# v1.16.1-tmp06（DeepSeek 十一轮 P1-A）：409 拒绝型条目（done=0/total=0/active=False，
+# dl_zip/dl_pdf 转换中拒绝下载时写入）此前无任何回收路径——用户不重试也不删任务则永久
+# 驻留 _pack_progress，长期运行+频繁 409 下内存只增不减（唯一随时间恶化的缺陷）。
+# v1.16.1-tmp07（十二轮 P1-A/P1-B）扩展：
+# ① 完成型条目（total>0/active=False，正常下载完成后写入）此前也永久驻留——每用 N 个任务
+#    就驻留 N×2 条记录；现同样按 TTL 清理（保留期 > 前端 5 分钟兜底，前端早已 stop 轮询）；
+# ② 触发点从仅 _pack_prog_start 扩展到 api_pack_progress 读时清——不重试也不删任务时
+#    拒绝条目也能被下次任意轮询清掉。
+# v1.16.1 定版（十四轮 P2-C）：两档 TTL 相差 10 倍的分档理由——拒绝条目只需覆盖
+# "前端下一次轮询（≤500ms）读到 msg"，60s 是宽松保险；完成条目须覆盖"前端 5 分钟
+# 兜底窗口"全段（600s 有余量），否则前端轮询后半段读不到条目、按钮卡到兜底才恢复。
+_PACK_REJECT_TTL = 60    # 拒绝型条目存活秒数——前端 500ms 轮询在 TTL 内必能读到拒绝原因
+# v1.16.1-tmp08（十三轮 P1-A）：完成型 TTL 与前端兜底是隐式契约——本值必须
+# > static/app.js dlWithProgress 里 setTimeout(300000)=5 分钟硬兜底，否则前端
+# 轮询后半段读不到完成条目（p=undefined → if(!p) return），按钮卡"打包中"直到
+# 兜底才恢复。改前端兜底时必须同步审视本值（test_v16t11.py 有
+# test_frontend_fallback_lt_finished_ttl 静态断言守护）。
+_PACK_FINISHED_TTL = 600 # 完成型条目存活秒数（10 分钟）—— 前端 5 分钟兜底早已 stop，展示完成态远够
 
-def _pack_prog_update(job, kind, **kw):
+
+def _pack_prog_gc(now):
+    """清理过期非活跃条目（须在 _pack_lock 内调用）。
+    v1.16.1-tmp07：不再区分拒绝/完成——任何 active=False 且 ts 超对应 TTL 都清；
+    仅 active=True（进行中）条目永不清。"""
+    for job_key in list(_pack_progress.keys()):
+        kinds = _pack_progress[job_key]
+        for kind_key in list(kinds.keys()):
+            rec = kinds[kind_key]
+            if rec.get("active") is not False:
+                continue   # 进行中条目永不清
+            ttl = _PACK_REJECT_TTL if rec.get("total") == 0 else _PACK_FINISHED_TTL
+            if now - rec.get("ts", now) > ttl:
+                kinds.pop(kind_key, None)
+        if not kinds:
+            _pack_progress.pop(job_key, None)
+
+
+def _pack_prog_start(job, kind, **kw):
+    """登记/重建进度条目（下载开始时调用）。
+    v1.16.1-tmp06：写 ts 供惰性 GC 判定过期；登记前顺带 GC 过期条目。
+    v1.16.1-tmp07：now 取一次（原双重 time.time() 合并）。"""
+    now = time.time()
     with _pack_lock:
+        _pack_prog_gc(now)
         rec = _pack_progress.setdefault(job, {}).setdefault(
             kind, {"kind": kind, "done": 0, "total": 0, "active": True})
         rec.update(kw)
+        rec["ts"] = now
+
+
+def _pack_prog_update(job, kind, **kw):
+    """v1.16.1-tmp01（DeepSeek 六轮 2.2）：仅更新已存在条目，不重建——
+    gen finally 的 jlock.release() 与本调用之间存在时序窗口：api_delete 拿到
+    锁后 pop 掉 _pack_progress[job]，随后收尾 update(active=False) 走 setdefault
+    会重建已删任务的条目（毫秒级竞态残留）。改为条目不存在即忽略（任务已删，
+    进度条目本就不该再出现）。
+    v1.16.1-tmp06：update 同步刷新 ts——条目仍在被写入即仍活跃，防未来 GC
+    条件演化时误删。"""
+    with _pack_lock:
+        rec = _pack_progress.get(job, {}).get(kind)
+        if rec is None:
+            return
+        rec.update(kw)
+        rec["ts"] = time.time()
 
 
 @app.get("/api/jobs/<job>/pack-progress")
 def api_pack_progress(job):
     """打包进度查询（不持任务锁——只读内存登记，合成/打包进行中可并发响应）。
-    返回 {zip: {...}, pdf: {...}}，前端按 kind 精确取各自进度，互不干扰。"""
+    返回 {zip: {...}, pdf: {...}}，前端按 kind 精确取各自进度，互不干扰。
+    v1.16.1-tmp07（十二轮 P1-A）：读时清——任何进度轮询都顺带触发 GC，
+    即使不再发起新下载也能回收过期条目（前端 500ms 轮询即天然节流）。"""
     with _pack_lock:
+        _pack_prog_gc(time.time())
         src = _pack_progress.get(job) or {}
-        out = {k: dict(v) for k, v in src.items()}
+        # v1.16.1-tmp06：ts 为 GC 内部字段，不进前端 JSON
+        out = {k: {kk: vv for kk, vv in dict(v).items() if kk != "ts"}
+               for k, v in src.items()}
     return jsonify(out)
 
 
@@ -590,10 +663,19 @@ def dl_zip(job):
     # v1.16.0-tmp06（DeepSeek P0）：锁移交 gen 前的任何提前返回/异常（409/404/
     # pages 抛 JobError）都由 finally 兜底释放——旧代码手动 release 漏了
     # jobs.pages 的异常路径（任务目录被 Samba 外部删除时锁永久泄漏）。
+    # v1.16.1-tmp05（DeepSeek 十轮 P1-B）：cancel 提前到 try 前定义——Response(...)
+    # 构造抛异常时 gen 从未被消费、其 finally 不执行，worker 会永久卡在 W.write 的
+    # while True 死循环（daemon 线程泄漏）；必须在构造失败的兜底路径显式 cancel.set()
+    # 通知 worker 退出。提前定义还保证 409/404 提前返回时 finally 引用 cancel 不 NameError。
+    cancel = threading.Event()
     handed_to_gen = False
     try:
         # v1.15.1-tmp04：转换中页是 0 字节占位，混入 ZIP 会产生损坏文件
+        # v1.16.1-tmp04（DeepSeek 九轮 P1-4）：拒绝时同步写登记（active=False + msg）——
+        # 前端轮询下次（≤500ms）即见 active=False 恢复按钮并提示，不再页面灰 5 分钟
         if scanner.has_pending(job):
+            _pack_prog_start(job, "zip", done=0, total=0, active=False,
+                             msg="有页面正在转换，请稍后重试")
             return jsonify(ok=False, msg="有页面正在转换，请等待完成后再下载"), 409
         try:
             files = [(f, os.path.join(base, f)) for f in jobs.pages(job)]
@@ -601,10 +683,9 @@ def dl_zip(job):
             abort(404)
         if not files:
             abort(404)
-        _pack_prog_update(job, "zip", done=0, total=len(files), active=True)
+        _pack_prog_start(job, "zip", done=0, total=len(files), active=True)
         qu = q.Queue(maxsize=ZIP_QUEUE_MAXSIZE)   # v1.14.1（P1-8）：背压——慢客户端时压缩线程阻塞，防队列无限吃内存
         DONE = object()
-        cancel = threading.Event()   # v1.14.2（#7）：客户端断开时唤醒 worker 退出，防 daemon 线程永久阻塞
 
         def worker():
             class W:
@@ -639,13 +720,21 @@ def dl_zip(job):
             except Exception as e:
                 # v1.14.5（B3）：Samba 外部删除/替换文件会让 zipfile.write 抛错——不再静默吞，
                 # 记 stderr（journalctl 可见），消费者收到截断流后会重试。应用 job_lock 约束不了外部客户端
-                print("[zip] worker error: %s" % e, file=sys.stderr)
-            finally:
+                # v1.16.1-tmp07（十二轮 P1-C）：cancel 引发的 OSError("zip cancelled") 是设计内
+                # 取消（客户端断开），不是错误——cancel 已 set 时不打印，避免 journalctl 假错误噪音
                 if not cancel.is_set():
+                    print("[zip] worker error: %s" % e, file=sys.stderr)
+            finally:
+                # v1.16.1-tmp04（DeepSeek 九轮 P1-2）：DONE 必须送达或等到 cancel——
+                # 旧版 put(timeout=5) 超时 pass，慢客户端（队列持续满 5s+）时 DONE
+                # 丢失、gen 永久阻塞 qu.get()、jlock 永不释放（任务删不掉，致命偶发）。
+                # 正常路径重试直到送达；cancel（客户端断开，gen 已走）才放弃。
+                while not cancel.is_set():
                     try:
-                        qu.put(DONE, timeout=5)   # v1.14.2（#7）：消费者已走则不投递，防 put 永久阻塞
+                        qu.put(DONE, timeout=0.5)   # v1.14.2（#7）：消费者已走则不投递，防 put 永久阻塞
+                        break
                     except q.Full:
-                        pass
+                        continue
 
         threading.Thread(target=worker, daemon=True).start()
 
@@ -671,6 +760,7 @@ def dl_zip(job):
         return resp
     finally:
         if not handed_to_gen:
+            cancel.set()   # v1.16.1-tmp05（P1-B）：Response 构造失败也通知 worker 退出，防永久循环
             jlock.release()
             _pack_prog_update(job, "zip", active=False)
 
@@ -720,7 +810,10 @@ def dl_pdf(job):
     # 合成完即释放，网络传输不持锁（PDF 一次生成到内存，最适合此方案）
     with jobs.job_lock(job):
         # v1.15.1-tmp04：转换中页是 0 字节占位，混入 PDF 会产生空白页
+        # v1.16.1-tmp04（DeepSeek 九轮 P1-4）：拒绝时同步写登记，前端按钮立即恢复
         if scanner.has_pending(job):
+            _pack_prog_start(job, "pdf", done=0, total=0, active=False,
+                             msg="有页面正在转换，请稍后重试")
             return jsonify(ok=False, msg="有页面正在转换，请等待完成后再下载 PDF"), 409
         base = jobs.path(job)
         files = jobs.pages(job)
@@ -730,7 +823,7 @@ def dl_pdf(job):
             abort(413)
         # v1.16.0-tmp07：进度总量 = 页数（用户直觉），不再用估算+合成 2N 步
         # （7 页显示 14 步对用户无意义）；估算阶段是快速内存检查、不占步数
-        _pack_prog_update(job, "pdf", done=0, total=len(files), active=True)
+        _pack_prog_start(job, "pdf", done=0, total=len(files), active=True)
         try:
             # v1.14：按像素估算合成内存（Pillow 惰性读头不载位图），超限拒绝防 ARM 盒子 OOM（#5）
             # v1.16.0-tmp01：webp 页经 ImageMagick 转临时 PNG 再估（盒子 Pillow 无 libwebp 解码）

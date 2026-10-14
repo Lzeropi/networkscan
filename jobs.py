@@ -80,8 +80,13 @@ class _JobLock:
         return self._entry["lock"].acquire(blocking, timeout)
 
     def release(self):
-        # v1.16.0-tmp09（DeepSeek M4）：底层锁释放失败（未持有/双重释放）也保证
-        # refs 递减——旧版整段跳过会让 refs 永不归零，_job_locks 字典永久膨胀
+        # v1.16.0-tmp09（DeepSeek M4）：底层锁释放失败（未持有/双释放）也保证
+        # refs 递减——旧版整段跳过会让 refs 永不归零，_job_locks 字典永久膨胀。
+        # v1.16.1-tmp04（DeepSeek 九轮 P1-1）修正权衡：双 release 时 M4 语义会把
+        # 仍被其他 waiter 引用的条目 refs 多减一次、提前回收（v1.14.5 waiter
+        # race 的变体）。改为 released_ok=False 时不递减——误释放是调用方 bug
+        # （本类 1:1 配对契约见类 docstring），上抛 RuntimeError 已是信号；
+        # 正常路径 refs 照减，M4 的防膨胀目标不受影响。
         released_ok = True
         try:
             self._entry["lock"].release()
@@ -89,7 +94,7 @@ class _JobLock:
             released_ok = False
         with _job_locks_guard:
             e = _job_locks.get(self._job)
-            if e is self._entry:
+            if e is self._entry and released_ok:
                 e["refs"] -= 1
                 if e["refs"] <= 0:
                     _job_locks.pop(self._job, None)

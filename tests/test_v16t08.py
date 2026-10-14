@@ -33,8 +33,8 @@ def _ppm(path):
 
 def test_jobs_delete_clears_pack_progress():
     name = _mk_job()
-    app_mod._pack_prog_update(name, "zip", done=1, total=1, active=False)
-    app_mod._pack_prog_update(name, "pdf", done=7, total=7, active=False)
+    app_mod._pack_prog_start(name, "zip", done=1, total=1, active=False)   # v1.16.1-tmp01：登记拆 start
+    app_mod._pack_prog_start(name, "pdf", done=7, total=7, active=False)
     assert name in app_mod._pack_progress, "前置：登记应存在"
     jobs.delete(name)                       # 非 api_delete 路径（验证 5 复现残留处）
     assert name not in app_mod._pack_progress, \
@@ -43,7 +43,7 @@ def test_jobs_delete_clears_pack_progress():
 
 def test_cleanup_path_clears_pack_progress():
     name = _mk_job()
-    app_mod._pack_prog_update(name, "zip", done=0, total=1, active=True)
+    app_mod._pack_prog_start(name, "zip", done=0, total=1, active=True)
     # 造超龄任务触发 cleanup 的超龄删除路径（max_jobs=0 语义是"不限制"，须用 max_age）
     meta = jobs.load(name)
     import time as _t

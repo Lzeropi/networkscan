@@ -405,10 +405,30 @@ def _open_no_follow(src):
     PIL 主分支 Image.open(src) 会跟随 symlink（实测：外部图片被读穿进转换链）。
     fd 交给 PIL 使用（可 seek）；链接源抛 OSError(ELOOP)，走 PNM 保留路径。
     v1.16.0-tmp09（DeepSeek M3）：fdopen 失败（如 EMFILE 内存压力）时关闭
-    fd 再上抛——不留 fd 泄漏。"""
+    fd 再上抛——不留 fd 泄漏。
+    v1.16.1-tmp02（DeepSeek 七轮 2.3）：fdopen 失败关 fd 的防护与 _fdopen_w
+    语义完全重复——直接复用，消除双份实现漂移风险。"""
     fd = os.open(src, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+    return _fdopen_w(fd, "rb")
+
+
+def _mkstemp_w(path=None, prefix="", suffix=""):
+    """v1.16.1-tmp01（DeepSeek 五轮 2.1/六轮同项）：mkstemp→fdopen 调用约定封装。
+    历史背景：此前 _convert_pnm/_mk_thumb 的安全副本两处直接 os.fdopen(_sfd)，
+    fdopen 抛异常（EMFILE 等）时 _sfd 永久泄漏。现调用方统一走本函数创建 +
+    _fdopen_w 包装（失败关 fd 的防护在 _fdopen_w，不在本函数——
+    v1.16.1-tmp03（DeepSeek 八轮 2.3）修正 docstring 此前误写"fd 由本函数关闭"）。
+    v1.16.1-tmp02（DeepSeek 七轮 2.4）：删 set_inheritable 装饰代码——
+    tempfile.mkstemp 自 Python 3.4 起默认 O_CLOEXEC，原调用幂等无功能作用。"""
+    if path is None:
+        return tempfile.mkstemp(prefix=prefix, suffix=suffix)
+    return tempfile.mkstemp(dir=path, prefix=prefix, suffix=suffix)
+
+
+def _fdopen_w(fd, *a, **kw):
+    """v1.16.1-tmp01：fdopen 失败关 fd 再抛（fd 泄漏对称性）。"""
     try:
-        return os.fdopen(fd, "rb")
+        return os.fdopen(fd, *a, **kw)
     except Exception:
         try:
             os.close(fd)
@@ -446,10 +466,10 @@ def _convert_pnm(src, dst, fmt="png"):
         # v1.16.0-tmp09（DeepSeek M1）：外层 try/except 兜底——源为 symlink 时
         # _open_no_follow 在复制段抛 ELOOP，旧结构 _rm(safe_src) 的 finally
         # 未覆盖该路径，每次泄漏一个空 .pnm 到 /tmp；现在任何异常都先清副本再上抛。
-        _sfd, safe_src = tempfile.mkstemp(
+        _sfd, safe_src = _mkstemp_w(
             prefix="scanweb_cvsrc_%s_" % os.path.basename(src), suffix=".pnm")
         try:
-            with os.fdopen(_sfd, "wb") as _dst, _open_no_follow(src) as _src:
+            with _fdopen_w(_sfd, "wb") as _dst, _open_no_follow(src) as _src:
                 shutil.copyfileobj(_src, _dst)
             try:
                 if fmt == "webp":
@@ -529,10 +549,10 @@ def _mk_thumb(job, fname, root=None):
         # v1.16.0-tmp04（P3-10）：cwd 固定 /tmp——测试假脚本把 -resize 当输出名时不再落仓库根
         # v1.16.0-tmp09（DeepSeek L2）：回退分支先复制到受控副本——CONVERT 不接触
         # 任务目录原路径（symlink 防线与 _convert_pnm/_webp_safe_png 一致）
-        _tfd, safe_thumb_src = tempfile.mkstemp(
+        _tfd, safe_thumb_src = _mkstemp_w(
             prefix="scanweb_thumbsrc_", suffix=".img")
         try:
-            with os.fdopen(_tfd, "wb") as _dst, _open_no_follow(src) as _src:
+            with _fdopen_w(_tfd, "wb") as _dst, _open_no_follow(src) as _src:
                 shutil.copyfileobj(_src, _dst)
             try:
                 subprocess.run([CONVERT, safe_thumb_src, "-resize", "%dx%d>" % THUMB_SIZE,

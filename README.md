@@ -3,10 +3,10 @@ AIGC:
   ContentProducer: '001191110102MAD55U9H0F10002'
   ContentPropagator: '001191110102MAD55U9H0F10002'
   Label: '1'
-  ProduceID: '7963a747-503b-4892-8d4e-47d2804229cf'
-  PropagateID: '7963a747-503b-4892-8d4e-47d2804229cf'
-  ReservedCode1: 'd7d7e36b-ad77-4c1a-9574-65d0d720aeeb'
-  ReservedCode2: 'd7d7e36b-ad77-4c1a-9574-65d0d720aeeb'
+  ProduceID: 'd61f6742-7126-47d2-8c78-df2349f11096'
+  PropagateID: 'd61f6742-7126-47d2-8c78-df2349f11096'
+  ReservedCode1: 'aefc8d6f-7ec8-4a9a-9c9c-b53f23ead448'
+  ReservedCode2: 'aefc8d6f-7ec8-4a9a-9c9c-b53f23ead448'
 ---
 
 # ScanWeb — 局域网网页扫描系统
@@ -15,7 +15,7 @@ AIGC:
 
 | 项目信息 | 说明 |
 |---|---|
-| 当前版本 | v1.16.0 |
+| 当前版本 | v1.16.1 |
 | 适配硬件 | hi3798mv100 机顶盒（ARM32/armhf）或其他 Linux 小主机 |
 | 适配系统 | Ubuntu 20.04 (focal) / Python 3.8+ |
 | 主要设备 | HP LaserJet M1005（其他 SANE 兼容扫描仪亦可） |
@@ -23,6 +23,24 @@ AIGC:
 | 前端形态 | 单页原生 HTML/CSS/JS，零外部依赖、零数据库、无 CDN 引用 |
 | 默认端口 | 9203 |
 
+> v1.16.1 更新：**正式发布版（ChatGPT + DeepSeek 共十四轮审查收敛定稿，223 项回归 + 203 真机冒烟通过）**。本版自 v1.16.0 后历经 tmp01~tmp08 八个迭代，重点修复：① **打包进度登记内存回收根治**——409 拒绝型/正常完成型条目此前永久驻留 `_pack_progress`（唯一随时间恶化的缺陷，长期运行内存只增不减）；现按 TTL 惰性 GC（拒绝 60s/完成 600s，`api_pack_progress` 读时清 + `_pack_prog_start` 登记时清，仅进行中条目永不清），ts 内部字段不进前端 JSON；② **dl_zip 下载链路健壮性**——DONE 投递 while 重试（慢客户端不丢 DONE→gen 永久阻塞→任务删不掉的致命偶发）、Response 构造失败时 worker 线程泄漏根治（cancel 提前定义 + finally 显式 set）、取消静默（客户端断开是设计内取消不再污染 journalctl）、409 拒绝同步写进度登记（前端 500ms 内恢复按钮并提示原因，页面不再被导航成 JSON 文本）；③ **并发防御**——thumb 长轮询 120s→20s 封顶（8 线程池下 ADF 多页并发不再吊死）、admin state 遍历 dict() 原子快照、`_JobLock` 误释放不递减 refs；④ **测试体系强化**——修复空测试（P1-3 防回归此前从未真正生效）、契约固化（前后端 TTL 隐式关系静态断言、守卫正则精确断言、ts 常量基准）、ast 函数定位替代字符串 split、测试改名与 TTL 边界严格化；⑤ **文档与依赖一致性**——pillow 上限三处统一 `≥7.0,<13`、fd 泄漏对称性、架构图重复边与 SVG 转义、README 措辞中性化。新增 tests/test_v16t10/t11.py 共 24 项防回归。P2-B~E（探测失败 fallback/scan_defaults 静默回退/PNM 分隔符/dlWithProgress 并发 timer）、P3-A（GC 节流/摘孤儿）等记入 v1.16.2 backlog。
+> 
+> v1.16.1-tmp08 更新：**第十三轮审查（DeepSeek）契约固化版（5 项小修，报告结论"tmp07 已达发布标准"）**：① 前后端隐式契约固化——`_PACK_FINISHED_TTL=600s` 与前端 dlWithProgress `setTimeout(300000)=5 分钟兜底` 的"后端 TTL 必须 > 前端兜底"关系此前无注释无测试，单向修改即破坏；现加注释说明 + 新增 test_frontend_fallback_lt_finished_ttl 静态关系断言（改前端兜底或后端 TTL 时测试自动拦截）；② test_zip_cancel_no_error_log 弱断言根治——旧版 guard<errlog 只保证位置先后，守卫被挪到无关位置仍误通过；改正则精确断言"守卫必须直接包住 print"；③ 测试 ts 硬编码常量化——-700/-999 改以 `_PACK_FINISHED_TTL-100`/`_PACK_REJECT_TTL-30` 为基准，改 TTL 时测试自动跟随；④ README 措辞中性化（见 tmp07 条目末句，不再使用"误报"表述）；⑤ P1-B GC 节流与 P3 风格项按报告自评"无法测量/无功能影响"不修（YAGNI）。新增 1 项测试，测试总数 223。
+> 
+> v1.16.1-tmp07 更新：**第十二轮审查（DeepSeek）GC 收敛修复版（核心 3 项 + 测试健壮化）**：① GC 触发点扩展——`api_pack_progress` 读时也清（此前仅 `_pack_prog_start` 登记时触发，用户不重试不删任务时过期条目仍驻留），前端 500ms 轮询天然节流；② 完成型条目（total>0/active=False）同样按 TTL 清理（`_PACK_FINISHED_TTL=600s` > 前端 5 分钟兜底）——此前正常下载完成记录永久驻留，每用 N 个任务残留 N×2 条；仅 active=True 进行中条目永不清；③ worker 取消静默——客户端断开引发的 `OSError("zip cancelled")` 是设计内取消，`except` 打印加 `if not cancel.is_set()` 守卫，journalctl 不再混入假错误（真异常如 Samba 外部删文件仍打印）；④ 测试健壮化：thumb 长轮询测试改 ast 按函数名定位（不再依赖字面签名与函数定义顺序）、`test_scanning_job_delete_409` 更名 `test_delete_without_lock_ok`（名不副实误导维护者）、TTL 边界严格化（ts 拨至 TTL 差半）、线程差集加 Thread-N 名字过滤、完成型 GC/读时清/取消静默各补防回归。新增 tests/test_v16t11.py 8 项，测试总数 222。关于十二轮报告 P0-1（"README 声称附带修 P2-D/P2-F/P3-A/P3-B"）：该表述差异源自审查快照与本地 README 不同步；无论何种版本，以代码为准——P2-F（ast 定位）与 P3-B（测试改名）已在 tmp07 实际落地，P2-D 分隔符（触发条件苛刻且涉生成/解析/兼容三处，风险大于收益）与 P3-A 误释放摘孤儿（并发风险，宁缺勿滥）经评估记 v1.16.2 backlog。
+> 
+> v1.16.1-tmp06 更新：**第十一轮审查（DeepSeek）核心 4 项修复版**：① P1-A（上轮 P2-A 升级）409 拒绝型进度条目内存不回收根治——唯一随时间恶化的缺陷：用户不重试也不删任务时 `active=False/total=0` 条目永久驻留 `_pack_progress`，长期运行+频繁 409 内存只增不减；进度条目加 ts 字段 + 惰性 GC（`_PACK_REJECT_TTL=60s`，`_pack_prog_start` 登记时顺带清理，活跃/完成条目永不清），前端 500ms 轮询窗口内必能读到拒绝原因；内部 ts 字段不进 /pack-progress 响应 JSON；② P1-B 修复路径补 worker 泄漏防回归测试——旧测试只断言 jlock 释放，把 tmp05 的 cancel.set() 删掉也拦不住；新测试用线程数差集断言 worker 必须退出；③ P2-A README 措辞更正（见 tmp05 条目末句）；④ P3-D test_admin_status_version 断言改动态读 config.VERSION——硬编码已两次漏改，根治同类复发。新增 tests/test_v16t11.py 5 项，测试总数 219。P2-B~E、P2-F、P3-A~C 记入 v1.16.2 backlog。
+> 
+> v1.16.1-tmp05 更新：**第十轮审查（DeepSeek）2 项修复版**：① P1-A 修复空测试 test_thumb_longpoll_timeout_capped——旧写法查找 `def job_thumb` 恒 False → 断言短路恒 True，P1-3 的 120s→20s 从未被真正防回归验证；改定位 `def thumb(job, fname)` 函数体断言。② P1-B dl_zip Response 构造失败（OOM/header 异常）时 worker 永久泄漏根治——gen 从未被消费、cancel 不 set，worker 卡 `W.write` 死循环；`cancel = threading.Event()` 提前到 try 前定义 + 兑底 finally 显式 `cancel.set()`。另更正：上轮 P0-1（test_api.py 版本硬编码 tmp03）——经核对该不一致在审查者收到的代码快照中确实存在（快照不同步，非审查误报），感谢审查指出；tmp06 起该断言已改为动态读 config.VERSION（见下条），杜绝同类漏改复发。测试总数仍 214。
+> 
+> v1.16.1-tmp04 更新：**第九轮审查（DeepSeek）P1 全修 + P2-1（5 项，报告结论“按 P1 修完即发布 v1.16.1”）**：① P1-2 dl_zip DONE 投递改 while 重试——慢客户端+队列满时旧版单次 5s 超时后 DONE 丢失，gen 永久阻塞 qu.get()、jlock 永不释放（任务删不掉的致命偶发，报告“若只修一处修此”）；② P1-4 409 拒绝同步写进度登记（active=False+msg）+ 前端下载改隐藏 iframe 触发——旧行为点按钮页面被导航成 JSON 文本/按钮灰 5 分钟，现在 500ms 内恢复按钮并提示原因；③ P2-1 admin 保存配置遍历 scanner.state 改 dict() 原子快照（list(values()) 迭代中插键仍会 RuntimeError）；④ P1-1 _JobLock.release 误释放（空闲锁 RuntimeError）时不再递减 refs——防双释放把 waiter 引用中的条目提前回收（M4 防膨胀目标不受影响）；⑤ P1-3 thumb 长轮询上限 120s→20s——8 线程池下 ADF 多页并发缩略图不再吊死应用（M1005 无 ADF 本无风险，为开源 ADF 设备用户防御）。新增 7 项防回归测试，测试总数 214。P2-2~P2-8 与 P3 记入 v1.16.2 backlog。
+> 
+> v1.16.1-tmp03 更新：**第八轮审查（DeepSeek）修复版（3 项：1 项文档一致 + 1 项治本断言 + 1 项注释修正）**：① admin-manual.html 第 9 章 pillow 约束 &lt;9 → &lt;13——tmp02 修了 README 6 处又漏了模板这一处（同类错误第二次发生）；② test_pyproject_pillow_range 改**遍历式断言**——扫描 README + templates/*.html 全部含 pillow 的文档（裸文本与 HTML 转义两种形态都拦），不再人工列举文件名；已反向验证（临时改回 &lt;9 → 测试 FAIL），第三个地方漏改会被测试直接拦住；③ 修正 _mkstemp_w docstring（"fd 由本函数关闭"误写——关 fd 防护实际在 _fdopen_w）；另依赖表格 Pillow 行旧写法（无上限）改为 ≥ 7.0, < 13 封上限。
+> 
+> v1.16.1-tmp02 更新：**第七轮审查（DeepSeek）修复版（3 项：1 项文档一致 + 2 项 P4 消重）**：① README pillow 约束同步——tmp01 只改了 pyproject（<9→<13）漏了 README 6 处安装/排障命令（用户按 README 装会得到 Pillow 8.x，与 pyproject 声明脱钩）；test_pyproject_pillow_range 加双向断言（README 必含 <13、不得残留 <9）堵住"文档与 pyproject 无一致性测试"的盲点；② _open_no_follow 复用 _fdopen_w——fdopen 失败关 fd 的防护原本两份相同实现，消除漂移风险；③ 删 _mkstemp_w 的 set_inheritable 装饰代码（mkstemp 自 Python 3.4 默认 O_CLOEXEC，幂等无功能作用）。
+> 
+> v1.16.1-tmp01 更新：**第六轮审查（DeepSeek）× 遗留问题联合修复版（6 项，不动锁结构不动并发主逻辑）**：① fd 泄漏对称性——_convert_pnm/_mk_thumb 安全副本的 mkstemp→fdopen 异常路径 fd 泄漏（EMFILE 边界），新增 _fdopen_w/_mkstemp_w 封装与 _open_no_follow 的 M3 防护同构；② 打包进度竞态——ZIP gen finally 在 jlock.release 后的收尾 update 会重建已删任务条目（毫秒级窗口），_pack_prog_update 改为仅更新不重建（登记拆分 _pack_prog_start）；③ api_delete 锁兑底语义统一（app/admin 两处）——正常/403/500 三路径均过 try/finally（与 jobs.delete 公共入口同模式）；④ 架构图重复边合并（flask→scanimage 两条重合曲线叠压）；⑤ SVG 导出 xesc 转义（防未来 detail 含 & < > 致 PNG 导出空白）；⑥ pyproject pillow 上限 9 与实测部署 12.3.0 错配，改为 <13。
+> 
 > v1.16.0 更新：**正式发布版（ChatGPT + DeepSeek 共五轮审查定稿，196 项回归 + 真机 300dpi 彩色实测通过）**。新功能：① 输出格式可选 png/jpg/webp + 任务页参数修改 API（PUT /api/jobs/<job>/params，单参数即时保存、设备能力白名单校验，扫描中可改对下次扫描生效）；② 转换队列化——常驻 worker FIFO 串行 + 有界水位（MAX_PENDING_PNM=4，超限拒扫防无限堆积），重启恢复归档；③ ADF 批量入队——扫描段结束即释放双锁（转换期 reorder 不被阻塞）、done 判定看 pending 收敛、换设备 source 兼容校验；④ ZIP 打包 / PDF 合成实时进度——按钮显示「打包中 n/m」，进度按 {job:{zip,pdf}} 隔离，并发互不覆盖。修复：⑤ ChatGPT 第四轮审查 8 项（tmp05）；⑥ ADF 批次 >4 页撞 PNM 水位的永久死锁根治（DeepSeek 实测复现：先入队后释锁 → 落盘需被自持的 jlock → 死锁；改释锁后再入队，反向验证防回归）；⑦ 进度登记按 kind 隔离（原单条扁平记录被 ZIP/PDF 并发覆盖致按钮卡死，用户实测报障）；⑧ jobs 删除统一清进度残留 + O_NOFOLLOW 防 PIL symlink 读穿；⑨ 按 109 项代码级审查修 11 项（api_testscan busy 检查、dl_zip Response 构造顺序、jobs.save 线程 ID、api_delete TOCTOU 403、fd 泄漏防护、_JobLock refs 保护等）。新增 tests/test_v16t01~t09.py 72 项，测试总数 196。
 > 
 > v1.15.2 更新：**性能优化定稿版（锁分段 + PIL 转换 + 设备缓存保活 + thumb long-poll）**。核心优化：① scan_flatbed 锁分段——scanimage 扫描段持双锁（~19s），PIL 转换在后台无锁线程进行（14.5s 计算不占任何锁），落盘段毫秒级短锁（os.replace+thumb+meta <1s），连续扫描间隔从 34s 降至 20s（接近 M1005 硬件极限 19.2s）；② _pending 登记表——转换中页在 jlock 内可查，reorder/PDF/ZIP/raw 落盘前 409 协调，杜绝 0 字节占位混入产物；③ thumb long-poll——转换中页缩略图请求挂起等待（上限 120s），消除每秒一次 404 轮询（请求 ~15→2-3）；④ _dev_cache TTL 60s→300s + 后台保活线程每 240s 刷新，消除 scanimage -L 设备发现的 12s 冷启动；⑤ DELETE 语义变更——能拿到 jlock 即扫描段已结束，转换中删除由 worker isdir 兜底；⑥ cleanup_empty_pages() 启动清理崩溃残留 0 字节占位页；⑦ PIL 替换 ImageMagick（ARM32 0.6s vs 11s，快 18×）。实测 300dpi 彩色连续扫描 19.4~20.1s/页。新增 tests/test_tmp04.py 7 项竞态测试，测试总数 124。
@@ -113,7 +131,7 @@ hpljm1005 后端不支持 `--format=png`，扫描输出为 PNM 格式，由 Pill
 | Python | ≥ 3.8（系统自带 3.8 即可） | Web 服务 |
 | SANE | `scanimage` | 驱动扫描仪 |
 | ImageMagick | `convert` | PNM → PNG 转换（回退，Pillow 优先） |
-| Pillow | 7.x~（ARM32 无预编译包需源码编译） | PNM→PNG 转换（优先）、缩略图生成、PDF 合成 |
+| Pillow | ≥ 7.0, < 13（ARM32 无预编译包需源码编译） | PNM→PNG 转换（优先）、缩略图生成、PDF 合成 |
 
 
 ### 部署目录约定
@@ -142,15 +160,15 @@ df -h /
 
 ```bash
 # 本机执行（传压缩包到盒子，版本号以实际发布为准）
-scp scanweb-v1.16.0.tar.gz root@192.168.1.203:/opt/network_scan_service/
+scp scanweb-v1.16.1.tar.gz root@192.168.1.203:/opt/network_scan_service/
 ```
 
 手动安装（首次）：
 
 ```bash
 cd /opt/network_scan_service
-tar xzf scanweb-v1.16.0.tar.gz --strip-components=1
-rm -f scanweb-v1.16.0.tar.gz .python-version
+tar xzf scanweb-v1.16.1.tar.gz --strip-components=1
+rm -f scanweb-v1.16.1.tar.gz .python-version
 ```
 
 ### 第三步：安装编译依赖并安装 Python 包
@@ -165,7 +183,7 @@ apt install -y libjpeg-turbo8-dev
 apt install -y python3.8-venv
 # 3. 创建 venv 并安装依赖
 uv venv .venv
-uv pip install --index-url https://pypi.tuna.tsinghua.edu.cn/simple flask waitress "pillow>=7.0,<9"
+uv pip install --index-url https://pypi.tuna.tsinghua.edu.cn/simple flask waitress "pillow>=7.0,<13"
 # 可选：安装 qrcode 启用任务页「扫码取件」功能（纯 Python 无编译，约 100KB）
 uv pip install --index-url https://pypi.tuna.tsinghua.edu.cn/simple qrcode
 # 4. 清理缓存
@@ -181,14 +199,14 @@ apt remove -y libjpeg-turbo8-dev && apt autoremove -y
 
 #### 问题 1：uv pip install 卡住不动（PyPI IPv6 连接超时）
 
-**现象**：`uv pip install flask waitress "pillow>=7.0,<9"` 运行 12 分钟以上，只下载了 markupsafe 一个包，缓存不增长，CPU 几乎空闲。`ps` 显示 uv 进程在跑但没有进展。`ss -tnp` 显示 uv 连接的是 PyPI 的 IPv6 地址。
+**现象**：`uv pip install flask waitress "pillow>=7.0,<13"` 运行 12 分钟以上，只下载了 markupsafe 一个包，缓存不增长，CPU 几乎空闲。`ps` 显示 uv 进程在跑但没有进展。`ss -tnp` 显示 uv 连接的是 PyPI 的 IPv6 地址。
 
 **原因**：uv 默认从 PyPI 官方源（pypi.org）下载，走 IPv6。盒子网络环境对 IPv6 长连接不稳定，导致下载卡死。
 
 **解决**：加 `--index-url` 指定国内镜像源，强制走 IPv4：
 
 ```bash
-uv pip install --index-url https://pypi.tuna.tsinghua.edu.cn/simple flask waitress "pillow>=7.0,<9"
+uv pip install --index-url https://pypi.tuna.tsinghua.edu.cn/simple flask waitress "pillow>=7.0,<13"
 ```
 
 > 清华镜像对 ARM32 设备速度快几十倍，Pillow 源码编译约 3-4 分钟即可完成。
@@ -205,11 +223,11 @@ uv pip install --index-url https://pypi.tuna.tsinghua.edu.cn/simple flask waitre
 # 方案 A：用系统 venv（需要先装 python3.8-venv，见下一条）
 rm -rf .venv
 python3 -m venv .venv
-.venv/bin/pip install --no-cache-dir flask waitress "pillow>=7.0,<9"
+.venv/bin/pip install --no-cache-dir flask waitress "pillow>=7.0,<13"
 
 # 方案 B：继续用 uv（推荐，更快）
 uv venv .venv
-uv pip install --index-url https://pypi.tuna.tsinghua.edu.cn/simple flask waitress "pillow>=7.0,<9"
+uv pip install --index-url https://pypi.tuna.tsinghua.edu.cn/simple flask waitress "pillow>=7.0,<13"
 ```
 
 #### 问题 3：python3 -m venv 报 ensurepip 不可用
@@ -234,7 +252,7 @@ python3 -m venv .venv
 
 #### 问题 4：Pillow 源码编译耗时较长
 
-**现象**：Pillow 在 ARM32 上没有预编译 wheel，`uv pip install "pillow>=7.0,<9"` 会下载源码并本地编译，耗时 3-5 分钟，期间 CPU 满载。
+**现象**：Pillow 在 ARM32 上没有预编译 wheel，`uv pip install "pillow>=7.0,<13"` 会下载源码并本地编译，耗时 3-5 分钟，期间 CPU 满载。
 
 **原因**：ARM32 架构 PyPI 不提供 Pillow 的二进制 wheel，必须从 C 源码编译，J4125 级别的 CPU 需要几分钟。
 
@@ -294,7 +312,7 @@ curl -s http://127.0.0.1:9203/ | head -5
 
 ## 测试（v1.14 起）
 
-`tests/` 目录含 196 项 pytest 回归（v1.16.0 实测全绿，无需真实扫描仪），覆盖：任务 ID 唯一性、占位页过滤与编号、锁定删除保护、清理排除扫描中/转换中任务、设备缓存分键、scan_root 黑名单、PIN PBKDF2 与旧格式迁移、ADF source 白名单、版本一致性、锁定三层防护 API、管理页跳转锚点、SameSite cookie、扫描中删除/排序 409、锁分段竞态、转换队列化、ADF 批量入队、tmp03/tmp04 审查修复回归，以及 T04 审查修复 + tmp07 DeepSeek 审查修复（ADF 超水位死锁/dl_zip 锁泄漏/state 重建/ImageMagick 安全副本）+ ZIP/PDF 打包进度提示（按 kind 隔离，并发互不覆盖）等。
+`tests/` 目录含 223 项 pytest 回归（v1.16.1，无需真实扫描仪），覆盖：任务 ID 唯一性、占位页过滤与编号、锁定删除保护、清理排除扫描中/转换中任务、设备缓存分键、scan_root 黑名单、PIN PBKDF2 与旧格式迁移、ADF source 白名单、版本一致性、锁定三层防护 API、管理页跳转锚点、SameSite cookie、扫描中删除/排序 409、锁分段竞态、转换队列化、ADF 批量入队、tmp03/tmp04 审查修复回归，以及 T04 审查修复 + tmp07 DeepSeek 审查修复（ADF 超水位死锁/dl_zip 锁泄漏/state 重建/ImageMagick 安全副本）+ ZIP/PDF 打包进度提示（按 kind 隔离，并发互不覆盖）+ v1.16.1-tmp01 六轮审查联合修复（fd 泄漏对称性/进度竞态/锁回收统一/架构图重复边+转义/pillow 约束）+ tmp04 九轮 P1 修复（DONE 投递重试/409 拒绝登记+iframe 下载/state 原子快照/refs 条件递减/thumb 长轮询封顶）+ tmp05 十轮修复（空测试根治/Response 构造失败 worker 泄漏）+ tmp06 十一轮修复（拒绝条目惰性 GC/worker 泄漏防回归/ts 不进 JSON）+ tmp07 十二轮修复（GC 读时清/完成型 TTL 清理/取消静默/ast 定位/测试改名与边界强化）+ tmp08 十三轮修复（前后端兜底契约静态断言/守卫正则精确断言/ts 常量基准）等。
 
 ```bash
 # 在项目根目录（部署机或开发机均可）
@@ -410,7 +428,7 @@ webscan version             # 查看当前版本
 
 ```bash
 # 1. 本机上传新版本包（版本号以实际发布为准）
-scp scanweb-v1.16.0.tar.gz root@192.168.1.203:/opt/network_scan_service/
+scp scanweb-v1.16.1.tar.gz root@192.168.1.203:/opt/network_scan_service/
 
 # 2. SSH 登录盒子
 ssh root@192.168.1.203
@@ -429,7 +447,7 @@ webscan update
 - **次版本递增**（v1.14 → v1.15）：bug 修复、小功能改进、配置调整；补丁号（v1.14.1 → v1.14.2）用于审计/回归修复版；tmp 后缀（v1.15.1-tmp04）为开发测试版
 - **主版本递增**（v1.x → v2.0）：架构性改动、不兼容升级（需重新安装依赖或迁移数据）
 - **版本号写入位置**：`config.py` 的 `VERSION` 变量、`pyproject.toml`、README 版本表、git tag
-- **发布包命名**：`scanweb-v1.16.0.tar.gz`（`webscan update` 按此模式自动检测）
+- **发布包命名**：`scanweb-v1.16.1.tar.gz`（`webscan update` 按此模式自动检测）
 
 ### 更新包内容约定
 
