@@ -205,3 +205,109 @@ def test_frontend_fallback_lt_finished_ttl():
     assert front_fallback_ms / 1000 < app_mod._PACK_FINISHED_TTL, \
         "前端兜底 %d ms 必须 < 后端完成 TTL %d s（隐式契约）" % (
             front_fallback_ms, app_mod._PACK_FINISHED_TTL)
+
+
+# ==================== v1.16.2-tmp01：scan_defaults 400 语义（十四轮 backlog P2-B/P2-C） ====================
+
+def _login_admin(c):
+    r0 = c.post("/api/admin/login", json={"pin": "1234", "confirm": "1234"})
+    csrf = r0.get_json().get("csrf", "")
+    assert csrf, "登录响应必须携带 csrf token"
+    return csrf
+
+
+def test_scan_defaults_unsupported_value_rejected_400(monkeypatch):
+    """v1.16.2-tmp01（P2-C）：探测能力可用时，选设备不支持的 dpi/mode 不再静默回退
+    探测列表首项（保存"成功"但值被悄悄改掉、UI 仍显示所选值），改 400 拒绝
+    并告知可选值——与 api_params 的 400 语义对齐。"""
+    _mk_job()
+    import device_probe
+    # 伪造探测结果：设备 hpljm1005: 能力已知（75|100|150dpi，Color|Gray）
+    fake_devs = [{"name": "hpljm1005:", "desc": "HP LaserJet M1005", "modes": ["Color", "Gray"],
+                  "sources": [], "dpis": ["75", "100", "150"], "dpi": "75-150 dpi",
+                  "dpi_raw": ["75", "100", "150"], "scan_type": "仅平板单张", "error": ""}]
+    monkeypatch.setattr(device_probe, "probe", lambda force=False: (fake_devs, False))
+    c = app_mod.app.test_client()
+    csrf = _login_admin(c)
+    # dpi=600：探测能力不含 → 400（旧版静默回退成 75）
+    r = c.post("/api/admin/config", json={
+        "scan_defaults": {"hpljm1005:": {"dpi": "600", "mode": "Gray", "crop": False}}},
+        headers={"X-CSRF-Token": csrf})
+    assert r.status_code == 400, "不支持的 dpi 应 400 拒绝，实际 %s" % r.status_code
+    assert "不支持" in (r.get_json().get("msg") or ""), "400 应告知不支持原因"
+    # mode=Lineart：能力不含 → 400
+    r2 = c.post("/api/admin/config", json={
+        "scan_defaults": {"hpljm1005:": {"dpi": "150", "mode": "Lineart", "crop": False}}},
+        headers={"X-CSRF-Token": csrf})
+    assert r2.status_code == 400, "不支持的 mode 应 400 拒绝"
+    # 合法值（150/Gray 在能力内）→ 保存成功
+    r3 = c.post("/api/admin/config",
+                json={"scan_defaults": {"hpljm1005:": {"dpi": "150", "mode": "Gray",
+                                                        "crop": False, "format": "png"}},
+                      }, headers={"X-CSRF-Token": csrf})
+    assert r3.get_json().get("ok") is True, "能力内的合法值应保存成功"
+
+
+def test_scan_defaults_probe_failed_passes_valid(monkeypatch):
+    """v1.16.2-tmp01（P2-B 边界）：探测不可用（dpi_raw/modes 为空＝探测失败或未知设备）
+    时放行 VALID 白名单兜底——与 api_params「无能力信息时放行 VALID 集合」同一条
+    既有约定（app.py #3 注释）；前端此时已禁用保存按钮（P2-B），后端放行仅兜底
+    非交互路径（旧配置迁移/外部 API 调用）。"""
+    _mk_job()
+    import device_probe
+    # 探测失败：设备在列表但能力全空
+    fake_devs = [{"name": "hpljm1005:", "desc": "HP", "modes": [], "sources": [],
+                  "dpis": [], "dpi": "", "dpi_raw": [], "scan_type": "未知", "error": "timeout"}]
+    monkeypatch.setattr(device_probe, "probe", lambda force=False: (fake_devs, False))
+    c = app_mod.app.test_client()
+    csrf = _login_admin(c)
+    r = c.post("/api/admin/config", json={
+        "scan_defaults": {"hpljm1005:": {"dpi": "150", "mode": "Gray", "crop": False}}},
+        headers={"X-CSRF-Token": csrf})
+    assert r.get_json().get("ok") is True, "探测不可用时 VALID 白名单值应放行"
+
+
+def test_scan_defaults_out_of_valid_rejected_400(monkeypatch):
+    """v1.16.2-tmp01：VALID 白名单外的值（探测不可用兜底路径也要拦）→ 400，
+    旧版此路径静默落库非法值（扫描时被 _params 二次回退 150——"设置不生效"）。"""
+    _mk_job()
+    import device_probe
+    fake_devs = [{"name": "hpljm1005:", "desc": "HP", "modes": [], "sources": [],
+                  "dpis": [], "dpi": "", "dpi_raw": [], "scan_type": "未知", "error": ""}]
+    monkeypatch.setattr(device_probe, "probe", lambda force=False: (fake_devs, False))
+    c = app_mod.app.test_client()
+    csrf = _login_admin(c)
+    r = c.post("/api/admin/config", json={
+        "scan_defaults": {"hpljm1005:": {"dpi": "12345", "mode": "Gray", "crop": False}}},
+        headers={"X-CSRF-Token": csrf})
+    assert r.status_code == 400, "VALID 白名单外的 dpi 应 400 拒绝"
+    # 合法 format 白名单外也要 400（旧版静默回退 png）
+    r2 = c.post("/api/admin/config", json={
+        "scan_defaults": {"hpljm1005:": {"dpi": "150", "mode": "Gray", "crop": False, "format": "tiff"}}},
+        headers={"X-CSRF-Token": csrf})
+    assert r2.status_code == 400, "白名单外的 format 应 400 拒绝"
+
+
+def test_admin_js_probe_failed_disables_save():
+    """v1.16.2-tmp01（P2-B）：前端探测失败（dpi_raw/modes 为空）必须禁用保存按钮
+    且不再伪造 fallback 档位（旧版 x.dpi_raw || ["75",...] 展示假能力诱导保存）。
+    源码级静态断言——只查代码行（行首为语句），排除注释里的历史写法引用。"""
+    import re
+    js = open(os.path.join(os.path.dirname(config.__file__),
+                           "static", "admin.js"), encoding="utf-8").read()
+    # 旧 fallback 伪造写法必须已移除（仅代码行；注释中的历史引用不参与判定）
+    code_lines = [ln for ln in js.splitlines()
+                  if ln.strip() and not ln.strip().startswith("//")]
+    code = "\n".join(code_lines)
+    assert 'x.dpi_raw || ["75"' not in code, "DPI 选项不得伪造 fallback 档位（P2-B）"
+    assert 'x.modes || ["Gray","Color"]' not in code, "模式选项不得伪造 fallback 档位（P2-B）"
+    # dpiKnown/modeKnown 判定存在（空列表即探测失败）
+    assert "const dpiKnown" in code and "const modeKnown" in code, \
+        "必须有 dpi_known/mode_known 探测结果判定"
+    # probeFailed 判定 + 禁用保存按钮逻辑存在
+    assert "const probeFailed" in code and "disabled" in code, \
+        "探测失败须判定 probeFailed 并禁用保存按钮"
+    m = re.search(r"probeFailed\?' disabled[^']*'", code)
+    assert m, "保存按钮必须有 probeFailed 条件禁用"
+    # 探测失败时提示文案存在（引导用户重新探测）
+    assert "重新探测" in code, "探测失败须提示用户点「重新探测」"

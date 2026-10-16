@@ -109,13 +109,22 @@ def _run_convert_task(task):
     job, fname, pnm, out, fmt, root, quiet = task
     # v1.16.0-tmp06（DeepSeek P1）：任务已删时不得重建 state 条目——api_delete 已
     # pop，队列残留任务执行到 setdefault 会复活条目（长期运行内存缓涨）。
+    # v1.16.2-tmp02（十五轮 N2）：复查+setdefault 移入 jlock 内——原「get→isdir→
+    # setdefault」三步无锁，与 api_delete（jlock 内 pop+rmtree）竞态时窗口内 setdefault
+    # 仍会复活已删任务的空条目。st 命中快路径时不加锁，转换热路径零开销不变。
+    # v1.16.2-tmp03（十六轮，tmp02 回归修复）：快照复查必须用【独立 handle】——
+    # tmp02 误用 with jlock:（主 handle），__exit__ 的 release() 会把主 handle 的
+    # refs 1→0 提前弹掉 registry 条目，后续落盘段 jlock.acquire() 全程操作孤儿锁，
+    # 与其他线程 job_lock(job) 新建的 entry 互斥失效（重启后恢复任务首转必走此
+    # 路径）。独立 handle 复用同一 entry（refs 1→2→1），互斥保持且不提前回收。
+    jlock = jobs.job_lock(job)
     st = state.get(job)
     if st is None:
-        if os.path.isdir(os.path.join(root or get_scan_root(), job)):
-            st = state.setdefault(job, {})
-        else:
-            st = {}      # 无主替身：写入不进 registry（页面已 404，无人可见）
-    jlock = jobs.job_lock(job)
+        with jobs.job_lock(job):
+            if state.get(job) is None and os.path.isdir(os.path.join(root or get_scan_root(), job)):
+                st = state.setdefault(job, {})
+            else:
+                st = {}      # 无主替身：写入不进 registry（页面已 404，无人可见）
     # PIL 输出落点必须在任务目录内（同文件系统），os.replace 才能原子覆盖。
     tmp_png = out + ".partial"         # 任务目录内隐藏临时名（PAGE_RE 不匹配）
     try:

@@ -458,7 +458,13 @@ def api_save_config():
             if sd is None:
                 cfg["scan_defaults"] = {}
             elif isinstance(sd, dict):
-                # v1.14：按设备探测能力白名单校验 dpi/mode，非法值回退探测列表首项（#16）
+                # v1.14：按设备探测能力白名单校验 dpi/mode
+                # v1.16.2-tmp01（十四轮 backlog P2-C）：探测能力可用时选了不支持的值
+                # 不再静默回退探测列表首项（保存"成功"但值被悄悄改掉、UI 仍显示
+                # 所选值，用户重开管理页才发现——与 api_params 的 400 语义不一致），
+                # 改为 400 拒绝明确告知；探测能力不可用（dpi_raw/modes 为空＝探测
+                # 失败或未知设备）时放行 VALID 白名单兜底——与 api_params「无能力
+                # 信息时放行 VALID 集合」同一条既有约定（app.py #3 注释）。
                 caps = {x["name"]: x for x in device_probe.probe()[0]}
                 cleaned = {}
                 for dev_name, dv in sd.items():
@@ -471,11 +477,20 @@ def api_save_config():
                     mode = str(dv.get("mode", "Gray"))
                     fmt = str(dv.get("format", "png"))    # v1.16.0-tmp01：默认输出格式
                     if dpi_ok and dpi not in dpi_ok:
-                        dpi = dpi_ok[0]
+                        raise _Reject(jsonify(ok=False, msg=(
+                            "设备 %s 不支持 %s dpi，可选：%s" %
+                            (dev_name[:60], dpi[:10], "|".join(dpi_ok[:12])))), 400)
                     if mode_ok and mode not in mode_ok:
-                        mode = mode_ok[0]
+                        raise _Reject(jsonify(ok=False, msg=(
+                            "设备 %s 不支持 %s 模式，可选：%s" %
+                            (dev_name[:60], mode[:20], "|".join(mode_ok[:6])))), 400)
+                    if dpi not in scanner.VALID_DPI or mode not in scanner.VALID_MODE:
+                        raise _Reject(jsonify(ok=False, msg=(
+                            "默认值超出支持范围（dpi=%s mode=%s）" %
+                            (dpi[:10], mode[:20]))), 400)
                     if fmt not in scanner.VALID_FORMAT:   # 白名单 fail-closed
-                        fmt = "png"
+                        raise _Reject(jsonify(ok=False, msg=(
+                            "不支持的输出格式：%s" % fmt[:30])), 400)
                     cleaned[dev_name] = {"dpi": dpi, "mode": mode,
                                          "crop": bool(dv.get("crop", False)),
                                          "format": fmt}

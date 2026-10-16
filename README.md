@@ -3,10 +3,10 @@ AIGC:
   ContentProducer: '001191110102MAD55U9H0F10002'
   ContentPropagator: '001191110102MAD55U9H0F10002'
   Label: '1'
-  ProduceID: 'd61f6742-7126-47d2-8c78-df2349f11096'
-  PropagateID: 'd61f6742-7126-47d2-8c78-df2349f11096'
-  ReservedCode1: 'aefc8d6f-7ec8-4a9a-9c9c-b53f23ead448'
-  ReservedCode2: 'aefc8d6f-7ec8-4a9a-9c9c-b53f23ead448'
+  ProduceID: 'dc38040d-f619-4cf9-8f0e-f7e09dd3a278'
+  PropagateID: 'dc38040d-f619-4cf9-8f0e-f7e09dd3a278'
+  ReservedCode1: 'd45b0a2d-7bc8-448d-a6af-c445cae7f6ef'
+  ReservedCode2: 'd45b0a2d-7bc8-448d-a6af-c445cae7f6ef'
 ---
 
 # ScanWeb — 局域网网页扫描系统
@@ -15,7 +15,7 @@ AIGC:
 
 | 项目信息 | 说明 |
 |---|---|
-| 当前版本 | v1.16.1 |
+| 当前版本 | v1.16.2 |
 | 适配硬件 | hi3798mv100 机顶盒（ARM32/armhf）或其他 Linux 小主机 |
 | 适配系统 | Ubuntu 20.04 (focal) / Python 3.8+ |
 | 主要设备 | HP LaserJet M1005（其他 SANE 兼容扫描仪亦可） |
@@ -23,6 +23,16 @@ AIGC:
 | 前端形态 | 单页原生 HTML/CSS/JS，零外部依赖、零数据库、无 CDN 引用 |
 | 默认端口 | 9203 |
 
+> v1.16.2 更新：**正式发布版（DeepSeek 十五~十九轮审查收敛定稿，234 项回归 + 203 真机冒烟通过）**。本版自 v1.16.1 后历经 tmp01~tmp04 四个迭代，重点修复：① **管理页语义对齐**——scan_defaults 保存选了设备不支持的 dpi/mode/format 不再静默回退（改 400 拒绝并告知可选值，与任务页参数 API 同语义），探测失败不再伪造 fallback 档位（显示“未知”+禁用保存+提示重新探测）；② **并发删除防护**——`_iter_page_files`（getsize）与 `list_jobs` 对并发删除免疫，Samba 外部删除或页面 DELETE 并发不再打挂首页/任务页 500；③ **转换 worker state 复活竞态双修**——快照复查+setdefault 移入任务锁内（与持锁 DELETE 真正互斥），且复查用独立 handle（with 复用主 handle 会提前弹掉 registry 条目致同任务两锁互斥失效，十六轮抓到的 _JobLock 1:1 契约回归）；④ **dl_zip 生成器未消费泄漏兑底**——Response 构造成功但生成器从未被迭代（客户端响应头后立即断开）时 call_on_close 兑底清理，三收尾点收敛为锁保护幂等单次入口（绝不双 release）；⑤ **fd 双重关闭防护**——`_webp_safe_png` 以 fd_taken 标志区分 fd 是否已被 fdopen 接管（防 fd 号复用后误关他线程 fd）。新增 tests/test_v16t12.py 7 项防回归（均通过反向验证）。遗留 P2×2（scan-status 误报窄窗口、guard 内慢 I/O）与 P3×9 挂账 v1.16.3（用户知情延后，见 tmp04 条目延期声明）。
+> 
+> v1.16.2-tmp04 更新：**十七轮审查结论「发布判定通过」基础上的测试卫生收尾版**（报告确认 tmp03 精确闭合十六轮 N2 回归、N1/N3/N4 未回退、版本一致、两条新测试覆盖完备，未引入新缺陷）；顺手处理报告建议本版处理的两个 P3 测试卫生项：① P3-1 `test_convert_isdir_judged_under_jlock` 的 spy 改直接读 `jobs._job_locks`——旧版每 spy 一次 `job_lock(name)` refs+1 却从不 release（靠 conftest 每测试清空兜底才无后果，违反零泄漏纪律），纯观测不消耗 refs，定向验证：spy 后任务完成 registry 干净回收零残留；② P3-2 `test_convert_task_entries_share_one_lock` 补 entry 存在性断言（快照复查结束到计算段之间 entry 必须健在，堵住仅 id 同一性断言在临时插入再删实现下的理论润网）。**backlog 延期声明（用户知情）**：N5（scan-status 误报窄窗口，P2）/N6（guard 内 makedirs，P2，属设计权衡）/N7~N10（P3）经用户逐项评估后知情延后至 v1.16.3 周期处理，非遗漏。测试总数 234（无新增，两项为既有测试强化）。
+> 
+> v1.16.2-tmp03 更新：**十六轮审查（DeepSeek 对 tmp02 修复的回归审查）N2 修复自身引入的 _JobLock 1:1 契约破坏根治版**：tmp02 把快照复查写成 `with jlock:`（复用主 handle），`__exit__` 的 `release()` 会把主 handle 的 refs 1→0 提前弹掉 registry 条目，后续落盘段 `jlock.acquire()` 全程操作孤儿锁，与同期其他线程 `job_lock(job)` 新建的 entry 互斥失效（同任务两把锁并存——v1.14.5 waiter race 变体）；且触发条件并非罕见竞态而是「state 无条目」——服务重启后每个恢复任务的首转必走此路径。现改用【独立 handle】`with jobs.job_lock(job):` 做快照复查：复用同一 registry entry（refs 1→2→1），与主 handle 及并发互斥均保持，且不提前回收。审查同时确认 tmp02 的 N1/N3/N4 修复均正确。新增 2 项防回归测试（entry 同一性断言：执行期间同任务全部 handle 共享同一 entry；互斥不变量：他线程持锁时 worker 落盘段必须阻塞），反向验证通过（改回 `with jlock:` → 两测试均 FAIL）。十六轮报告建议的 N5/N6 同版顺修经用户确认继续记 backlog（N5 窗口极窄仅状态误报、N6 设计权衡）。测试总数 234。
+> 
+> v1.16.2-tmp02 更新：**十五轮审查（DeepSeek 二次全量审查）P1×3+P2×1 修复版**：① N1 页面枚举并发删除防护——`_iter_page_files` 的 `os.path.getsize` 此前无 try 保护，Samba 外部删除或页面 DELETE 并发（pages() 不持任务锁）在 listdir 与 getsize 之间删掉文件时，FileNotFoundError 一路冒到首页/任务页 500；现 OSError 时当不存在跳过；`list_jobs` 异常捕获同步扩为 `(JobError, OSError)`（任务目录半途被删同样跳过而非 500）。② N2 转换 worker state 复活竞态收口——`_run_convert_task` 的「get→isdir→setdefault」三步此前在锁外执行，与持锁的 DELETE（pop+rmtree）竞态时窗口内 setdefault 仍会复活已删任务的空 state 条目（永不回收，恰是 tmp06 要根治的复活路径）；现复查+setdefault 移入任务锁内，state 命中快路径不额外加锁、热路径零开销。③ N3 dl_zip 生成器未消费泄漏兑底——Response 构造成功但生成器从未被迭代（waitress 在 body 前直接 close，客户端响应头后立即断开）时，未启动生成器 close() 不执行 finally：cancel 不 set、jlock 永不释放（该任务 DELETE 死等）且 worker 每 0.5s 空转；现 `resp.call_on_close` 兑底 + 三收尾点（gen finally/构造失败 finally/call_on_close）收敛为锁保护的单次执行入口（幂等，绝不双 release）。④ N4 `_webp_safe_png` fd 双重关闭防护——copyfileobj 抛异常时 fd 已被 with 关闭（fdopen 移交），except 分支不得再 os.close（fd 号被其他线程复用后可误关他人 fd）；现以 fd_taken 标志区分。新增 5 项防回归测试，全部反向验证通过（改坏修复→测试必 FAIL）。N5（_scan_job 竞态，窗口极窄仅状态误报）/N6（guard 内 makedirs，设计权衡）/N7~N10（P3）记入 backlog。测试总数 232。
+> 
+> v1.16.2-tmp01 更新：**v1.16.2 开发周期首个迭代（v1.16.1 定版后修复十四轮 backlog 用户可感知两项 P2-B/P2-C）**：① P2-C scan_defaults 白名单校验语义对齐——探测能力可用时选了设备不支持的 dpi/mode/format 不再静默回退探测列表首项（保存"成功"但值被悄悄改掉、UI 仍显示所选值，用户重开管理页才发现被回退），改 400 拒绝并告知可选值，与任务页参数 API（api_params）的 400 语义一致；探测不可用（能力列表为空）时放行 VALID 白名单兜底（与 api_params「无能力信息时放行 VALID 集合」同一条既有约定）；② P2-B 前端探测失败防护——管理页设备卡在 dpi_raw/modes 为空（探测失败）时不再伪造 fallback 档位展示（旧版展示假能力诱导保存），改显示"未知"并禁用该设备保存按钮、提示点「重新探测」。新增 4 项防回归测试，测试总数 227。
+> 
 > v1.16.1 更新：**正式发布版（ChatGPT + DeepSeek 共十四轮审查收敛定稿，223 项回归 + 203 真机冒烟通过）**。本版自 v1.16.0 后历经 tmp01~tmp08 八个迭代，重点修复：① **打包进度登记内存回收根治**——409 拒绝型/正常完成型条目此前永久驻留 `_pack_progress`（唯一随时间恶化的缺陷，长期运行内存只增不减）；现按 TTL 惰性 GC（拒绝 60s/完成 600s，`api_pack_progress` 读时清 + `_pack_prog_start` 登记时清，仅进行中条目永不清），ts 内部字段不进前端 JSON；② **dl_zip 下载链路健壮性**——DONE 投递 while 重试（慢客户端不丢 DONE→gen 永久阻塞→任务删不掉的致命偶发）、Response 构造失败时 worker 线程泄漏根治（cancel 提前定义 + finally 显式 set）、取消静默（客户端断开是设计内取消不再污染 journalctl）、409 拒绝同步写进度登记（前端 500ms 内恢复按钮并提示原因，页面不再被导航成 JSON 文本）；③ **并发防御**——thumb 长轮询 120s→20s 封顶（8 线程池下 ADF 多页并发不再吊死）、admin state 遍历 dict() 原子快照、`_JobLock` 误释放不递减 refs；④ **测试体系强化**——修复空测试（P1-3 防回归此前从未真正生效）、契约固化（前后端 TTL 隐式关系静态断言、守卫正则精确断言、ts 常量基准）、ast 函数定位替代字符串 split、测试改名与 TTL 边界严格化；⑤ **文档与依赖一致性**——pillow 上限三处统一 `≥7.0,<13`、fd 泄漏对称性、架构图重复边与 SVG 转义、README 措辞中性化。新增 tests/test_v16t10/t11.py 共 24 项防回归。P2-B~E（探测失败 fallback/scan_defaults 静默回退/PNM 分隔符/dlWithProgress 并发 timer）、P3-A（GC 节流/摘孤儿）等记入 v1.16.2 backlog。
 > 
 > v1.16.1-tmp08 更新：**第十三轮审查（DeepSeek）契约固化版（5 项小修，报告结论"tmp07 已达发布标准"）**：① 前后端隐式契约固化——`_PACK_FINISHED_TTL=600s` 与前端 dlWithProgress `setTimeout(300000)=5 分钟兜底` 的"后端 TTL 必须 > 前端兜底"关系此前无注释无测试，单向修改即破坏；现加注释说明 + 新增 test_frontend_fallback_lt_finished_ttl 静态关系断言（改前端兜底或后端 TTL 时测试自动拦截）；② test_zip_cancel_no_error_log 弱断言根治——旧版 guard<errlog 只保证位置先后，守卫被挪到无关位置仍误通过；改正则精确断言"守卫必须直接包住 print"；③ 测试 ts 硬编码常量化——-700/-999 改以 `_PACK_FINISHED_TTL-100`/`_PACK_REJECT_TTL-30` 为基准，改 TTL 时测试自动跟随；④ README 措辞中性化（见 tmp07 条目末句，不再使用"误报"表述）；⑤ P1-B GC 节流与 P3 风格项按报告自评"无法测量/无功能影响"不修（YAGNI）。新增 1 项测试，测试总数 223。
@@ -160,15 +170,15 @@ df -h /
 
 ```bash
 # 本机执行（传压缩包到盒子，版本号以实际发布为准）
-scp scanweb-v1.16.1.tar.gz root@192.168.1.203:/opt/network_scan_service/
+scp scanweb-v1.16.2-tmp04.tar.gz root@192.168.1.203:/opt/network_scan_service/
 ```
 
 手动安装（首次）：
 
 ```bash
 cd /opt/network_scan_service
-tar xzf scanweb-v1.16.1.tar.gz --strip-components=1
-rm -f scanweb-v1.16.1.tar.gz .python-version
+tar xzf scanweb-v1.16.2-tmp04.tar.gz --strip-components=1
+rm -f scanweb-v1.16.2-tmp04.tar.gz .python-version
 ```
 
 ### 第三步：安装编译依赖并安装 Python 包
@@ -312,7 +322,7 @@ curl -s http://127.0.0.1:9203/ | head -5
 
 ## 测试（v1.14 起）
 
-`tests/` 目录含 223 项 pytest 回归（v1.16.1，无需真实扫描仪），覆盖：任务 ID 唯一性、占位页过滤与编号、锁定删除保护、清理排除扫描中/转换中任务、设备缓存分键、scan_root 黑名单、PIN PBKDF2 与旧格式迁移、ADF source 白名单、版本一致性、锁定三层防护 API、管理页跳转锚点、SameSite cookie、扫描中删除/排序 409、锁分段竞态、转换队列化、ADF 批量入队、tmp03/tmp04 审查修复回归，以及 T04 审查修复 + tmp07 DeepSeek 审查修复（ADF 超水位死锁/dl_zip 锁泄漏/state 重建/ImageMagick 安全副本）+ ZIP/PDF 打包进度提示（按 kind 隔离，并发互不覆盖）+ v1.16.1-tmp01 六轮审查联合修复（fd 泄漏对称性/进度竞态/锁回收统一/架构图重复边+转义/pillow 约束）+ tmp04 九轮 P1 修复（DONE 投递重试/409 拒绝登记+iframe 下载/state 原子快照/refs 条件递减/thumb 长轮询封顶）+ tmp05 十轮修复（空测试根治/Response 构造失败 worker 泄漏）+ tmp06 十一轮修复（拒绝条目惰性 GC/worker 泄漏防回归/ts 不进 JSON）+ tmp07 十二轮修复（GC 读时清/完成型 TTL 清理/取消静默/ast 定位/测试改名与边界强化）+ tmp08 十三轮修复（前后端兜底契约静态断言/守卫正则精确断言/ts 常量基准）等。
+`tests/` 目录含 234 项 pytest 回归（v1.16.2，无需真实扫描仪），覆盖：任务 ID 唯一性、占位页过滤与编号、锁定删除保护、清理排除扫描中/转换中任务、设备缓存分键、scan_root 黑名单、PIN PBKDF2 与旧格式迁移、ADF source 白名单、版本一致性、锁定三层防护 API、管理页跳转锚点、SameSite cookie、扫描中删除/排序 409、锁分段竞态、转换队列化、ADF 批量入队、tmp03/tmp04 审查修复回归，以及 T04 审查修复 + tmp07 DeepSeek 审查修复（ADF 超水位死锁/dl_zip 锁泄漏/state 重建/ImageMagick 安全副本）+ ZIP/PDF 打包进度提示（按 kind 隔离，并发互不覆盖）+ v1.16.1-tmp01 六轮审查联合修复（fd 泄漏对称性/进度竞态/锁回收统一/架构图重复边+转义/pillow 约束）+ tmp04 九轮 P1 修复（DONE 投递重试/409 拒绝登记+iframe 下载/state 原子快照/refs 条件递减/thumb 长轮询封顶）+ tmp05 十轮修复（空测试根治/Response 构造失败 worker 泄漏）+ tmp06 十一轮修复（拒绝条目惰性 GC/worker 泄漏防回归/ts 不进 JSON）+ tmp07 十二轮修复（GC 读时清/完成型 TTL 清理/取消静默/ast 定位/测试改名与边界强化）+ tmp08 十三轮修复（前后端兜底契约静态断言/守卫正则精确断言/ts 常量基准）等。
 
 ```bash
 # 在项目根目录（部署机或开发机均可）
@@ -428,7 +438,7 @@ webscan version             # 查看当前版本
 
 ```bash
 # 1. 本机上传新版本包（版本号以实际发布为准）
-scp scanweb-v1.16.1.tar.gz root@192.168.1.203:/opt/network_scan_service/
+scp scanweb-v1.16.2-tmp04.tar.gz root@192.168.1.203:/opt/network_scan_service/
 
 # 2. SSH 登录盒子
 ssh root@192.168.1.203
@@ -447,7 +457,7 @@ webscan update
 - **次版本递增**（v1.14 → v1.15）：bug 修复、小功能改进、配置调整；补丁号（v1.14.1 → v1.14.2）用于审计/回归修复版；tmp 后缀（v1.15.1-tmp04）为开发测试版
 - **主版本递增**（v1.x → v2.0）：架构性改动、不兼容升级（需重新安装依赖或迁移数据）
 - **版本号写入位置**：`config.py` 的 `VERSION` 变量、`pyproject.toml`、README 版本表、git tag
-- **发布包命名**：`scanweb-v1.16.1.tar.gz`（`webscan update` 按此模式自动检测）
+- **发布包命名**：`scanweb-v1.16.2.tar.gz`（`webscan update` 按此模式自动检测）
 
 ### 更新包内容约定
 

@@ -669,6 +669,21 @@ def dl_zip(job):
     # 通知 worker 退出。提前定义还保证 409/404 提前返回时 finally 引用 cancel 不 NameError。
     cancel = threading.Event()
     handed_to_gen = False
+    # v1.16.2-tmp02（十五轮 N3）：三收尾点（gen finally / 构造失败 finally /
+    # call_on_close）收敛为单次执行入口——锁保护确保 jlock.release() 绝不双调
+    # （threading.Lock 二次 release 不报错但会误关他线程刚 acquire 的锁）。
+    _fin_lock = threading.Lock()
+    _fin_done = [False]
+
+    def _release_once():
+        with _fin_lock:
+            if _fin_done[0]:
+                return
+            _fin_done[0] = True
+        cancel.set()   # v1.16.1-tmp05（P1-B）：通知 worker 退出，防 W.write 永久循环
+        jlock.release()
+        _pack_prog_update(job, "zip", active=False)
+
     try:
         # v1.15.1-tmp04：转换中页是 0 字节占位，混入 ZIP 会产生损坏文件
         # v1.16.1-tmp04（DeepSeek 九轮 P1-4）：拒绝时同步写登记（active=False + msg）——
@@ -746,9 +761,9 @@ def dl_zip(job):
                         break
                     yield chunk
             finally:
-                cancel.set()          # 正常结束或客户端断开（GeneratorExit）都通知 worker 停止
-                jlock.release()       # v1.14.2（#6）：流结束/中断才释放生命周期锁
-                _pack_prog_update(job, "zip", active=False)   # tmp06：完成/中断都收尾进度
+                # 正常结束/客户端断开（GeneratorExit）统一走幂等收尾
+                # （v1.14.2 #6 释放生命周期锁 + tmp05 cancel + tmp06 进度收口的原三行）
+                _release_once()
 
         # v1.16.0-tmp09（DeepSeek H2）：Response 先构造成功、再交接锁——旧序
         # handed_to_gen=True 在构造前置位，若 Response(...) 抛异常（OOM/header
@@ -757,12 +772,16 @@ def dl_zip(job):
                         headers={"Content-Disposition":
                                  f"attachment; filename=\"scan.zip\"; filename*=UTF-8''{quote(job + '.zip')}"})
         handed_to_gen = True
+        # v1.16.2-tmp02（十五轮 N3）：构造成功但生成器从未被消费（waitress 在
+        # 迭代 body 前就 close——客户端在响应头后立即断开）时，未启动的生成器
+        # close() 不执行 finally，cancel/jlock 无人释放：worker 每 0.5s 空转
+        # 永不退出、jlock 永久占用该任务（DELETE 死等）。call_on_close 兜底：
+        # WSGI 关闭响应时统一走幂等收尾（gen 已收尾则 no-op）。
+        resp.call_on_close(_release_once)
         return resp
     finally:
         if not handed_to_gen:
-            cancel.set()   # v1.16.1-tmp05（P1-B）：Response 构造失败也通知 worker 退出，防永久循环
-            jlock.release()
-            _pack_prog_update(job, "zip", active=False)
+            _release_once()
 
 
 def _webp_safe_png(base, fname):
@@ -772,14 +791,19 @@ def _webp_safe_png(base, fname):
     不再绕过安全检查。返回临时 PNG 路径（调用方用毕删除）。"""
     fd, safe_src = tempfile.mkstemp(prefix="scanweb_pdfsrc_", suffix=".webp")
     png = safe_src + ".png"
-    try:
-        with jobs.open_page_fd(base, fname) as src, os.fdopen(fd, "wb") as dst:
-            shutil.copyfileobj(src, dst)
+    fd_taken = False   # v1.16.2-tmp02（十五轮 N4）：fdopen 移交成功后 fd 归 dst 所有，
+    try:               # body 失败时 with 已关 fd——except 不得再 close（防 fd 号被
+        with jobs.open_page_fd(base, fname) as src:   # 其他线程复用后误关他人 fd）
+            dst = os.fdopen(fd, "wb")
+            fd_taken = True
+            with dst:
+                shutil.copyfileobj(src, dst)
     except Exception:
-        try:
-            os.close(fd)
-        except OSError:
-            pass
+        if not fd_taken:   # 仅 fdopen 失败（fd 未被接管）时才需要手动关闭
+            try:
+                os.close(fd)
+            except OSError:
+                pass
         for p in (png, safe_src):
             try:
                 os.remove(p)

@@ -190,11 +190,17 @@
       const curMode = dv.mode || "Gray";
       const curCrop = dv.crop ? "checked" : "";
       const curFmt = dv.format || "png";   // v1.16.0-tmp01：默认输出格式
+      // v1.16.2-tmp01（十四轮 backlog P2-B）：探测失败（dpi_raw/modes 为空）时不再伪造
+      // fallback 默认档位（旧版 x.dpi_raw || ["75",...] 展示假能力→用户保存→后端旧版
+      // 静默回退/新版 400，两版下都造成困惑）；改展示"未知"并禁用该设备保存按钮。
+      const dpiKnown = Array.isArray(x.dpi_raw) && x.dpi_raw.length > 0;
+      const modeKnown = Array.isArray(x.modes) && x.modes.length > 0;
+      const probeFailed = !dpiKnown || !modeKnown;
       // DPI 选项从设备探测结果生成（v1.16.0-tmp01：原生 select → 自定义下拉，与管理页整体风格统一）
-      const dpis = x.dpi_raw || ["75","100","150","200","300","600","1200"];
+      const dpis = dpiKnown ? x.dpi_raw : [];
       const dpiItems = dpis.map(d =>
         '<button type="button" class="dd-item'+(d===curDpi?' selected':'')+'" data-value="'+esc(d)+'">'+esc(d)+'</button>').join("");
-      const modeItems = (x.modes || ["Gray","Color"]).map(m =>
+      const modeItems = (modeKnown ? x.modes : []).map(m =>
         '<button type="button" class="dd-item'+(m===curMode?' selected':'')+'" data-value="'+esc(m)+'">'+esc(MODE_CN[m]||m)+'</button>').join("");
       const fmtItems = ["png","jpg","webp"].map(f =>
         '<button type="button" class="dd-item'+(f===curFmt?' selected':'')+'" data-value="'+f+'">'+(f==="jpg"?"JPEG":f.toUpperCase())+'</button>').join("");   // v1.16.0-tmp01
@@ -227,12 +233,14 @@
         '<input type="text" id="alias_'+eid+'" placeholder="'+esc(x.name)+'" value="'+esc(alias)+'" style="flex:1;min-width:80px">' +
         '</div>' +
         '<div class="cfg-row" style="flex-wrap:wrap;gap:8px 14px;align-items:center">' +   // v1.16.0-tmp01：align-items:center 防按钮被 flex 拉伸（原默认 stretch 使保存按钮高 45px）
-        '<span class="hint" style="display:inline-flex;align-items:center;gap:4px">默认DPI '+ddBox("dpi", eid, curDpi, dpiItems, curDpi)+'</span>' +
-        '<span class="hint" style="display:inline-flex;align-items:center;gap:4px">默认色彩 '+ddBox("mode", eid, curModeCn, modeItems, curMode)+'</span>' +
+        '<span class="hint" style="display:inline-flex;align-items:center;gap:4px">默认DPI '+ddBox("dpi", eid, dpiKnown ? curDpi : "未知", dpiItems, dpiKnown ? curDpi : "")+'</span>' +
+        '<span class="hint" style="display:inline-flex;align-items:center;gap:4px">默认色彩 '+ddBox("mode", eid, modeKnown ? curModeCn : "未知", modeItems, modeKnown ? curMode : "")+'</span>' +
         '<span class="hint" style="display:inline-flex;align-items:center;gap:4px">默认格式 '+ddBox("fmt", eid, curFmtCn, fmtItems, curFmt)+'</span>' +
         '<span class="hint" style="display:inline-flex;align-items:center;gap:4px"><input type="checkbox" id="crop_'+eid+'" '+curCrop+'> 裁边</span>' +
-        '<button class="btn primary" data-dev-save="'+esc(x.name)+'" style="margin-left:auto;min-width:88px;text-align:center">保存</button>' +
-        '</div></div></div>');
+        '<button class="btn primary" data-dev-save="'+esc(x.name)+'" style="margin-left:auto;min-width:88px;text-align:center"'+(probeFailed?' disabled title="设备能力未探测（DPI/模式为空），暂不能保存默认值——请先点「重新探测」"':'')+'>保存</button>' +
+        '</div>' +
+        (probeFailed ? '<p class="hint" style="margin:6px 0 0;color:#c0392b">设备能力未探测，已禁用保存——点「重新探测」重试</p>' : '') +
+        '</div></div>');
     });
     $("devCacheNote").textContent = d.cached ? "（5 分钟内使用缓存，点「重新探测」强制刷新）" : "（刚完成实时探测）";
 

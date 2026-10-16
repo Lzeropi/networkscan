@@ -280,7 +280,13 @@ def _iter_page_files(job, require_nonempty, root=None):
         fp = os.path.join(p, f)
         if not PAGE_RE.fullmatch(f) or os.path.islink(fp):
             continue
-        if require_nonempty and os.path.getsize(fp) <= 0:
+        try:
+            # v1.16.2-tmp02（十五轮 N1）：listdir 与 getsize 之间文件被删
+            # （Samba 外部，或页面上 DELETE 并发——pages() 不持 jlock）→ 当不存在跳过，
+            # 防 FileNotFoundError 一路冒到首页/任务页 500
+            if require_nonempty and os.path.getsize(fp) <= 0:
+                continue
+        except OSError:
             continue
         out.append(f)
     return sorted(out, key=_page_key)
@@ -328,7 +334,9 @@ def list_jobs(with_size=False):
             if with_size:
                 item["size"] = dir_size(validate(name))
             out.append(item)
-        except JobError:
+        except (JobError, OSError):
+            # v1.16.2-tmp02（十五轮 N1/O6）：任务目录半途被外部/DELETE 并发删除时，
+            # pages()/dir_size 抛 OSError——同样跳过该任务，不再冒到首页 500
             continue
     return out
 
