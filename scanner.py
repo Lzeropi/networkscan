@@ -3,6 +3,7 @@ import queue
 import re
 import shutil
 import subprocess
+import sys
 import tempfile
 import threading
 import time
@@ -30,6 +31,26 @@ _pending_lock = threading.Lock()
 # admin 侧 guard→admin_cfg_lock——无交叉持有，无死锁。guard 从不覆盖扫描 body
 # （最长 300s），保存配置永不等待扫描完成。
 _scan_start_guard = threading.Lock()
+
+
+def _scan_clear_current(expected_job=None):
+    """v1.16.3-tmp01（十九届 P2-1）：清理当前扫描标记必须与启动段对称地持
+    _scan_start_guard——旧版在锁外赋 `_scan_job = None`，与另线程的「释放
+    scan_lock → 新扫描启动段设新任务」竞态时，旧收尾会把新任务的标记清掉，
+    /api/scan-status 在毫秒级窗口误报空闲（UI 横幅闪烁；无数据损坏）。
+    收口为单函数也消除四处两行序列各自漏改的风险。
+    v1.16.3-tmp03（二十一轮 P3-1 语义补完）：持 guard 只保证「清理」与「启动」
+    不交错，不能保证「清的就是自己的值」——扫描完成后 scan_lock 已释放，其他
+    任务可在同一毫秒窗口启动新扫描（jlock 不同、scan_lock 已空）设新 _scan_job，
+    此时无条件 `_scan_job = None` 仍会误清新任务的标记（tmp01 修复的残余缺口）。
+    传 expected_job 后：`_scan_job != expected_job` 即跳过（已被接管），彻底关闭
+    误清路径。不传参时（测试辅助/手动清理）行为等同旧版（无条件清理）。"""
+    global _scan_job, _scan_start_time
+    with _scan_start_guard:
+        if expected_job is not None and _scan_job != expected_job:
+            return   # 已被其他扫描接管，不清别人的标记
+        _scan_job = None
+        _scan_start_time = None
 
 # v1.16.0-tmp05（T04-05，审查报告）：ADF 批次活跃标记——同一任务只允许一个
 # ADF 批次（入口互斥），批次收尾前不得再启动新 ADF；平板/转换 worker 落盘时
@@ -658,15 +679,29 @@ def scan_flatbed(job):
         # 扫描段结束 → scan_lock 立即释放（PIL 计算不需要任何锁）
         scan_lock.release()
         scan_lock_held = False
-        _scan_job = None
-        _scan_start_time = None
+        # v1.16.3-tmp03（二十一轮 P3-1）：_scan_clear_current 收口到下方 finally
+        # 单次执行（成功/异常路径不再各调一次，防未来增加副作用时重复执行），
+        # 并传 expected_job=job 防误清并发新任务的标记
 
         if scan_error:
             _rm(tmp); tmp = None
             _rm(out)
             st.update(state="error", msg=scan_error)
-            jlock.release()
+            # v1.16.3-tmp03（二十一轮 P3-2）：所有权先移交再 release——旧版
+            # 「先 release 后置标志」在 release 抛 RuntimeError（双释放 bug）时
+            # 标志不更新，落入下方兜底再释放一次：二次异常覆盖真实扫描错误
+            # （超时/设备故障），日志中只剩「released without being held」。
+            # release 失败在此吞掉（属调用方 bug 信号，但 scan_error 是用户
+            # 更需要看到的真实原因，且兜底有 state=error 留痕）。
+            # v1.16.3-tmp04（二十二审 #5）：吞掉前记 stderr（journalctl 可见）——
+            # 旧版完全静默，双释放 bug 的锁泄漏只能靠后续全部 busy 才能间接
+            # 观察，延误排查；与 app._release_once 的同类记录同风格。
             job_lock_held = False
+            try:
+                jlock.release()
+            except Exception as e:
+                print("[scan] jlock.release failed in scan_error path: %s" % e,
+                      file=sys.stderr)
             raise RuntimeError(scan_error)
 
         # v1.16.0-tmp02：登记 pending + 入队（PIL 计算由常驻 worker 串行消化）。
@@ -678,8 +713,7 @@ def scan_flatbed(job):
 
     except Exception:
         # 统一兜底（v1.16.0-tmp04）：按持有标志清理，锁只释放一次，原始异常不被覆盖
-        _scan_job = None
-        _scan_start_time = None
+        # （_scan_clear_current 已收口到下方 finally，v1.16.3-tmp03 P3-1）
         if scan_lock_held:
             scan_lock.release()
             scan_lock_held = False
@@ -692,6 +726,11 @@ def scan_flatbed(job):
         if job_lock_held:
             jlock.release()
         raise
+    finally:
+        # v1.16.3-tmp03（二十一轮 P3-1）：单次收口——成功/异常路径都过此处。
+        # 传 expected_job=job：若 scan_lock 释放后其他任务已启动新扫描
+        # （_scan_job 已被接管），检查不等即跳过，不误清新任务的标记。
+        _scan_clear_current(job)
 
 
 def scan_adf(job):
@@ -782,8 +821,7 @@ def scan_adf(job):
                 scan_lock.release()
                 jlock.release()
                 released = True
-                _scan_job = None
-                _scan_start_time = None
+                _scan_clear_current(job)   # v1.16.3-tmp01（P2-1）；tmp03 传 expected_job 防误清并发新任务标记
                 batch_pages = _enqueue_pnms(job, start, root, fmt)
                 if not batch_pages:
                     st.update(state="error", msg=err or "未扫描到任何页面，请检查进纸器")
@@ -837,8 +875,7 @@ def scan_adf(job):
         except Exception as e:   # v1.14.5（P1-1）：外层兜底——_params/next_page_no/meta 等内层 try 之外的异常
             st.update(state="error", msg=str(e)[:300])
         finally:
-            _scan_job = None
-            _scan_start_time = None
+            _scan_clear_current(job)      # v1.16.3-tmp01（P2-1）：收尾清理收口；tmp03 传 expected_job
             with _adf_batch_lock:
                 _adf_batch.pop(job, None)     # v1.16.0-tmp05（T04-05）：批次结束清活跃标记
             # v1.16.0-tmp06（DeepSeek P1）：批次期间任务被删（tmp05 锁提前释放后
@@ -853,7 +890,20 @@ def scan_adf(job):
                 scan_lock.release()
                 jlock.release()      # v1.14.1（P1-3）
 
-    threading.Thread(target=worker, daemon=True).start()
+    # v1.16.3-tmp02（二十轮 P1-3）：线程创建失败（OOM/OS 拒绝 new thread，
+    # Thread() 构造或 start() 抛 RuntimeError）时回滚——此刻 jlock/scan_lock
+    # 已持有、_adf_batch[job] 已置位（worker 才释放/清除，而 worker 从未运行），
+    # 裸抛会使该任务永久 adf_busy（仅重启可恢复）+ 全局扫描 busy（两锁不归）。
+    # 构造与 start 都入 try；按获取相反顺序回滚后上抛——环境级故障应被 500 +
+    # 日志暴露，而非伪装成 busy 掩盖。
+    try:
+        threading.Thread(target=worker, daemon=True).start()
+    except Exception:
+        with _adf_batch_lock:
+            _adf_batch.pop(job, None)
+        scan_lock.release()
+        jlock.release()
+        raise
     return "started"
 
 

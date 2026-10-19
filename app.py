@@ -247,7 +247,11 @@ def api_scan(job):
     # 前端据此显示占位 + pollThumbReady（彻底消除 status 轮询）
     try:
         r = scanner.scan_flatbed(job)
-    except RuntimeError as e:
+    # v1.16.3-tmp05（P3-4，纯代码审查）：与 api_testscan 统一为 except Exception
+    # ——scan_flatbed 实际逃逸面极窄（锁获取后的路径全有内/外层兑底），但意外
+    # 异常（非 RuntimeError）冒成 Flask 默认 HTML 500 不如 JSON 500 可读；
+    # 两处口径统一后测试与排障心暂一致
+    except Exception as e:
         return jsonify(ok=False, msg=str(e)[:300]), 500
     if r == "busy":
         return jsonify(ok=False, msg="设备忙，请稍后再试"), 409
@@ -326,13 +330,49 @@ def _reorder_body(job):
     # v1.15.1-tmp04：转换中禁止排序（落盘段会 os.replace 到旧名，reorder 改名会打穿）
     if scanner.has_pending(job):
         return jsonify(ok=False, msg="有页面正在转换，请等待完成后再排序"), 409
-    body = request.get_json() or {}
+    # v1.16.3-tmp05（P3-2，纯代码审查）：JSON 根必须是对象——数组/字符串/数字等
+    # 合法但非 dict 的 JSON 旧版经 `or {}` 后直接 .get → AttributeError → 500；
+    # 与 api_params（v1.16.0-tmp04 P2-8）同款防护对齐：silent=True + fail-closed
+    # 400（无效 JSON 文本的报错也从 Werkzeug 默认 400 统一为本 JSON 400，
+    # 便于前端按 ok/msg 契约展示）
+    body = request.get_json(silent=True)
+    if not isinstance(body, dict):
+        return jsonify(ok=False, msg="请求体必须是 JSON 对象"), 400
     new_order = body.get("order", [])
+    if new_order is None:
+        new_order = []   # 显式 null 等价缺省，沿用「顺序列表为空」400（与旧版一致）
+    # v1.16.3-tmp05（P3-1，纯代码审查）：order 必须是数组——整数/字符串/对象等
+    # 旧版 `for f in new_order` / `all(isinstance(f, str) ...)` 抔 TypeError → 500
+    # 「磁盘/权限异常」误导排查；前置 400 早失败。位置在元素类型校验（tmp04）
+    # 之前，两道校验形成「根类型 → 数组类型 → 元素类型」造辑阶梯
+    if not isinstance(new_order, (list, tuple)):
+        return jsonify(ok=False, msg="顺序列表必须是数组"), 400
     is_delete = body.get("delete", False)
     if is_delete and jobs.is_locked(job):   # v1.14：锁定任务禁删页，排序保留
         return jsonify(ok=False, msg="任务已锁定，不能删除页面"), 403
     if not new_order:
         return jsonify(ok=False, msg="顺序列表为空"), 400
+    # v1.16.3-tmp04（二十二审 #1，原二十轮 P3-4 backlog 解禁）：order 元素必须
+    # 全部为字符串。恶意混入非字符串元素（嵌套 list 等）时，delete=True 路径的
+    # `f not in current` 侥幸走「页面不存在」400，但 delete=False 路径的
+    # sorted(new_order) 比对抛 TypeError → 500「磁盘/权限异常」误导排查。
+    # tmp02 曾取「TypeError 放行」策略以不动旧版行为，本轮经用户批准改为统一
+    # 前置校验：早失败、报错准确、两种模式行为一致。
+    if not all(isinstance(f, str) for f in new_order):
+        return jsonify(ok=False, msg="顺序列表元素必须为字符串文件名"), 400
+    # v1.16.3-tmp02（二十轮 P1-2）：去重前置校验——删除模式传入重复项（如
+    # ["p001.png","p001.png"]）会让重编号对同一文件 os.rename 两次，第二次
+    # FileNotFoundError 触发全量回滚后以 500「磁盘/权限异常」误导排查（无数据
+    # 丢失但报错指向错）；普通排序模式此前仅被 sorted 比对隐式拦截、报错信息
+    # 指向性弱。两种模式统一前置拦截：早失败、信息准确、不动合法请求
+    # （合法请求或为无重复排列或为无重复子集）。TypeError 防护（tmp04 类型
+    # 校验后理论上恒不触发）保留为防御深度——防未来改动类型校验时静默回退 500。
+    try:
+        _dup = len(set(new_order)) != len(new_order)
+    except TypeError:
+        _dup = False
+    if _dup:
+        return jsonify(ok=False, msg="顺序列表含重复页面"), 400
     base = jobs.path(job)
     thumb_dir = os.path.join(base, ".thumbs")
     current = jobs.pages(job)
@@ -346,8 +386,15 @@ def _reorder_body(job):
         to_delete = [f for f in current if f not in new_order]
         # 更新 meta（重命名不改页数，删除模式页数=保留数）
         if len(new_order) < 2:
-            # 只剩 0 或 1 页，无需重编号，直接进入删除收尾
+            # 只剩 1 页（空 order 已被上方 400 拦截，此处 len 恒为 1），
+            # 无需两步重编号，直接进入删除收尾
             _finish_delete(job, base, thumb_dir, to_delete, len(new_order))
+            # v1.16.3-tmp05（P2-1，纯代码审查）：仅剩 1 页时幸存页同样收口到
+            # p001——docstring 承诺「剩余页面重新连续编号」，旧版 <2 分支只删
+            # 不改名：p002/p005 两页删 p002 后留下 p005，next_page_no 按 max+1
+            # 使空洞永久化（后续新页从 p006 起，p001-p004 永缺）。先删后改名
+            # （删除语义与旧版完全一致）；改名目标已存在或失败时降级跳过
+            _renumber_single_kept(base, thumb_dir, new_order[0])
             return jsonify(ok=True, deleted=len(to_delete))
         # 继续走重编号流程，target = new_order
         current = new_order[:]
@@ -485,6 +532,35 @@ def _finish_delete(job, base, thumb_dir, names=None, keep=0):
     jobs.save(job, meta)
 
 
+def _renumber_single_kept(base, thumb_dir, kept):
+    """v1.16.3-tmp05（P2-1，纯代码审查）：<2 页删除分支的幸存页重编号收口。
+    kept 为删除后仅剩的页面文件名，改名为 p001.<原扩展>（缩略图同步跟随）。
+    目标名已存在（含 broken symlink——exists 对其返回 False 故补 islink）或
+    rename 失败时降级：记 stderr、保留原名返回——数据完好优先于编号连续，
+    绝不覆盖任何已有文件（删除收尾已尽力而为，编号回退不影响列表/下载功能）。"""
+    target = "p001." + kept.rsplit(".", 1)[-1]
+    if kept == target:
+        return          # 幸存页已是 p001（如 p001/p005 删 p005），无需处理
+    dst = os.path.join(base, target)
+    if os.path.exists(dst) or os.path.islink(dst):
+        print("[reorder] kept-page renumber skipped: %s exists" % target, file=sys.stderr)
+        return
+    try:
+        os.rename(os.path.join(base, kept), dst)
+    except OSError as e:
+        print("[reorder] kept-page renumber failed: %s" % e, file=sys.stderr)
+        return
+    # 缩略图同步跟随（derived cache：_mk_thumb 随时可重建、前端缺失有占位
+    # fallback）——replace 覆盖残留旧缩略图无害（对应页已在收尾删除）；
+    # 失败仅记 stderr，不回滚已完成的页面改名
+    old_t = os.path.join(thumb_dir, kept.rsplit(".", 1)[0] + ".jpg")
+    if os.path.exists(old_t):
+        try:
+            os.replace(old_t, os.path.join(thumb_dir, "p001.jpg"))
+        except OSError as e:
+            print("[reorder] kept-thumb rename failed: %s" % e, file=sys.stderr)
+
+
 @app.get("/api/devices")
 def api_devices():
     """列出设备并探测每台设备支持的扫描模式和进纸源（scanimage -A）。
@@ -613,14 +689,18 @@ def _pack_prog_gc(now):
 def _pack_prog_start(job, kind, **kw):
     """登记/重建进度条目（下载开始时调用）。
     v1.16.1-tmp06：写 ts 供惰性 GC 判定过期；登记前顺带 GC 过期条目。
-    v1.16.1-tmp07：now 取一次（原双重 time.time() 合并）。"""
+    v1.16.1-tmp07：now 取一次（原双重 time.time() 合并）。
+    v1.16.3-tmp01（十九轮 P3-3）：存在即【重建】——旧版 setdefault 命中已有
+    条目时只 update，409 拒绝路径登记（total=0/active=False）会残留同 kind
+    旧完成条目的 done 值（前端读到 done=3/total=0 的怪异组合）。重建恒以
+    {kind,done:0,total:0,active:True} 为底再覆盖 kw，旧值全清。"""
     now = time.time()
     with _pack_lock:
         _pack_prog_gc(now)
-        rec = _pack_progress.setdefault(job, {}).setdefault(
-            kind, {"kind": kind, "done": 0, "total": 0, "active": True})
+        rec = {"kind": kind, "done": 0, "total": 0, "active": True}
         rec.update(kw)
         rec["ts"] = now
+        _pack_progress.setdefault(job, {})[kind] = rec
 
 
 def _pack_prog_update(job, kind, **kw):
@@ -681,8 +761,22 @@ def dl_zip(job):
                 return
             _fin_done[0] = True
         cancel.set()   # v1.16.1-tmp05（P1-B）：通知 worker 退出，防 W.write 永久循环
-        jlock.release()
-        _pack_prog_update(job, "zip", active=False)
+        # v1.16.3-tmp02（二十轮 P1-1）：jlock.release() 抛 RuntimeError（误/双释放，
+        # 调用方 bug 信号）时进度收尾仍必须执行——GC 只清 active=False 条目，若因
+        # 异常跳过 _pack_prog_update，进度永久 active=True，前端按钮卡到 5 分钟
+        # 兜底。异常照常上抛（三处调用点：gen finally 被 waitress 记日志 / view
+        # finally 变 500 / call_on_close 被 WSGI 记录），bug 信号不掩盖。
+        try:
+            jlock.release()
+        finally:
+            # v1.16.3-tmp03（二十一轮 P4-1）：进度收尾自身失败（_pack_progress
+            # 数据结构被外部破坏等极端场景）不得掩盖 jlock.release 抛出的真实
+            # bug 信号——记录到 stderr（journalctl 可见）后吞掉，让原始异常
+            # 正常上抛；进度收尾失败也不该反噬锁释放路径。
+            try:
+                _pack_prog_update(job, "zip", active=False)
+            except Exception as e:
+                print("[zip] _pack_prog_update failed: %s" % e, file=sys.stderr)
 
     try:
         # v1.15.1-tmp04：转换中页是 0 字节占位，混入 ZIP 会产生损坏文件
@@ -777,7 +871,16 @@ def dl_zip(job):
         # close() 不执行 finally，cancel/jlock 无人释放：worker 每 0.5s 空转
         # 永不退出、jlock 永久占用该任务（DELETE 死等）。call_on_close 兜底：
         # WSGI 关闭响应时统一走幂等收尾（gen 已收尾则 no-op）。
-        resp.call_on_close(_release_once)
+        # v1.16.3-tmp02（二十轮 P2-6）：call_on_close 本身抛异常（极罕见：Werkzeug
+        # 内部错误/OOM）时回调未注册、响应未交 WSGI，而 handed_to_gen 已置 True
+        # 使外层 finally 跳过——jlock 将永久占用该任务。先兜底再上抛（该异常
+        # 本身说明系统有严重问题，应被记录暴露）；_release_once 幂等，后续调用
+        # 全部 no-op。
+        try:
+            resp.call_on_close(_release_once)
+        except Exception:
+            _release_once()
+            raise
         return resp
     finally:
         if not handed_to_gen:

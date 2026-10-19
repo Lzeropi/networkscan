@@ -134,7 +134,12 @@ function updateDeviceOptions(selectedDev) {
     const modeToggle = modeDropdown.querySelector(".dd-toggle");
     const modeHidden = modeDropdown.querySelector("input[type=hidden]");
     const dv = dev.defaults || {};
-    const modes = (dev.modes && dev.modes.length) ? dev.modes.slice() : [];
+    // v1.16.3-tmp06（二十三轮 P1，DeepSeek 首轮系统前端审查）：let 而非 const
+    // ——探测失败（modes 空）且管理员无该设备默认值时，下方空数组兑底分支整体
+    // 重新赋值，const 在此抛 TypeError 中断 updateDeviceOptions、菜单卡死
+    // （v1.16.0 引入的历史遗留；同文件 loadJobParams 同逻辑用 let，当年遗漏；
+    // node 已复现验证）
+    let modes = (dev.modes && dev.modes.length) ? dev.modes.slice() : [];
     if (dv.mode && !modes.includes(dv.mode)) modes.push(dv.mode);
     if (!modes.length) modes = ["Gray", "Color"];   // 极端兜底
     const defaultMode = dv.mode || modes[0];
@@ -158,7 +163,8 @@ function updateDeviceOptions(selectedDev) {
     const dpiToggle = dpiDropdown.querySelector(".dd-toggle");
     const dpiHidden = dpiDropdown.querySelector("input[type=hidden]");
     const dv = dev.defaults || {};
-    const dpis = (dev.dpis && dev.dpis.length) ? dev.dpis.slice() : [];
+    // v1.16.3-tmp06（P1）：同上——const 在空数组兑底赋值时抛 TypeError
+    let dpis = (dev.dpis && dev.dpis.length) ? dev.dpis.slice() : [];
     if (dv.dpi && !dpis.includes(dv.dpi)) dpis.push(dv.dpi);
     if (!dpis.length) dpis = ["150", "300", "600"];   // 极端兜底
     const defaultDpi = dv.dpi || dpis[0];
@@ -949,13 +955,15 @@ async function dlWithProgress(job, kind, url, btn) {
   /* v1.16.1-tmp04（DeepSeek 九轮 P1-4）：location.href → 隐藏 iframe——
      正常流（200+attachment）同为浏览器原生下载且页面不动；拒绝流（409 JSON）
      渲染在不可见 iframe 内，页面不再被导航成 JSON 文本（旧行为：点按钮页面
-     直接跳走需手动后退）。 */
-  let f = document.getElementById("dl_frame");
-  if (!f) {
-    f = document.createElement("iframe");
-    f.id = "dl_frame";
-    f.style.display = "none";
-    document.body.appendChild(f);
-  }
+     直接跳走需手动后退）。
+     v1.16.3-tmp05（纯代码审查 P3-5）：不再复用单例 dl_frame iframe——复用时
+     后一点击替换 src 会中断前一个进行中的下载（先 ZIP 后 PDF 必中招，首个
+     下载需重点一次）。改为每次下载新建独立 iframe；10 分钟后延迟清理 DOM
+     节点（> 前端 5 分钟兜底与后端完成 TTL 600s，此时下载必然已结束或中止，
+     remove 不会中断任何传输，仅防 DOM 无限增长）。 */
+  const f = document.createElement("iframe");
+  f.style.display = "none";
+  document.body.appendChild(f);
   f.src = url;
+  setTimeout(() => f.remove(), 600000);
 }

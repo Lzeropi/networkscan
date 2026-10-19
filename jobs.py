@@ -217,7 +217,13 @@ def create(remark="", params=None):
             continue                          # v1.14.2（#12）：碰撞则重新随机，绝不复用旧目录
     meta = {"remark": slug, "created": time.strftime("%Y-%m-%d %H:%M:%S"),
             "pages": 0, "params": params or {}}
-    save(name, meta)
+    # v1.16.3-tmp01（十九轮 P3-2）：save 失败（磁盘满/权限）清理刚建的空目录——
+    # 旧版残留无 meta.json 的空 .thumbs 目录占 inode（list_jobs 会跳过，无害但累积）
+    try:
+        save(name, meta)
+    except OSError:
+        shutil.rmtree(os.path.join(get_scan_root(), name), ignore_errors=True)
+        raise
     return name
 
 
@@ -355,23 +361,29 @@ def delete(job):
 def _delete_locked(job):
     if is_locked(job):
         raise JobError("任务已锁定，不能删除")
-    shutil.rmtree(validate(job))
-    # v1.14.3（P2-6）：删除成功同步清扫描状态——cleanup/管理删除路径同样不残留 state 条目，
-    # scanner.state 不再随历史任务无限增长（此前只有用户 DELETE 一处 pop）
+    # v1.16.3-tmp01（十九轮 P3-1）：两个 pop 收入 finally——旧版 rmtree 半途失败
+    # （磁盘满/权限变更）时抛异常直接跳过清理，state/_pack_progress 残留孤儿条目
+    # （用户还看得到任务但目录已残缺）。finally 保证无论删除成败都不留孤儿。
+    # rmtime 异常照常上抛（调用方收到失败信号做 UI 提示）。
     try:
-        import scanner   # 局部导入避循环（与 cleanup 同模式）
-        scanner.state.pop(job, None)
-    except ImportError:
-        pass
-    # v1.16.0-tmp08（DeepSeek 补充验证 5 实测证实）：打包进度登记同此收口——
-    # api_delete 有显式 pop，但 jobs.delete/cleanup 路径曾漏（实测复现残留）。
-    # 局部 import 避循环；app 未加载（纯 jobs 单测）时静默跳过。
-    try:
-        import app
-        with app._pack_lock:
-            app._pack_progress.pop(job, None)
-    except Exception:
-        pass
+        shutil.rmtree(validate(job))
+    finally:
+        # v1.14.3（P2-6）：删除成功同步清扫描状态——cleanup/管理删除路径同样不残留 state 条目，
+        # scanner.state 不再随历史任务无限增长（此前只有用户 DELETE 一处 pop）
+        try:
+            import scanner   # 局部导入避循环（与 cleanup 同模式）
+            scanner.state.pop(job, None)
+        except ImportError:
+            pass
+        # v1.16.0-tmp08（DeepSeek 补充验证 5 实测证实）：打包进度登记同此收口——
+        # api_delete 有显式 pop，但 jobs.delete/cleanup 路径曾漏（实测复现残留）。
+        # 局部 import 避循环；app 未加载（纯 jobs 单测）时静默跳过。
+        try:
+            import app
+            with app._pack_lock:
+                app._pack_progress.pop(job, None)
+        except Exception:
+            pass
 
 
 def dir_size(p):

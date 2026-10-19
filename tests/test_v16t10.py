@@ -324,13 +324,19 @@ def test_dl_pdf_409_registers_progress():
 
 
 def test_dl_with_progress_uses_iframe():
-    """前端下载走隐藏 iframe（不再 location.href 导航 409 JSON 页面）。"""
+    """前端下载走隐藏 iframe（不再 location.href 导航 409 JSON 页面）。
+    v1.16.3-tmp05（P3-5，纯代码审查）：追加断言——不复用单例 iframe（替换
+    src 会中断前一个进行中的下载），且必须有延迟清理防 DOM 无限增长。"""
     js = open(os.path.join(os.path.dirname(config.__file__),
                            "static", "app.js"), encoding="utf-8").read()
     body = js.split("async function dlWithProgress", 1)[1].split("\n}", 1)[0]
     assert "location.href = url" not in body, "应已移除 location.href 导航（P1-4）"
     assert 'document.createElement("iframe")' in body, "应改 iframe 触发下载"
     assert "stop(p.msg)" in body, "轮询应识别登记的 msg 并提示"
+    assert 'getElementById("dl_frame")' not in body, \
+        "不应复用单例 iframe（P3-5：替换 src 会中断首个进行中的下载）"
+    assert "f.remove()" in body, \
+        "独立 iframe 应有延迟清理（P3-5：防 DOM 无限增长）"
 
 
 # ---------- P2-1：admin state 遍历用 dict() 原子快照 ----------

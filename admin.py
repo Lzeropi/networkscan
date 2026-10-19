@@ -22,7 +22,10 @@ bp = Blueprint("admin", __name__)
 # v1.14：scan_root 系统目录黑名单（防误填系统路径，#13）
 _ROOT_BLACKLIST = ("/", "/bin", "/boot", "/dev", "/etc", "/lib", "/lib64",
                    "/proc", "/root", "/run", "/sbin", "/sys", "/usr",
-                   "/var/lib", "/var/log", "/var/cache", "/var/spool")
+                   "/var/lib", "/var/log", "/var/cache", "/var/spool",
+                   "/var/tmp")   # v1.16.3-tmp02（二十轮 P3-3）：持久临时目录（重启
+                                    # 不清），与 /var/log 等同类；/srv 不拦（服务数据根，
+                                    # 用户放扫描件属正当用法）
 
 
 def _root_blocked(path):
@@ -31,6 +34,49 @@ def _root_blocked(path):
         if np == b or (b != "/" and np.startswith(b + "/")):
             return True
     return False
+
+
+# ---------------- v1.16.3-tmp03（二十一轮 P2-3）：预创建目录追踪 + 逆序清理 ----------------
+# os.makedirs 递归创建所有缺失父级，而 tmp02 的补偿清理只 os.rmdir 末级——用户输入
+# /a/b/c（/a、/a/b 均不存在）时 makedirs 建三级、rmdir 只删 c，/a 与 /a/b 永久残留。
+# 收口为「先计算待建层级（纯路径运算、无 I/O 副作用）→ makedirs → 失败/拒绝时逆序
+# rmdir」，与 DeepSeek 方案的两个差异点（均为该方案自身的漏洞）：
+# ① 追踪计算必须与 makedirs 拆开、先行赋值——合并在一个函数里时，makedirs 部分
+#   成功后抛异常（如中途配额满）则返回值丢失，已建层级不进清理列表；
+# ② 清理循环遇 ENOENT（该层未建成）须 continue 而非 break——makedirs 从外向内
+#   顺序创建，失败点以上都已建成，break 会让已建成的外层残留。
+
+def _prep_missing_dirs(path):
+    """计算 path 及其缺失祖先层列表（外→内），不做任何创建。已存在的祖先截断
+    追踪——绝不把用户已有目录（如 /opt）纳入清理范围。normpath 消除尾部斜杠
+    /重复分隔符，防止「/a/b/」与「/a/b」生成两条指向同一目录的重复追踪条目。"""
+    path = os.path.normpath(path)
+    created = []
+    p = path
+    # v1.16.3-tmp04（二十二审 #6）：exists 改 lexists——broken symlink（指向已
+    # 消失目标）的 exists 为 False，旧版会把它当"待创建层"纳入追踪，makedirs
+    # 随后 FileExistsError、清理 rmdir 对 symlink 抛 ENOTDIR，行为结局安全但
+    # 逻辑绕；lexists 直接判"已存在"→不追踪→makedirs 同样 FileExistsError 400，
+    # 追踪-创建-清理链条更直白（对正常路径/已存在目录/好链无任何行为差异）
+    while p and p != "/" and not os.path.lexists(p):
+        created.append(p)
+        p = os.path.dirname(p)
+    return list(reversed(created))   # 外→内，如 ["/a", "/a/b", "/a/b/c"]；全部已存在则为 []
+
+
+def _cleanup_prep_dirs(created):
+    """逆序删除 _prep_missing_dirs 追踪的目录层级（内→外，空目录才能删）。
+    ENOENT＝该层未建成（makedirs 中途失败的下游层）→ continue 向上清已建成的；
+    其余 OSError（ENOTEMPTY 非空/EACCES 权限）→ break 保守停——内层有外部写入
+    时父层必非空，绝不递归删除、绝不误删任何非本调用产生的数据。空列表 no-op。"""
+    for d in reversed(created):
+        try:
+            os.rmdir(d)
+        except FileNotFoundError:
+            continue
+        except OSError:
+            break
+
 
 # ---------------- PIN 防暴力尝试（v1.14：按 IP 分键，#8） ----------------
 _pin_fails = {}   # ip -> {"count": n, "lock_until": ts}；局域网 IP 数有限，不做淘汰
@@ -272,8 +318,11 @@ def env_report():
         {"name": "Flask", "ok": True, "ver": ""},
     ]
     try:
-        import flask
-        deps[1]["ver"] = flask.__version__ if hasattr(flask, "__version__") else getattr(flask, "__version__", "2.x")
+        # v1.16.3-tmp01（十九轮 P3-8）：importlib.metadata 取包版本——
+        # flask.__version__ 自 Flask 3.x 起弃用且未来移除；旧代码 hasattr 分支
+        # 与 getattr 回退逻辑等价（hasattr 为假时 getattr 同样取不到）实为死分支。
+        import importlib.metadata as _ilm
+        deps[1]["ver"] = _ilm.version("flask")
     except Exception:
         pass
     deps.append({"name": "SANE scanimage", "ok": os.path.exists(SCANIMAGE),
@@ -281,8 +330,21 @@ def env_report():
     deps.append({"name": "ImageMagick convert", "ok": os.path.exists(CONVERT),
                  "ver": _cmd_ver([CONVERT, "--version"]) or "未安装"})
     try:
-        import PIL
-        deps.append({"name": "Pillow", "ok": True, "ver": PIL.__version__})
+        import PIL   # noqa: F401  # 存在性检查（与 Flask 段同模式）
+        # v1.16.3-tmp02（二十轮 P2-4）：与 Flask 分支一致改 importlib.metadata——
+        # PIL.__version__ 上游已在弃用轨道（Pillow 11 起移除），元数据接口长期
+        # 稳定；独立 import 防上游段异常时连坐（局部名隔离）。
+        # v1.16.3-tmp03（二十一轮 P3-7）：importlib.metadata.version 在少数非标准
+        # 安装方式（editable 装到自定义路径、distro 特殊打包）抛 PackageNotFoundError
+        # ——此时 PIL 已 import 成功（实际可用），退回 PIL.__version__ 兜底
+        # （Pillow 12 前仍导出；再无则显示「已安装」），不误报「未安装」误导排查
+        # ——与下方 qrcode 段 getattr(..., "已安装") 同一模式。
+        try:
+            import importlib.metadata as _ilm_pil
+            _pil_ver = _ilm_pil.version("Pillow")
+        except Exception:
+            _pil_ver = getattr(PIL, "__version__", "已安装")
+        deps.append({"name": "Pillow", "ok": True, "ver": _pil_ver})
     except Exception:
         deps.append({"name": "Pillow", "ok": False, "ver": "未安装"})
     # v1.16.0-tmp01：可选依赖——扫码取件二维码；未装仅隐藏入口，不影响扫描
@@ -307,12 +369,12 @@ def env_report():
     # v1.16.0-tmp03：依赖安装路径整体一条——Python 包在服务 venv，系统命令按 which 实路径
     pyvenv = ""
     try:
-        import flask
-        # flask 包路径剥到 venv 根：.venv/lib/pythonX.Y/site-packages/flask/__init__.py（5 层 dirname）
-        p = os.path.abspath(flask.__file__)
-        for _ in range(5):
-            p = os.path.dirname(p)
-        pyvenv = p
+        import flask   # noqa: F401  # 仅确认依赖已安装（与旧版一致的回退条件）
+        # v1.16.3-tmp01（十九轮 P3-9）：sys.prefix 直取 venv 根——旧版对
+        # flask.__file__ 五层 dirname 的路径推断仅对标准 site-packages 布局成立
+        # （editable/zipapp 安装会错位拿错根）。sys.prefix 在标准 venv 布局与
+        # 旧值等价（均指向 venv 根），且对任意安装方式稳定。
+        pyvenv = sys.prefix
     except Exception:
         pyvenv = os.path.dirname(sys.executable)
     import shutil as _sh
@@ -403,6 +465,35 @@ def api_save_config():
         def __init__(self, payload, status):
             self.payload, self.status = payload, status
 
+    # v1.16.3-tmp01（十九轮 P2-2）：目录创建准备挪出 _scan_start_guard——
+    # os.makedirs/chmod 是磁盘慢 I/O（ARM32 上几十到几百毫秒），而 guard 的设计是
+    # 「毫秒级互斥扫描启动段」（见 scanner.py guard 定义处注释）；持 guard 做慢 I/O
+    # 会把并发扫描的启动排队拖长。准备段只做目录创建：正常路径（confirm=y）到此已
+    # isdir，guard 内 mutate 毫秒完成；罕见的「刚建好即被外部删除」竞态仍走 mutate
+    # 内兜底创建（原路径保留，语义完整）。此处创建的目录无破坏性（空目录、重试直接
+    # 复用），cfg 写入仍在 guard 内的 mutate 完成，生效语义不变。
+    _prep_root = str(d.get("scan_root", "")).strip()
+    # v1.16.3-tmp03（二十一轮 P2-1/P2-2/P2-3）：追踪本次新建的全部目录层级
+    # （含 makedirs 递归建的祖先），_Reject 或非预期异常时统一逆序清理。
+    # 「先计算后创建」保证 makedirs 部分成功后抛异常时，已建层级仍在追踪列表内。
+    _prep_created_dirs = []
+    if (_prep_root and os.path.isabs(_prep_root) and not _root_blocked(_prep_root)
+            and d.get("confirm")
+            and os.path.normpath(_prep_root) != os.path.normpath(get_scan_root())
+            and not os.path.isdir(_prep_root)):
+        try:
+            # P2-3：normpath 对账——追踪/创建/清理全程同一规范化路径，尾部斜杠
+            # 等写法差异不再产生重复条目或漏清理
+            _prep_created_dirs = _prep_missing_dirs(_prep_root)
+            os.makedirs(_prep_root, exist_ok=True)
+            # P2-2：chmod 排在追踪/创建之后——makedirs 成功即纳入清理范围，
+            # chmod 失败（目录刚建好但权限设置失败）不再残留（tmp02 的
+            # _prep_created 在 chmod 之后才置位，此场景下目录已建却无标记）
+            os.chmod(_prep_root, 0o755)   # 确保服务 umask 不影响 Samba 等其它用户读取
+        except OSError as e:
+            _cleanup_prep_dirs(_prep_created_dirs)
+            return jsonify(ok=False, msg="创建失败：%s" % e), 400
+
     def mutate(cfg):
         # 1) 扫描存储路径
         new_root = str(d.get("scan_root", "")).strip()
@@ -450,8 +541,13 @@ def api_save_config():
                 cfg["device_alias"] = {}
             elif isinstance(alias, dict):
                 # v1.14：别名滤除尖括号（前端 XSS 后端双保险，#12）
+                # v1.16.3-tmp01（十九轮 P3-4）：merge 而非全量替换——前端 v1.16.3 起
+                # 按卡保存只提交当前设备键（空字符串＝清除该设备别名），未提及的设备
+                # 保留已保存值；旧协议（提交全量 dict）在 merge 下行为不变。
+                _merged = dict(cfg.get("device_alias", {}))
+                _merged.update(alias)
                 cfg["device_alias"] = {k: re.sub(r"[<>]", "", str(v))[:50]
-                                       for k, v in alias.items() if v}
+                                       for k, v in _merged.items() if v}
         # 4) 扫描默认值（按设备存储：{ "设备名": {"dpi":"150","mode":"Gray","crop":false} }）
         if "scan_defaults" in d:
             sd = d["scan_defaults"]
@@ -465,6 +561,15 @@ def api_save_config():
                 # 改为 400 拒绝明确告知；探测能力不可用（dpi_raw/modes 为空＝探测
                 # 失败或未知设备）时放行 VALID 白名单兜底——与 api_params「无能力
                 # 信息时放行 VALID 集合」同一条既有约定（app.py #3 注释）。
+                # v1.16.3-tmp01（十九轮 P3-4）：merge 而非全量替换——前端按卡保存
+                # 只提交当前设备键，未提及设备保留已保存值（已清洗的合法值重复校验
+                # 无害）；旧协议（全量 dict）行为不变。
+                sd = {**cfg.get("scan_defaults", {}), **sd}
+                # v1.16.3-tmp04（二十二审 #2 方案 B，明文约定）：传空对象 {} 的语义
+                # ＝该设备重置为出厂默认（150/Gray/png/不裁剪），而非删除记录——
+                # 删除与重置在生效值/UI 回显上完全等价（无记录时 _params 兜底同为
+                # 出厂值），单设备「删除」无独立价值（YAGNI，不设该入口）；
+                # 全清走 "scan_defaults": null。README 管理页章节已同步说明。
                 caps = {x["name"]: x for x in device_probe.probe()[0]}
                 cleaned = {}
                 for dev_name, dv in sd.items():
@@ -505,7 +610,21 @@ def api_save_config():
         with scanner._scan_start_guard:
             cfg = update_admin_cfg(mutate)
     except _Reject as e:
+        # v1.16.3-tmp02（二十轮 P2-1）：本次保存整体未生效（任一字段校验失败），
+        # 预创建的空目录不应残留（mutate 内 scan_defaults 400/409 扫描中等都可能
+        # 在目录已建之后才拒）。
+        # v1.16.3-tmp03（二十一轮 P2-3）：逆序逐级 rmdir，makedirs 递归建的祖先
+        # 层一并回收；目录非空（毫秒窗口内外部写入）则保守停——绝不误删任何
+        # 非本调用产生的数据。
+        _cleanup_prep_dirs(_prep_created_dirs)
         return e.payload, e.status
+    except Exception:
+        # v1.16.3-tmp03（二十一轮 P2-1）：非 _Reject 异常（磁盘满导致 save_admin_cfg
+        # 抛 OSError、配置 JSON 损坏导致 load 抛异常等）同样使本次保存整体未生效，
+        # 预创建目录不得残留——旧版只捕 _Reject，500 后目录永久残留。清理后照常
+        # 上抛（环境级故障应被 500 + 日志暴露，不掩盖）。
+        _cleanup_prep_dirs(_prep_created_dirs)
+        raise
     deleted = jobs.cleanup(force=True)
     return jsonify(ok=True, scan_root=get_scan_root(),
                    cleanup=cfg["cleanup"],
@@ -565,6 +684,10 @@ def api_testscan():
         return jsonify(ok=False, msg="scanimage 未安装，无法测试"), 400
     try:
         name = jobs.create("测试扫描", {"source": "flatbed", "dpi": "150", "mode": "Gray",
+                                       "format": "png",   # v1.16.3-tmp04（二十二审 #4）：显式传格式——
+                                       # 此前依赖 _params 兜底 png，功能等价但与 api_create 的
+                                       # 显式传参风格不一致，统一以免将来 create 兜底默认被
+                                       # 改动时测试扫描静默变格式
                                        "device": "", "crop": False, "source_name": ""})
     except Exception as e:
         return jsonify(ok=False, msg="创建测试任务失败：%s" % str(e)[:150]), 500

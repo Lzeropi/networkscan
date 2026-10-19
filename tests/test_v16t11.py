@@ -199,7 +199,11 @@ def test_frontend_fallback_lt_finished_ttl():
     import re
     js = open(os.path.join(os.path.dirname(config.__file__),
                            "static", "app.js"), encoding="utf-8").read()
-    m = re.search(r"setTimeout\(\(\) => \{ if \(timer\) stop\(\); \}, (\d+)\)", js)
+    # v1.16.3-tmp01（十九轮 P3-6）：宽松正则——旧版逐字符匹配 app.js 字面写法
+    # `setTimeout(() => { if (timer) stop(); }, 300000)`，格式化工具（prettier 等）
+    # 调整缩进/空格/换行即失配，测试以"未找到兜底 setTimeout"假失败掩盖真实回归。
+    # 现仅要求：setTimeout + 箭头函数 + 函数体内含 stop() + ≥4 位数毫秒参数。
+    m = re.search(r"setTimeout\(\s*\(\)\s*=>\s*\{[^{}]*\bstop\(\)[^{}]*\}\s*,\s*(\d{4,})\s*\)", js)
     assert m, "未找到 dlWithProgress 兜底 setTimeout"
     front_fallback_ms = int(m.group(1))
     assert front_fallback_ms / 1000 < app_mod._PACK_FINISHED_TTL, \

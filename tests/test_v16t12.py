@@ -177,7 +177,6 @@ def test_convert_task_entries_share_one_lock(monkeypatch):
 
     started = threading.Event()
     gate = threading.Event()
-    entry_ids = []
 
     def slow_convert(src, dst, fmt="png"):
         started.set()               # 快照复查已结束（此时 registry entry 必须健在）
@@ -201,17 +200,18 @@ def test_convert_task_entries_share_one_lock(monkeypatch):
         "快照复查结束后 entry 必须仍留在 registry"
 
     # 计算段中：并发他线程取锁（模拟 reorder/delete/PDF 同期到达）——应拿到
-    # 同一 entry 且锁此刻空闲（快照复查已释放），用毕归还
+    # 同一 entry 且锁此刻空闲（快照复查已释放），用毕归还。
+    # v1.16.3-tmp01（十九轮 P3-5）：删原 `len(entry_ids) == 1` 恒真断言
+    # （append 仅一次，自证无断言价值）；同 entry 语义已由上方「entry 存在性」
+    # + 互斥测试 test_convert_landing_blocks_until_lock_released 覆盖。
     concurrent = jobs.job_lock(name)
     assert concurrent.acquire(blocking=False), "快照复查结束后锁应空闲"
-    entry_ids.append(id(concurrent._entry))
     concurrent.release()
     assert name in jobs._job_locks, \
         "计算段中 registry 条目必须健在（坏版本此刻已被 with jlock: 提前 pop）"
     gate.set()
     t.join(timeout=10)
     assert not t.is_alive()
-    assert len(entry_ids) == 1      # 静态占位：并发 handle 只取一次
 
 
 def test_convert_landing_blocks_until_lock_released(monkeypatch):

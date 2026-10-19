@@ -104,6 +104,11 @@
   async function loadOverview(onlyResources) {
     const d = await api("/api/admin/overview");
     if (d._status === 401) { location.reload(); return; }
+    // v1.16.3-tmp06（二十三轮 P2）：非 200 直接返回——服务端 500 返回 HTML 时
+    // api() 得 {}（_status=500），旧版在 d.cpu.percent 抛 TypeError 冻结仪表盘
+    // （30s 轮询每轮同点失败）；保留旧值等下轮自愈。同类 loadJobs/loadConfigs
+    // 已有防御，此处补齐
+    if (d._status !== 200) return;
     $("verBadge").textContent = "v" + (d.version || "");
     $("uptime").textContent = d.uptime || "--";
     // 资源（每次都刷新）
@@ -209,9 +214,11 @@
       const curModeCn = MODE_CN[curMode] || curMode;
       const curFmtCn = curFmt === "jpg" ? "JPEG" : curFmt.toUpperCase();
       // 自定义下拉容器：cur=显示文字，rawCur=提交值（hidden）
+      // v1.16.3-tmp06（二十三轮 P2）：cur 补 esc()——同函数 rawCur/items 均转义，
+      // 唯 cur 遗漏（正常保存值后端有白名单，风险为手改 admin_config.json 的存量脏值）
       const ddBox = (field, eid, cur, items, rawCur) =>
         '<span class="dropdown" data-adm="'+field+'_'+eid+'">' +
-        '<button type="button" class="dd-toggle">'+cur+'<span class="dd-caret"></span></button>' +
+        '<button type="button" class="dd-toggle">'+esc(cur)+'<span class="dd-caret"></span></button>' +
         '<div class="dd-menu">'+items+'</div>' +
         '<input type="hidden" value="'+esc(rawCur)+'">' +
         '</span>';
@@ -261,13 +268,21 @@
         const mode = mv ? mv.value : "Gray";
         const fmt = fv ? fv.value : "png";
         const crop = $("crop_" + eid).checked;
-        // 保存别名
+        // 保存别名（内存态同步，供其它卡渲染用；不再进提交体）
         if (alias) { _devAliases[devName] = alias; } else { delete _devAliases[devName]; }
-        // 保存默认值
+        // 保存默认值（同上，内存态）
         _devDefaults[devName] = { dpi: dpi, mode: mode, crop: crop, format: fmt };
+        // v1.16.3-tmp01（十九轮 P3-4）：单卡提交——只带当前设备键，不再全量提交
+        // _devAliases/_devDefaults（旧版 A 卡未保存的编辑会被 B 卡保存带出提交；
+        // 探测失败禁用 A 卡时其旧值也会覆盖）。别名空字符串＝后端清除该设备，
+        // 其余设备由后端 merge 保留。
+        const aliasBody = {};
+        aliasBody[devName] = alias || "";
+        const defBody = {};
+        defBody[devName] = { dpi: dpi, mode: mode, crop: crop, format: fmt };
         const d = await api("/api/admin/config", {
           method: "POST",
-          body: JSON.stringify({ device_alias: _devAliases, scan_defaults: _devDefaults })
+          body: JSON.stringify({ device_alias: aliasBody, scan_defaults: defBody })
         });
         if (d.ok) {
           btn.textContent = "已保存 ✓";
