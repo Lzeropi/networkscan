@@ -387,6 +387,8 @@ ss -tlnp | grep 9203              # 确认端口监听
 ├── scanner.py        # scanimage 调用、PNM→PNG、缩略图、扫描状态
 ├── jobs.py           # 任务/页面文件管理、锁定、自动清理
 ├── config.py         # 环境变量与管理配置文件（admin_config.json）读取
+├── API_SPEC.md       # HTTP 接口规范（v1.16.3）：全部端点的请求/响应/错误码契约
+├── KNOWN_ISSUES.md   # 遗留问题清单：等级、评估依据与修复建议（v1.16.4 backlog）
 ├── templates/        # Jinja2 页面（首页/任务页/手册/管理页/登录）
 ├── static/           # app.js / admin.js / style.css / architecture.html（零外部依赖）
 └── deploy/networkscan.service
