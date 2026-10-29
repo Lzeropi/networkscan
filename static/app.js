@@ -188,6 +188,30 @@ function updateDeviceOptions(selectedDev) {
     cropCheckbox.checked = !!(dev.defaults && dev.defaults.crop);
   }
 
+  // v1.16.3 发布内修复（用户报告）：输出格式下拉应用管理页默认值——v1.16.0 实现
+  // 「能力 ∪ 管理页默认值」时 mode/dpi/crop 三项均接，唯独 format 漏接：首页
+  // #fmtDropdown 恒为模板初始 png，管理页设置的 format 默认值在创建任务时从未
+  // 生效（后端 /api/devices 已正确透传，纯前端应用侧遗漏）。与 mode/dpi 段同法：
+  // 白名单校验（手改 admin_config.json 塞非法值回退 png，fail-closed 与后端
+  // VALID_FORMAT 一致）+ hidden 提交值 + selected 高亮 + 按钮文字三态同步；
+  // 任务页 jp_format 由任务 meta 读回（已建任务自有格式），此段仅首页表单生效
+  const fmtDropdown = document.getElementById("fmtDropdown");
+  if (fmtDropdown && dev.defaults && dev.defaults.format) {
+    const dvFmt = String(dev.defaults.format);
+    const fmtMenu = fmtDropdown.querySelector(".dd-menu");
+    const fmtHidden = fmtDropdown.querySelector("input[type=hidden]");
+    const fmtToggle = fmtDropdown.querySelector(".dd-toggle");
+    if (fmtMenu && fmtHidden && fmtToggle) {
+      const item = fmtMenu.querySelector('.dd-item[data-value="' + dvFmt + '"]');
+      if (item) {   // 白名单内才应用；非法值保持 png 不动
+        fmtHidden.value = dvFmt;
+        fmtMenu.querySelectorAll(".dd-item").forEach(x => x.classList.remove("selected"));
+        item.classList.add("selected");
+        fmtToggle.firstChild.textContent = item.textContent;   // jpg→「JPEG」沿用菜单文案
+      }
+    }
+  }
+
   // 提示文字
   if (hint) {
     const cnModes = (dev.modes || ["未知"]).map(m => MODE_CN[m] || m);

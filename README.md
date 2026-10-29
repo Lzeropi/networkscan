@@ -23,6 +23,8 @@ AIGC:
 | 前端形态 | 单页原生 HTML/CSS/JS，零外部依赖、零数据库、无 CDN 引用 |
 | 默认端口 | 9203 |
 
+> v1.16.3 发布内修复（版本号不变，2026-10-22）：**首页输出格式下拉应用管理页默认值**（用户报告：管理页按设备设置的 format 默认值在扫描页创建任务时不生效）——`updateDeviceOptions` 历史遗留漏接：v1.16.0 同周期实现「能力 ∪ 管理页默认值」与「输出格式可选」各自落地，mode/dpi/crop 三项均接 defaults，唯独 format 漏接，首页 #fmtDropdown 恒为模板初始 png；后端 /api/devices 透传正常（203 实测验证），纯前端应用侧遗漏。修复：与 mode/dpi 段同法白名单命中后同步 hidden 提交值 + selected 高亮 + 按钮文字三态；非法配置值回退 png（fail-closed 与后端 VALID_FORMAT 一致）；任务页 jp_format 仍由任务 meta 读回不受影响。新增 tests/test_v120fix_fmt_defaults.py 防回归 3 项（命名独立于 tmp 序列，发布内修复专属），反向验证（改坏必 FAIL）通过；测试总数 279。
+> 
 > v1.16.3 更新：**正式发布版（v1.16.3 周期收敛定稿：tmp01~tmp06 六迭代 + 历轮审查收敛 + 二十四轮 DeepSeek 复核，276 项回归全绿）**。本周期围绕「审查收敛 → 定版」推进：锁分段竞态根治、转换队列化、历史遗留盘点清尾（tmp04）、纯代码审查收口（tmp05）、首轮系统性前端 JS 审查收口（tmp06），最终经二十四轮审查判定「质量符合可发布标准、无新增 P0/P1/P2」。**遗留问题**：已评估但暂不修复的项（P3×4 + P4/边界×12，含 2 项明确保留的防御深度/权衡）完整清单见 `KNOWN_ISSUES.md`，不阻塞本版，v1.16.4 周期依此决策。
 > 
 > v1.16.3-tmp06 更新：**v1.16.3 周期第六迭代（DeepSeek 二十三轮·首轮系统性前端 JS 审查收敛版：9 项发现中修高风险 3 项、其余记入 README v1.16.4 backlog——本轮新发现全部为前端存量而非 tmp05 回归，以「高风险修+其余挂起」终结「每轮新视角→新存量→又不能定版」循环）**：① **updateDeviceOptions 的 const 重新赋值**（P1，v1.16.0 引入的历史遗留，git 考古证实非 tmp05 回归）——设备探测失败（modes/dpis 空）且管理员未存该设备默认值时，空数组兑底 `modes = [...]` 对 const 变量整体赋值抛 `TypeError: Assignment to constant variable`，函数中断、色彩/分辨率菜单卡死；同文件 loadJobParams 同逻辑用 let 写法正确，当年遗漏；node 已复现验证后改 let（两处）；② **ddBox 显示文字 cur 补 esc()**（P2）——同函数 rawCur/items 均转义唯 cur 遗漏，违反 admin.js 自身「动态拼接必须 esc()」约定，风险面为手改 admin_config.json 的存量脏值；③ **loadOverview 非 200 前置返回**（P2）——服务端 500 返回 HTML 时 api() 得 {}，旧版 d.cpu.percent 抛 TypeError 冻结仪表盘且 30s 轮询每轮同点失败；防御后保留旧值等下轮自愈（同类 loadJobs/loadConfigs 本就有防御）。新增 tests/test_v16t18.py 静态防回归 3 项（三项均为 JS 运行时行为，项目无 node/DOM 测试依赖，行为验证以 node 复现留档于审查对话）；三项反向验证（改坏必 FAIL）通过。测试总数 276。
@@ -337,7 +339,7 @@ curl -s http://127.0.0.1:9203/ | head -5
 
 ## 测试（v1.14 起）
 
-`tests/` 目录含 276 项 pytest 回归（v1.16.3，无需真实扫描仪），覆盖：任务 ID 唯一性、占位页过滤与编号、锁定删除保护、清理排除扫描中/转换中任务、设备缓存分键、scan_root 黑名单、PIN PBKDF2 与旧格式迁移、ADF source 白名单、版本一致性、锁定三层防护 API、管理页跳转锚点、SameSite cookie、扫描中删除/排序 409、锁分段竞态、转换队列化、ADF 批量入队、tmp03/tmp04 审查修复回归，以及 T04 审查修复 + tmp07 DeepSeek 审查修复（ADF 超水位死锁/dl_zip 锁泄漏/state 重建/ImageMagick 安全副本）+ ZIP/PDF 打包进度提示（按 kind 隔离，并发互不覆盖）+ v1.16.1-tmp01 六轮审查联合修复（fd 泄漏对称性/进度竞态/锁回收统一/架构图重复边+转义/pillow 约束）+ tmp04 九轮 P1 修复（DONE 投递重试/409 拒绝登记+iframe 下载/state 原子快照/refs 条件递减/thumb 长轮询封顶）+ tmp05 十轮修复（空测试根治/Response 构造失败 worker 泄漏）+ tmp06 十一轮修复（拒绝条目惰性 GC/worker 泄漏防回归/ts 不进 JSON）+ tmp07 十二轮修复（GC 读时清/完成型 TTL 清理/取消静默/ast 定位/测试改名与边界强化）+ tmp08 十三轮修复（前后端兜底契约静态断言/守卫正则精确断言/ts 常量基准）+ v1.16.3-tmp05 纯代码审查修复（幸存页重编号/root+order 类型防护/异常口径统一/独立 iframe 下载）+ v1.16.3-tmp06 前端存量修复（const→let 菜单卡死/ddBox cur 转义/loadOverview 非 200 防御）等。
+`tests/` 目录含 279 项 pytest 回归（v1.16.3，无需真实扫描仪），覆盖：任务 ID 唯一性、占位页过滤与编号、锁定删除保护、清理排除扫描中/转换中任务、设备缓存分键、scan_root 黑名单、PIN PBKDF2 与旧格式迁移、ADF source 白名单、版本一致性、锁定三层防护 API、管理页跳转锚点、SameSite cookie、扫描中删除/排序 409、锁分段竞态、转换队列化、ADF 批量入队、tmp03/tmp04 审查修复回归，以及 T04 审查修复 + tmp07 DeepSeek 审查修复（ADF 超水位死锁/dl_zip 锁泄漏/state 重建/ImageMagick 安全副本）+ ZIP/PDF 打包进度提示（按 kind 隔离，并发互不覆盖）+ v1.16.1-tmp01 六轮审查联合修复（fd 泄漏对称性/进度竞态/锁回收统一/架构图重复边+转义/pillow 约束）+ tmp04 九轮 P1 修复（DONE 投递重试/409 拒绝登记+iframe 下载/state 原子快照/refs 条件递减/thumb 长轮询封顶）+ tmp05 十轮修复（空测试根治/Response 构造失败 worker 泄漏）+ tmp06 十一轮修复（拒绝条目惰性 GC/worker 泄漏防回归/ts 不进 JSON）+ tmp07 十二轮修复（GC 读时清/完成型 TTL 清理/取消静默/ast 定位/测试改名与边界强化）+ tmp08 十三轮修复（前后端兜底契约静态断言/守卫正则精确断言/ts 常量基准）+ v1.16.3-tmp05 纯代码审查修复（幸存页重编号/root+order 类型防护/异常口径统一/独立 iframe 下载）+ v1.16.3-tmp06 前端存量修复（const→let 菜单卡死/ddBox cur 转义/loadOverview 非 200 防御）+ v1.16.3 发布内 format 默认值修复等。
 
 ```bash
 # 在项目根目录（部署机或开发机均可）
